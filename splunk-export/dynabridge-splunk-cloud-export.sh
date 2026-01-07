@@ -2,7 +2,7 @@
 
 ################################################################################
 #
-#  DynaBridge Splunk Cloud Export Script v4.0.0
+#  DynaBridge Splunk Cloud Export Script v4.0.1
 #
 #  REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace
 #
@@ -91,7 +91,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.0.0"
+SCRIPT_VERSION="4.0.1"
 SCRIPT_NAME="DynaBridge Splunk Cloud Export"
 
 # ANSI color codes
@@ -454,47 +454,66 @@ PROGRESS_LABEL=""
 PROGRESS_TOTAL=0
 PROGRESS_CURRENT=0
 PROGRESS_START_TIME=0
+PROGRESS_LAST_PERCENT=0
 
 # Initialize progress bar
 progress_init() {
   PROGRESS_LABEL="$1"
   PROGRESS_TOTAL="$2"
   PROGRESS_CURRENT=0
+  PROGRESS_LAST_PERCENT=0
   PROGRESS_START_TIME=$(date +%s)
-  progress_update 0
+  echo -e "${CYAN}${PROGRESS_LABEL}${NC} [0/${PROGRESS_TOTAL}]"
 }
 
 # Update progress bar
+# Note: Uses newlines at 5% intervals for container compatibility (kubectl exec)
 progress_update() {
   PROGRESS_CURRENT="$1"
+  local percent=0
+  local elapsed=$(( $(date +%s) - PROGRESS_START_TIME ))
+  local rate=0
+  local eta="calculating..."
 
-  if [ "$PROGRESS_TOTAL" -eq 0 ]; then
-    return
+  if [ "$PROGRESS_TOTAL" -gt 0 ]; then
+    percent=$(( (PROGRESS_CURRENT * 100) / PROGRESS_TOTAL ))
   fi
 
-  local percent=$((PROGRESS_CURRENT * 100 / PROGRESS_TOTAL))
-  local elapsed=$(($(date +%s) - PROGRESS_START_TIME))
-  local eta="--:--"
+  # Only print at 5% intervals to avoid flooding (container-friendly)
+  local interval=5
+  local rounded_percent=$(( (percent / interval) * interval ))
+  if [ "$rounded_percent" -eq "$PROGRESS_LAST_PERCENT" ] && [ "$percent" -lt 100 ]; then
+    return  # Skip - not at a new interval yet
+  fi
+  PROGRESS_LAST_PERCENT="$rounded_percent"
 
-  if [ "$PROGRESS_CURRENT" -gt 0 ] && [ "$elapsed" -gt 0 ]; then
-    local rate=$(echo "scale=2; $PROGRESS_CURRENT / $elapsed" | bc 2>/dev/null || echo "0")
-    if [ "$(echo "$rate > 0" | bc 2>/dev/null || echo "0")" -eq 1 ]; then
-      local remaining=$(echo "scale=0; ($PROGRESS_TOTAL - $PROGRESS_CURRENT) / $rate" | bc 2>/dev/null || echo "0")
-      local eta_min=$((remaining / 60))
-      local eta_sec=$((remaining % 60))
-      eta=$(printf "%02d:%02d" $eta_min $eta_sec)
+  # Calculate rate and ETA
+  if [ "$elapsed" -gt 0 ] && [ "$PROGRESS_CURRENT" -gt 0 ]; then
+    rate=$(( PROGRESS_CURRENT / elapsed ))
+    if [ "$rate" -gt 0 ]; then
+      local remaining=$(( PROGRESS_TOTAL - PROGRESS_CURRENT ))
+      local eta_seconds=$(( remaining / rate ))
+      if [ "$eta_seconds" -lt 60 ]; then
+        eta="${eta_seconds}s"
+      elif [ "$eta_seconds" -lt 3600 ]; then
+        eta="$(( eta_seconds / 60 ))m $(( eta_seconds % 60 ))s"
+      else
+        eta="$(( eta_seconds / 3600 ))h $(( (eta_seconds % 3600) / 60 ))m"
+      fi
     fi
   fi
 
-  # Build progress bar (30 chars wide)
+  # Build progress bar (30 chars wide for cleaner output)
   local bar_width=30
-  local filled=$((percent * bar_width / 100))
-  local empty=$((bar_width - filled))
-  local bar=$(printf "%${filled}s" | tr ' ' '█')
-  bar+=$(printf "%${empty}s" | tr ' ' '░')
+  local filled=$(( (percent * bar_width) / 100 ))
+  local empty=$(( bar_width - filled ))
+  local bar=""
 
-  printf "\r  ${CYAN}%s${NC} [${GREEN}%s${NC}] %3d%% (%d/%d) ETA: %s    " \
-    "$PROGRESS_LABEL" "$bar" "$percent" "$PROGRESS_CURRENT" "$PROGRESS_TOTAL" "$eta"
+  for ((i=0; i<filled; i++)); do bar+="█"; done
+  for ((i=0; i<empty; i++)); do bar+="░"; done
+
+  # Print progress line with newline (container-friendly)
+  echo -e "${CYAN}│${NC} ${GREEN}${bar}${NC} ${percent}% [${PROGRESS_CURRENT}/${PROGRESS_TOTAL}] ${GRAY}ETA: ${eta}${NC}"
 }
 
 # Complete progress bar
@@ -507,8 +526,7 @@ progress_complete() {
     rate="N/A"
   fi
 
-  printf "\r  ${GREEN}✓${NC} %s: %d items in %ds (%s/sec)                    \n" \
-    "$PROGRESS_LABEL" "$PROGRESS_TOTAL" "$elapsed" "$rate"
+  echo -e "${GREEN}✓${NC} ${PROGRESS_LABEL}: ${PROGRESS_TOTAL} items in ${elapsed}s (${rate}/sec)"
 }
 
 # Show histogram of data distribution
@@ -3283,13 +3301,137 @@ get_anon_hostname() {
 }
 
 # Anonymize a single file
+# =============================================================================
+# PYTHON-BASED ANONYMIZATION (Reliable streaming for large files)
+# =============================================================================
+# This uses Python for file processing to avoid bash memory issues and
+# regex catastrophic backtracking. Works with system Python.
+
+# Generate the Python anonymization script inline
+generate_python_anonymizer() {
+  local script_file="$1"
+  cat > "$script_file" << 'PYTHON_SCRIPT'
+#!/usr/bin/env python3
+"""
+DynaBridge Anonymizer - Streaming file anonymization
+Handles large files without memory issues or regex backtracking
+"""
+import sys
+import re
+import os
+import hashlib
+
+# Anonymization mappings (consistent across files)
+email_map = {}
+host_map = {}
+
+def get_hash_id(value):
+    """Generate consistent short hash for a value"""
+    return hashlib.md5(value.encode()).hexdigest()[:8]
+
+def anonymize_email(email):
+    """Anonymize email address consistently"""
+    if email in email_map:
+        return email_map[email]
+    if '@anon.dynabridge.local' in email or '@example.com' in email or '@localhost' in email:
+        return email
+    anon = f"user{get_hash_id(email)}@anon.dynabridge.local"
+    email_map[email] = anon
+    return anon
+
+def anonymize_hostname(hostname):
+    """Anonymize hostname consistently"""
+    if hostname in host_map:
+        return host_map[hostname]
+    if hostname in ('localhost', '127.0.0.1', 'null', 'none', '*', ''):
+        return hostname
+    if hostname.startswith('host-') and '.anon.local' in hostname:
+        return hostname
+    anon = f"host-{get_hash_id(hostname)}.anon.local"
+    host_map[hostname] = anon
+    return anon
+
+def process_line(line):
+    """Process a single line, applying all anonymization rules"""
+    result = line
+
+    # 1. Anonymize email addresses
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}'
+    for match in re.findall(email_pattern, result):
+        anon = anonymize_email(match)
+        if anon != match:
+            result = result.replace(match, anon)
+
+    # 2. Redact private IP addresses
+    result = re.sub(r'\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    result = re.sub(r'\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    result = re.sub(r'\b192\.168\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    result = re.sub(r'\b([1-9]|[1-9]\d|1\d{2}|2[0-4]\d|25[0-5])\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b', '[IP-REDACTED]', result)
+
+    # 3. Anonymize hostnames in JSON format
+    host_json_pattern = r'"(host|hostname|splunk_server|server|serverName)"\s*:\s*"([^"]+)"'
+    for match in re.finditer(host_json_pattern, result, re.IGNORECASE):
+        key, hostname = match.groups()
+        anon = anonymize_hostname(hostname)
+        if anon != hostname:
+            result = result.replace(f'"{key}": "{hostname}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{hostname}"', f'"{key}":"{anon}"')
+
+    # 4. Anonymize hostnames in conf format
+    host_conf_pattern = r'\b(host|hostname|splunk_server|server)\s*=\s*([^\s,\]"]+)'
+    for match in re.finditer(host_conf_pattern, result, re.IGNORECASE):
+        key, hostname = match.groups()
+        anon = anonymize_hostname(hostname)
+        if anon != hostname:
+            result = result.replace(f'{key}={hostname}', f'{key}={anon}')
+            result = result.replace(f'{key} = {hostname}', f'{key} = {anon}')
+
+    return result
+
+def process_file(filepath):
+    """Process a file line by line (streaming, memory efficient)"""
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+
+        modified = False
+        new_lines = []
+        for line in lines:
+            new_line = process_line(line)
+            new_lines.append(new_line)
+            if new_line != line:
+                modified = True
+
+        if modified:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+        return modified
+    except Exception as e:
+        print(f"Error processing {filepath}: {e}", file=sys.stderr)
+        return False
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: anonymizer.py <file1> [file2] ...", file=sys.stderr)
+        sys.exit(1)
+
+    for filepath in sys.argv[1:]:
+        if os.path.isfile(filepath):
+            process_file(filepath)
+
+if __name__ == '__main__':
+    main()
+PYTHON_SCRIPT
+  chmod +x "$script_file"
+}
+
+# Anonymize a single file using Python (streaming, no memory issues)
 anonymize_file() {
   local file="$1"
-  local temp_file="${file}.anon.tmp"
-  local modified=false
+  local python_script="$EXPORT_DIR/.anonymizer.py"
 
-  # Skip binary files, empty files, and already processed files
-  if [ ! -s "$file" ] || [[ "$file" == *.tmp ]]; then
+  # Skip empty files and temp files
+  if [ ! -s "$file" ] || [[ "$file" == *.tmp ]] || [[ "$file" == *.py ]]; then
     return
   fi
 
@@ -3298,92 +3440,76 @@ anonymize_file() {
     return
   fi
 
-  local content
-  content=$(cat "$file" 2>/dev/null) || return
-  local new_content="$content"
+  # Generate Python script if not exists
+  if [ ! -f "$python_script" ]; then
+    generate_python_anonymizer "$python_script"
+  fi
 
-  # ==========================================================================
-  # ANONYMIZE EMAIL ADDRESSES
-  # ==========================================================================
-  local email_regex='[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+  # Find Python (prefer Splunk's bundled Python if available, fall back to system)
+  # Check multiple locations since SPLUNK_HOME may not be set
+  local python_cmd=""
+  local splunk_python_paths=(
+    "/opt/splunk/bin/python3"
+    "/opt/splunk/bin/python"
+    "/opt/splunkforwarder/bin/python3"
+    "/opt/splunkforwarder/bin/python"
+    "/Applications/Splunk/bin/python3"
+    "/Applications/Splunk/bin/python"
+  )
 
-  # Extract all emails from content
-  local emails
-  emails=$(echo "$content" | grep -oE "$email_regex" 2>/dev/null | sort -u) || true
-
-  for email in $emails; do
-    # Skip obviously fake/system emails
-    if [[ "$email" == *"@anon.dynabridge.local" || "$email" == *"@example.com" || "$email" == *"@localhost" ]]; then
-      continue
-    fi
-
-    local anon_email=$(get_anon_email "$email")
-    if [ "$email" != "$anon_email" ]; then
-      # Use sed to replace (escape special chars)
-      local escaped_email=$(echo "$email" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/$escaped_email/$anon_email/g")
-      modified=true
+  # Try Splunk's bundled Python first (if running on a Splunk server)
+  for py_path in "${splunk_python_paths[@]}"; do
+    if [ -x "$py_path" ]; then
+      python_cmd="$py_path"
+      break
     fi
   done
 
-  # ==========================================================================
-  # REDACT IP ADDRESSES
-  # ==========================================================================
-  # Replace non-localhost IPv4 with [IP-REDACTED]
-  new_content=$(echo "$new_content" | sed -E '
-    s/(127\.0\.0\.1|0\.0\.0\.0)/\1/g
-    s/([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/[IP-REDACTED]/g
-  ')
-
-  # Check if content changed from IP redaction
-  if [ "$content" != "$new_content" ]; then
-    modified=true
-    content="$new_content"
-  fi
-
-  # IPv6 addresses (simplified pattern)
-  new_content=$(echo "$new_content" | sed -E 's/([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}/[IPv6-REDACTED]/g')
-  new_content=$(echo "$new_content" | sed -E 's/([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}/[IPv6-REDACTED]/g')
-
-  if [ "$content" != "$new_content" ]; then
-    modified=true
-    content="$new_content"
-  fi
-
-  # ==========================================================================
-  # ANONYMIZE HOSTNAMES
-  # ==========================================================================
-  local hostnames=""
-
-  # JSON format: "host": "value" or "hostname": "value"
-  hostnames+=" $(echo "$content" | grep -oE '"(host|hostname|splunk_server|server|serverName)"\s*:\s*"[^"]+' 2>/dev/null | grep -oE '"[^"]+$' | tr -d '"' | sort -u || true)"
-
-  # Conf format: host = value
-  hostnames+=" $(echo "$content" | grep -oE '(host|hostname|splunk_server|server)\s*=\s*[^\s,\]]+' 2>/dev/null | sed 's/.*=\s*//' | sort -u || true)"
-
-  for hostname in $hostnames; do
-    # Skip common safe values
-    if [[ -z "$hostname" || "$hostname" == "localhost" || "$hostname" == "127.0.0.1" || \
-          "$hostname" == "null" || "$hostname" == "none" || "$hostname" == "*" || \
-          "$hostname" == "host-"*".anon.local" || "$hostname" == "[IP-REDACTED]" ]]; then
-      continue
+  # Fall back to system Python
+  if [ -z "$python_cmd" ]; then
+    if command -v python3 &>/dev/null; then
+      python_cmd="python3"
+    elif command -v python &>/dev/null; then
+      python_cmd="python"
+    else
+      # Fallback to simple sed-based anonymization
+      anonymize_file_sed_fallback "$file"
+      return
     fi
-
-    local anon_host=$(get_anon_hostname "$hostname")
-    if [ "$hostname" != "$anon_host" ]; then
-      local escaped_host=$(echo "$hostname" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/$escaped_host/$anon_host/g" 2>/dev/null || echo "$new_content")
-      modified=true
-    fi
-  done
-
-  # ==========================================================================
-  # WRITE MODIFIED CONTENT
-  # ==========================================================================
-  if [ "$modified" = true ]; then
-    echo "$new_content" > "$temp_file"
-    mv "$temp_file" "$file"
   fi
+
+  # Run Python anonymizer with 60-second timeout per file
+  if command -v timeout &>/dev/null; then
+    timeout 60 "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  elif command -v gtimeout &>/dev/null; then
+    gtimeout 60 "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  else
+    "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  fi
+}
+
+# Fallback: Simple sed-based anonymization (no complex patterns that can backtrack)
+anonymize_file_sed_fallback() {
+  local file="$1"
+
+  # Use simple, non-backtracking patterns with in-place sed
+  # Check for GNU sed vs BSD sed
+  local sed_inplace=""
+  if sed --version 2>/dev/null | grep -q GNU; then
+    sed_inplace="-i"
+  else
+    sed_inplace="-i ''"
+  fi
+
+  # Apply simple patterns directly to file (in-place, streaming)
+  sed $sed_inplace 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+  # Clean up backup files on macOS
+  rm -f "${file}''" 2>/dev/null || true
 }
 
 # Main anonymization function - processes all files in export directory
@@ -3725,9 +3851,16 @@ show_completion() {
     echo -e "${YELLOW}║${NC}  The export is still usable but some analytics data may be missing. ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}  ${WHITE}TO DIAGNOSE:${NC}                                                       ${YELLOW}║${NC}"
-    echo -e "${YELLOW}║${NC}  1. Extract the archive and read TROUBLESHOOTING.md                 ${YELLOW}║${NC}"
-    echo -e "${YELLOW}║${NC}  2. Check export.log for detailed error messages                    ${YELLOW}║${NC}"
-    echo -e "${YELLOW}║${NC}  3. Review _usage_analytics/*.json files for specific errors        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  1. Extract the archive:                                             ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     tar -xzf ${EXPORT_NAME}.tar.gz                                   ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  2. Log file is located at:                                          ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     ${CYAN}$(pwd)/${EXPORT_NAME}/_export.log${NC}                    ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  3. Also check:                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     - ${EXPORT_NAME}/TROUBLESHOOTING.md                              ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     - ${EXPORT_NAME}/_usage_analytics/*.json                         ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}  ${WHITE}COMMON SPLUNK CLOUD ISSUES:${NC}                                        ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}  • REST command (| rest) may be restricted                          ${YELLOW}║${NC}"

@@ -249,7 +249,7 @@
                 <div class="logo-text"><span class="highlight">Dyna</span>Bridge for Splunk</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
-            <span class="version-badge"><span class="dot"></span>Version 4.0.0</span>
+            <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
             <div class="doc-title"><h2>DynaBridge Splunk Enterprise Export - Specification</h2></div>
         </div>
     </header>
@@ -267,7 +267,7 @@
 
     <main class="content">
 <h1>DynaBridge Splunk Enterprise Export Script - Comprehensive Specification</h1>
-<h2>Version 4.0.0 | Complete Data Collection Framework</h2>
+<h2>Version 4.0.1 | Complete Data Collection Framework</h2>
 <p>
 <strong>Last Updated</strong>: January 2026
 <strong>Related Documents</strong>: <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated Analytics Reference</a> | <a href="README-SPLUNK-ENTERPRISE.md">Enterprise README</a> | <a href="EXPORT-SCHEMA.md">Export Schema</a>
@@ -282,6 +282,13 @@ This specification defines the complete requirements for a Splunk data collectio
 <li><strong>Ownership & RBAC</strong>: Users, groups, roles, capabilities, object ownership</li>
 <li><strong>Usage Analytics</strong>: Query frequency, dashboard views, alert triggers, index volume trends</li>
 <li><strong>Migration Prioritization</strong>: Scoring of high-value assets worth migrating</li>
+</ul>
+<hr>
+<h2>What's New in v4.0.1</h2>
+<h3>Container Compatibility Improvements</h3>
+<ul>
+<li><strong>Container-friendly progress display</strong>: Progress bars now use newlines at 5% intervals instead of carriage returns, ensuring clean output in kubectl exec, Docker exec, and other containerized environments</li>
+<li><strong>Improved output formatting</strong>: Progress updates print cleanly without overlapping lines in non-TTY environments</li>
 </ul>
 <hr>
 <h2>What's New in v4.0.0</h2>

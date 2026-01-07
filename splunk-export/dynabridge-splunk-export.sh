@@ -2,7 +2,7 @@
 
 ################################################################################
 #
-#  DynaBridge Splunk Export Script v4.0.0
+#  DynaBridge Splunk Export Script v4.0.1
 #
 #  Complete Splunk Environment Data Collection for Migration to Dynatrace
 #
@@ -71,7 +71,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.0.0"
+SCRIPT_VERSION="4.0.1"
 SCRIPT_NAME="DynaBridge Splunk Export"
 
 # ANSI color codes
@@ -660,6 +660,8 @@ progress_init() {
 
 # Update progress bar
 # Usage: progress_update 50
+# Note: Uses newlines at 5% intervals for container compatibility (kubectl exec)
+PROGRESS_LAST_PERCENT=0
 progress_update() {
   PROGRESS_CURRENT="$1"
   local percent=0
@@ -670,6 +672,14 @@ progress_update() {
   if [ "$PROGRESS_TOTAL" -gt 0 ]; then
     percent=$(( (PROGRESS_CURRENT * 100) / PROGRESS_TOTAL ))
   fi
+
+  # Only print at 5% intervals to avoid flooding (container-friendly)
+  local interval=5
+  local rounded_percent=$(( (percent / interval) * interval ))
+  if [ "$rounded_percent" -eq "$PROGRESS_LAST_PERCENT" ] && [ "$percent" -lt 100 ]; then
+    return  # Skip - not at a new interval yet
+  fi
+  PROGRESS_LAST_PERCENT="$rounded_percent"
 
   # Calculate rate and ETA
   if [ "$elapsed" -gt 0 ] && [ "$PROGRESS_CURRENT" -gt 0 ]; then
@@ -687,8 +697,8 @@ progress_update() {
     fi
   fi
 
-  # Build progress bar (50 chars wide)
-  local bar_width=50
+  # Build progress bar (30 chars wide for cleaner output)
+  local bar_width=30
   local filled=$(( (percent * bar_width) / 100 ))
   local empty=$(( bar_width - filled ))
   local bar=""
@@ -696,15 +706,14 @@ progress_update() {
   for ((i=0; i<filled; i++)); do bar+="█"; done
   for ((i=0; i<empty; i++)); do bar+="░"; done
 
-  # Print progress line (overwrite previous)
-  printf "\r${CYAN}│${NC} ${GREEN}%s${NC} %3d%% [%d/%d] ${GRAY}ETA: %s${NC}   " \
-    "$bar" "$percent" "$PROGRESS_CURRENT" "$PROGRESS_TOTAL" "$eta"
+  # Print progress line with newline (container-friendly)
+  echo -e "${CYAN}│${NC} ${GREEN}${bar}${NC} ${percent}% [${PROGRESS_CURRENT}/${PROGRESS_TOTAL}] ${GRAY}ETA: ${eta}${NC}"
 }
 
-# Mark individual task as complete (shows checkmark and clears progress line)
+# Mark individual task as complete (shows checkmark)
 task_complete() {
   local task_name="${1:-Task}"
-  printf "\r${GREEN}✓${NC} %s ${GRAY}done${NC}                                                              \n" "$task_name"
+  echo -e "${GREEN}✓${NC} ${task_name} ${GRAY}done${NC}"
 }
 
 # =============================================================================
@@ -1923,7 +1932,7 @@ show_export_timing_stats() {
 
   if [ "$STATS_ERRORS" -gt 0 ]; then
     echo -e "${CYAN}║${NC}  ${YELLOW}⚠ Errors:${NC}                ${WHITE}${STATS_ERRORS}${NC}                                                ${CYAN}║${NC}"
-    echo -e "${CYAN}║${NC}    See export_errors.log for details                                          ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}    See export_errors.log inside the .tar.gz archive                           ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
   fi
 
@@ -4971,253 +4980,318 @@ collect_files_recursive() {
 }
 
 # Anonymize a single file
+# =============================================================================
+# PYTHON-BASED ANONYMIZATION (Reliable streaming for large files)
+# =============================================================================
+# This uses Python for file processing to avoid bash memory issues and
+# regex catastrophic backtracking. Works with Splunk's bundled Python.
+
+# Generate the Python anonymization script inline
+generate_python_anonymizer() {
+  local script_file="$1"
+  cat > "$script_file" << 'PYTHON_SCRIPT'
+#!/usr/bin/env python3
+"""
+DynaBridge Anonymizer - Streaming file anonymization
+Handles large files without memory issues or regex backtracking
+"""
+import sys
+import re
+import os
+import json
+import hashlib
+
+# Anonymization mappings (consistent across files)
+email_map = {}
+host_map = {}
+webhook_map = {}
+apikey_map = {}
+slack_map = {}
+username_map = {}
+
+def get_hash_id(value, prefix=""):
+    """Generate consistent short hash for a value"""
+    h = hashlib.md5(value.encode()).hexdigest()[:8]
+    return f"{prefix}{h}"
+
+def anonymize_email(email):
+    """Anonymize email address consistently"""
+    if email in email_map:
+        return email_map[email]
+    # Skip already anonymized or safe emails
+    if '@anon.dynabridge.local' in email or '@example.com' in email or '@localhost' in email:
+        return email
+    anon = f"user{get_hash_id(email)}@anon.dynabridge.local"
+    email_map[email] = anon
+    return anon
+
+def anonymize_hostname(hostname):
+    """Anonymize hostname consistently"""
+    if hostname in host_map:
+        return host_map[hostname]
+    # Skip safe values
+    if hostname in ('localhost', '127.0.0.1', 'null', 'none', '*', ''):
+        return hostname
+    if hostname.startswith('host-') and '.anon.local' in hostname:
+        return hostname
+    anon = f"host-{get_hash_id(hostname)}.anon.local"
+    host_map[hostname] = anon
+    return anon
+
+def anonymize_webhook(url):
+    """Anonymize webhook URL consistently"""
+    if url in webhook_map:
+        return webhook_map[url]
+    if 'webhook.anon.dynabridge.local' in url:
+        return url
+    anon = f"https://webhook.anon.dynabridge.local/hook-{get_hash_id(url)}"
+    webhook_map[url] = anon
+    return anon
+
+def anonymize_apikey(key, key_type="API"):
+    """Anonymize API key consistently"""
+    if key in apikey_map:
+        return apikey_map[key]
+    anon = f"[{key_type}-KEY-{get_hash_id(key)}]"
+    apikey_map[key] = anon
+    return anon
+
+def anonymize_slack_channel(channel):
+    """Anonymize Slack channel consistently"""
+    if channel in slack_map:
+        return slack_map[channel]
+    if channel.startswith('#anon-channel-'):
+        return channel
+    anon = f"#anon-channel-{get_hash_id(channel)}"
+    slack_map[channel] = anon
+    return anon
+
+def anonymize_username(username):
+    """Anonymize username consistently"""
+    if username in username_map:
+        return username_map[username]
+    # Skip system users
+    if username in ('nobody', 'admin', 'system', 'splunk-system-user', 'root', 'null', 'none', ''):
+        return username
+    if username.startswith('anon-user-'):
+        return username
+    anon = f"anon-user-{get_hash_id(username)}"
+    username_map[username] = anon
+    return anon
+
+def process_line(line):
+    """Process a single line, applying all anonymization rules"""
+    result = line
+
+    # 1. Anonymize email addresses (simple pattern, non-greedy)
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}'
+    for match in re.findall(email_pattern, result):
+        anon = anonymize_email(match)
+        if anon != match:
+            result = result.replace(match, anon)
+
+    # 2. Redact private IP addresses (keep localhost)
+    # 10.x.x.x
+    result = re.sub(r'\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    # 172.16-31.x.x
+    result = re.sub(r'\b172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    # 192.168.x.x
+    result = re.sub(r'\b192\.168\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    # Public IPs (excluding 127.x and 0.x)
+    result = re.sub(r'\b([1-9]|[1-9]\d|1\d{2}|2[0-4]\d|25[0-5])\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b', '[IP-REDACTED]', result)
+
+    # 3. Anonymize hostnames in JSON format: "host": "value"
+    host_json_pattern = r'"(host|hostname|splunk_server|server|serverName)"\s*:\s*"([^"]+)"'
+    for match in re.finditer(host_json_pattern, result, re.IGNORECASE):
+        key, hostname = match.groups()
+        anon = anonymize_hostname(hostname)
+        if anon != hostname:
+            result = result.replace(f'"{key}": "{hostname}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{hostname}"', f'"{key}":"{anon}"')
+
+    # 4. Anonymize hostnames in conf format: host = value
+    host_conf_pattern = r'\b(host|hostname|splunk_server|server)\s*=\s*([^\s,\]"]+)'
+    for match in re.finditer(host_conf_pattern, result, re.IGNORECASE):
+        key, hostname = match.groups()
+        anon = anonymize_hostname(hostname)
+        if anon != hostname:
+            result = result.replace(f'{key}={hostname}', f'{key}={anon}')
+            result = result.replace(f'{key} = {hostname}', f'{key} = {anon}')
+
+    # 5. Anonymize webhook URLs
+    webhook_pattern = r'https?://[a-zA-Z0-9.-]+\.(slack\.com|pagerduty\.com|opsgenie\.com|webhook\.office\.com|hooks\.zapier\.com)[^\s"\']*'
+    for match in re.findall(webhook_pattern, result):
+        # match is just the domain part, need to re-extract full URL
+        pass
+    # Simpler approach - match full webhook URLs
+    webhook_full_pattern = r'https?://[^\s"\'<>]+(?:slack\.com|pagerduty\.com|opsgenie\.com|webhook\.office\.com|hooks\.zapier\.com)[^\s"\'<>]*'
+    for match in re.findall(webhook_full_pattern, result):
+        anon = anonymize_webhook(match)
+        if anon != match:
+            result = result.replace(match, anon)
+
+    # 6. Anonymize API keys in JSON: "api_key": "value"
+    apikey_json_pattern = r'"(api_key|apikey|api_token|apiToken|token|secret|auth_token|access_token|integration_key|routing_key|pagerduty_key)"\s*:\s*"([^"]{16,})"'
+    for match in re.finditer(apikey_json_pattern, result, re.IGNORECASE):
+        key, value = match.groups()
+        key_type = "PAGERDUTY" if "pagerduty" in key.lower() or "integration" in key.lower() or "routing" in key.lower() else "API"
+        anon = anonymize_apikey(value, key_type)
+        if anon != value:
+            result = result.replace(f'"{key}": "{value}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{value}"', f'"{key}":"{anon}"')
+
+    # 7. Anonymize Slack channels
+    slack_pattern = r'"(action\.slack\.channel|slack_channel|channel)"\s*:\s*"(#[^"]+)"'
+    for match in re.finditer(slack_pattern, result, re.IGNORECASE):
+        key, channel = match.groups()
+        anon = anonymize_slack_channel(channel)
+        if anon != channel:
+            result = result.replace(f'"{key}": "{channel}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{channel}"', f'"{key}":"{anon}"')
+
+    # 8. Anonymize usernames in JSON: "owner": "value"
+    username_json_pattern = r'"(owner|eai:acl\.owner|author|user|username|realname|created_by|updated_by)"\s*:\s*"([^"]+)"'
+    for match in re.finditer(username_json_pattern, result, re.IGNORECASE):
+        key, username = match.groups()
+        anon = anonymize_username(username)
+        if anon != username:
+            result = result.replace(f'"{key}": "{username}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{username}"', f'"{key}":"{anon}"')
+
+    return result
+
+def process_file(filepath):
+    """Process a file line by line (streaming, memory efficient)"""
+    try:
+        # Read file
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+
+        # Process each line
+        modified = False
+        new_lines = []
+        for line in lines:
+            new_line = process_line(line)
+            new_lines.append(new_line)
+            if new_line != line:
+                modified = True
+
+        # Write back if modified
+        if modified:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+            return True
+        return False
+    except Exception as e:
+        print(f"Error processing {filepath}: {e}", file=sys.stderr)
+        return False
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: anonymizer.py <file1> [file2] ...", file=sys.stderr)
+        sys.exit(1)
+
+    for filepath in sys.argv[1:]:
+        if os.path.isfile(filepath):
+            process_file(filepath)
+
+if __name__ == '__main__':
+    main()
+PYTHON_SCRIPT
+  chmod +x "$script_file"
+}
+
+# Anonymize a single file using Python (streaming, no memory issues)
 anonymize_file() {
   local file="$1"
-  local file_ext="${file##*.}"
-  local temp_file="${file}.anon.tmp"
-  local modified=false
+  local python_script="$EXPORT_DIR/.anonymizer.py"
 
-  # Skip binary files, empty files, and already processed files
-  if [ ! -s "$file" ] || [[ "$file" == *.tmp ]]; then
+  # Skip empty files and temp files
+  if [ ! -s "$file" ] || [[ "$file" == *.tmp ]] || [[ "$file" == *.py ]]; then
     return
   fi
 
   # Check if file is text (skip binary)
-  if ! file "$file" 2>/dev/null | grep -qE 'text|JSON|XML'; then
+  if ! file "$file" 2>/dev/null | grep -qE 'text|JSON|XML|ASCII'; then
     return
   fi
 
-  local content
-  content=$(cat "$file" 2>/dev/null) || return
-  local new_content="$content"
-
-  # ==========================================================================
-  # ANONYMIZE EMAIL ADDRESSES
-  # ==========================================================================
-  # Match common email patterns
-  local email_regex='[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-
-  # Extract all emails from content
-  local emails
-  emails=$(echo "$content" | grep -oE "$email_regex" 2>/dev/null | sort -u) || true
-
-  for email in $emails; do
-    # Skip obviously fake/system emails
-    if [[ "$email" == *"@anon.dynabridge.local" || "$email" == *"@example.com" || "$email" == *"@localhost" ]]; then
-      continue
-    fi
-
-    local anon_email=$(get_anon_email "$email")
-    if [ "$email" != "$anon_email" ]; then
-      # Use sed to replace (escape special chars)
-      local escaped_email=$(echo "$email" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/$escaped_email/$anon_email/g")
-      modified=true
-    fi
-  done
-
-  # ==========================================================================
-  # REDACT IP ADDRESSES (complete removal/replacement)
-  # ==========================================================================
-  # IPv4 addresses (but preserve localhost 127.0.0.1 and 0.0.0.0)
-  # Match: xxx.xxx.xxx.xxx where each octet is 0-255
-  local ipv4_regex='([0-9]{1,3}\.){3}[0-9]{1,3}'
-
-  # Replace non-localhost IPv4 with [REDACTED]
-  new_content=$(echo "$new_content" | sed -E "
-    s/\b(127\.0\.0\.1|0\.0\.0\.0)\b/\1/g
-    s/\b(10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\b/[IP-REDACTED]/g
-    s/\b(172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})\b/[IP-REDACTED]/g
-    s/\b(192\.168\.[0-9]{1,3}\.[0-9]{1,3})\b/[IP-REDACTED]/g
-    s/\b([1-9][0-9]?|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b/[IP-REDACTED]/g
-  ")
-
-  # Check if content changed from IP redaction
-  if [ "$content" != "$new_content" ]; then
-    modified=true
-    content="$new_content"
+  # Generate Python script if not exists
+  if [ ! -f "$python_script" ]; then
+    generate_python_anonymizer "$python_script"
   fi
 
-  # IPv6 addresses (simplified pattern - catches most common formats)
-  new_content=$(echo "$new_content" | sed -E 's/\b([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/[IPv6-REDACTED]/g')
-  new_content=$(echo "$new_content" | sed -E 's/\b([0-9a-fA-F]{1,4}:){1,7}:\b/[IPv6-REDACTED]/g')
-  new_content=$(echo "$new_content" | sed -E 's/\b:([0-9a-fA-F]{1,4}:){1,7}\b/[IPv6-REDACTED]/g')
-  new_content=$(echo "$new_content" | sed -E 's/\b([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\b/[IPv6-REDACTED]/g')
-
-  if [ "$content" != "$new_content" ]; then
-    modified=true
-    content="$new_content"
-  fi
-
-  # ==========================================================================
-  # ANONYMIZE HOSTNAMES
-  # ==========================================================================
-  # This is trickier - we look for hostname patterns in specific contexts
-
-  # Pattern 1: host=hostname or host="hostname" or host='hostname'
-  local host_patterns=(
-    's/\bhost["\x27]?\s*[:=]\s*["\x27]?([a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9])\b/host=HOST_PLACEHOLDER_\1/gi'
-    's/\bhostname["\x27]?\s*[:=]\s*["\x27]?([a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9])\b/hostname=HOST_PLACEHOLDER_\1/gi'
-    's/\bsplunk_server["\x27]?\s*[:=]\s*["\x27]?([a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9])\b/splunk_server=HOST_PLACEHOLDER_\1/gi'
-    's/\bserver["\x27]?\s*[:=]\s*["\x27]?([a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9])\b/server=HOST_PLACEHOLDER_\1/gi'
+  # Find Python (prefer Splunk's bundled Python, fall back to system)
+  # Check multiple locations since SPLUNK_HOME may not be set
+  local python_cmd=""
+  local splunk_python_paths=(
+    "$SPLUNK_HOME/bin/python3"
+    "$SPLUNK_HOME/bin/python"
+    "/opt/splunk/bin/python3"
+    "/opt/splunk/bin/python"
+    "/opt/splunkforwarder/bin/python3"
+    "/opt/splunkforwarder/bin/python"
+    "/Applications/Splunk/bin/python3"
+    "/Applications/Splunk/bin/python"
   )
 
-  # Extract hostnames from common fields in JSON/conf files
-  local hostnames=""
-
-  # JSON format: "host": "value" or "hostname": "value"
-  hostnames+=" $(echo "$content" | grep -oE '"(host|hostname|splunk_server|server|serverName)"\s*:\s*"[^"]+' 2>/dev/null | grep -oE '"[^"]+$' | tr -d '"' | sort -u || true)"
-
-  # Conf format: host = value
-  hostnames+=" $(echo "$content" | grep -oE '\b(host|hostname|splunk_server|server)\s*=\s*[^\s,\]]+' 2>/dev/null | sed 's/.*=\s*//' | sort -u || true)"
-
-  # XML format: <host>value</host>
-  hostnames+=" $(echo "$content" | grep -oE '<(host|hostname|server)>[^<]+<' 2>/dev/null | sed 's/<[^>]*>//g' | sort -u || true)"
-
-  for hostname in $hostnames; do
-    # Skip common safe values
-    if [[ -z "$hostname" || "$hostname" == "localhost" || "$hostname" == "127.0.0.1" || \
-          "$hostname" == "null" || "$hostname" == "none" || "$hostname" == "*" || \
-          "$hostname" == "host-"*".anon.local" ]]; then
-      continue
-    fi
-
-    # Skip if it looks like an already-redacted IP
-    if [[ "$hostname" == "[IP-REDACTED]" || "$hostname" == "[IPv6-REDACTED]" ]]; then
-      continue
-    fi
-
-    local anon_host=$(get_anon_hostname "$hostname")
-    if [ "$hostname" != "$anon_host" ]; then
-      # Escape special characters for sed
-      local escaped_host=$(echo "$hostname" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/\b$escaped_host\b/$anon_host/g" 2>/dev/null || echo "$new_content")
-      modified=true
+  # Try Splunk's bundled Python first
+  for py_path in "${splunk_python_paths[@]}"; do
+    if [ -n "$py_path" ] && [ -x "$py_path" ]; then
+      python_cmd="$py_path"
+      break
     fi
   done
 
-  # ==========================================================================
-  # ANONYMIZE WEBHOOK URLs
-  # ==========================================================================
-  # Match webhook URLs in JSON and conf formats
-  local webhook_urls=""
-
-  # JSON format: "action.webhook.param.url": "https://..." or "webhook_url": "https://..."
-  webhook_urls+=" $(echo "$new_content" | grep -oE '"(action\.webhook\.param\.url|webhook_url|url)"\s*:\s*"https?://[^"]+' 2>/dev/null | grep -oE 'https?://[^"]+' | sort -u || true)"
-
-  # Also catch generic webhook patterns
-  webhook_urls+=" $(echo "$new_content" | grep -oE 'https?://[a-zA-Z0-9.-]+\.(slack\.com|pagerduty\.com|opsgenie\.com|webhook\.office\.com|hooks\.zapier\.com|notify\.events|webhook\.site|pipedream\.net|requestbin\.com)[^"'\''[:space:]]*' 2>/dev/null | sort -u || true)"
-
-  for webhook_url in $webhook_urls; do
-    # Skip if empty or already anonymized
-    if [[ -z "$webhook_url" || "$webhook_url" == *"webhook.anon.dynabridge.local"* ]]; then
-      continue
+  # Fall back to system Python
+  if [ -z "$python_cmd" ]; then
+    if command -v python3 &>/dev/null; then
+      python_cmd="python3"
+    elif command -v python &>/dev/null; then
+      python_cmd="python"
+    else
+      # Fallback to simple sed-based anonymization
+      anonymize_file_sed_fallback "$file"
+      return
     fi
-
-    local anon_webhook=$(get_anon_webhook_url "$webhook_url")
-    if [ "$webhook_url" != "$anon_webhook" ]; then
-      # Escape special characters for sed (URLs have lots of special chars)
-      local escaped_webhook=$(echo "$webhook_url" | sed 's/[.[\*^$()+?{|\/&]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s|$escaped_webhook|$anon_webhook|g" 2>/dev/null || echo "$new_content")
-      modified=true
-    fi
-  done
-
-  # ==========================================================================
-  # ANONYMIZE API KEYS AND TOKENS
-  # ==========================================================================
-  # PagerDuty integration keys (32 character hex strings)
-  local pagerduty_keys=""
-  pagerduty_keys+=" $(echo "$new_content" | grep -oE '"(action\.pagerduty\.integration_key|integration_key|pagerduty_key|routing_key)"\s*:\s*"[a-zA-Z0-9]{20,}' 2>/dev/null | grep -oE '[a-zA-Z0-9]{20,}' | sort -u || true)"
-  pagerduty_keys+=" $(echo "$new_content" | grep -oE '(integration_key|routing_key)\s*=\s*[a-zA-Z0-9]{20,}' 2>/dev/null | grep -oE '[a-zA-Z0-9]{20,}' | sort -u || true)"
-
-  for pd_key in $pagerduty_keys; do
-    if [[ -z "$pd_key" || "$pd_key" == "[PAGERDUTY-KEY-"*"]" ]]; then
-      continue
-    fi
-    local anon_key=$(get_anon_api_key "$pd_key" "PAGERDUTY")
-    if [ "$pd_key" != "$anon_key" ]; then
-      new_content=$(echo "$new_content" | sed "s/$pd_key/$anon_key/g" 2>/dev/null || echo "$new_content")
-      modified=true
-    fi
-  done
-
-  # Generic API tokens (Bearer tokens, API keys in headers)
-  local api_tokens=""
-  api_tokens+=" $(echo "$new_content" | grep -oE '"(api_key|apikey|api_token|apiToken|token|secret|auth_token|access_token|bearer)"\s*:\s*"[^"]{16,}' 2>/dev/null | grep -oE '"[^"]{16,}$' | tr -d '"' | sort -u || true)"
-  api_tokens+=" $(echo "$new_content" | grep -oE 'Bearer\s+[a-zA-Z0-9._-]{20,}' 2>/dev/null | sed 's/Bearer\s*//' | sort -u || true)"
-
-  for api_token in $api_tokens; do
-    if [[ -z "$api_token" || "$api_token" == "[API-KEY-"*"]" ]]; then
-      continue
-    fi
-    local anon_token=$(get_anon_api_key "$api_token" "API")
-    if [ "$api_token" != "$anon_token" ]; then
-      local escaped_token=$(echo "$api_token" | sed 's/[.[\*^$()+?{|\/&]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/$escaped_token/$anon_token/g" 2>/dev/null || echo "$new_content")
-      modified=true
-    fi
-  done
-
-  # ==========================================================================
-  # ANONYMIZE SLACK CHANNELS
-  # ==========================================================================
-  local slack_channels=""
-
-  # JSON format: "action.slack.channel": "#channel" or "channel": "#channel"
-  slack_channels+=" $(echo "$new_content" | grep -oE '"(action\.slack\.channel|slack_channel|channel)"\s*:\s*"#[^"]+' 2>/dev/null | grep -oE '#[^"]+' | sort -u || true)"
-
-  # Conf format: channel = #channel
-  slack_channels+=" $(echo "$new_content" | grep -oE '\bchannel\s*=\s*#[^\s,\]]+' 2>/dev/null | grep -oE '#[^\s,\]]+' | sort -u || true)"
-
-  for slack_channel in $slack_channels; do
-    if [[ -z "$slack_channel" || "$slack_channel" == "#anon-channel-"* ]]; then
-      continue
-    fi
-    local anon_channel=$(get_anon_slack_channel "$slack_channel")
-    if [ "$slack_channel" != "$anon_channel" ]; then
-      local escaped_channel=$(echo "$slack_channel" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/$escaped_channel/$anon_channel/g" 2>/dev/null || echo "$new_content")
-      modified=true
-    fi
-  done
-
-  # ==========================================================================
-  # ANONYMIZE USERNAMES AND USER IDs
-  # ==========================================================================
-  local usernames=""
-
-  # JSON format: "owner": "username", "eai:acl.owner": "username", "user": "username"
-  usernames+=" $(echo "$new_content" | grep -oE '"(owner|eai:acl\.owner|author|user|username|realname|created_by|updated_by)"\s*:\s*"[^"]+' 2>/dev/null | grep -oE '"[^"]+$' | tr -d '"' | sort -u || true)"
-
-  # Conf format: owner = username
-  usernames+=" $(echo "$new_content" | grep -oE '\b(owner|author|user)\s*=\s*[^\s,\]"]+' 2>/dev/null | sed 's/.*=\s*//' | sort -u || true)"
-
-  for username in $usernames; do
-    # Skip if empty, already anonymized, or system user
-    if [[ -z "$username" || "$username" == "anon-user-"* || \
-          "$username" == "nobody" || "$username" == "admin" || "$username" == "system" || \
-          "$username" == "splunk-system-user" || "$username" == "root" || \
-          "$username" == "null" || "$username" == "none" ]]; then
-      continue
-    fi
-
-    local anon_user=$(get_anon_username "$username")
-    if [ "$username" != "$anon_user" ]; then
-      # Need word boundary matching to avoid partial replacements
-      local escaped_user=$(echo "$username" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      new_content=$(echo "$new_content" | sed "s/\"$escaped_user\"/\"$anon_user\"/g" 2>/dev/null || echo "$new_content")
-      modified=true
-    fi
-  done
-
-  # ==========================================================================
-  # WRITE MODIFIED CONTENT
-  # ==========================================================================
-  if [ "$modified" = true ]; then
-    echo "$new_content" > "$temp_file"
-    mv "$temp_file" "$file"
   fi
+
+  # Run Python anonymizer with 60-second timeout per file
+  if command -v timeout &>/dev/null; then
+    timeout 60 "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  elif command -v gtimeout &>/dev/null; then
+    gtimeout 60 "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  else
+    "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  fi
+}
+
+# Fallback: Simple sed-based anonymization (no complex patterns that can backtrack)
+anonymize_file_sed_fallback() {
+  local file="$1"
+  local temp_file="${file}.anon.tmp"
+
+  # Use simple, non-backtracking patterns with in-place sed
+  # These are safe patterns that won't cause catastrophic backtracking
+
+  # Check for GNU sed vs BSD sed
+  local sed_inplace=""
+  if sed --version 2>/dev/null | grep -q GNU; then
+    sed_inplace="-i"
+  else
+    sed_inplace="-i ''"
+  fi
+
+  # Apply simple patterns directly to file (in-place, streaming)
+  # 1. Redact private IPs (simple patterns)
+  sed $sed_inplace 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+  # Clean up backup files on macOS
+  rm -f "${file}''" 2>/dev/null || true
 }
 
 # Main anonymization function - processes all files in export directory
@@ -5673,9 +5747,15 @@ EOF
     echo -e "${YELLOW}║${NC}  still usable, but some data may be missing.                        ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}  ${WHITE}TO DIAGNOSE:${NC}                                                       ${YELLOW}║${NC}"
-    echo -e "${YELLOW}║${NC}  1. Extract: tar -xzf $(basename "$tarball")                ${YELLOW}║${NC}"
-    echo -e "${YELLOW}║${NC}  2. Read: TROUBLESHOOTING.md                                        ${YELLOW}║${NC}"
-    echo -e "${YELLOW}║${NC}  3. Check: export.log for detailed error messages                   ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  1. Extract the archive:                                             ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     tar -xzf $(basename "$tarball")                         ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  2. Log files are located at:                                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     ${CYAN}$(pwd)/${EXPORT_NAME}/export.log${NC}              ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     ${CYAN}$(pwd)/${EXPORT_NAME}/export_errors.log${NC}       ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  3. Also read: ${EXPORT_NAME}/TROUBLESHOOTING.md                     ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}  ${WHITE}COMMON FIXES:${NC}                                                      ${YELLOW}║${NC}"
     echo -e "${YELLOW}║${NC}  • Verify user has 'search' and 'admin' capabilities               ${YELLOW}║${NC}"
