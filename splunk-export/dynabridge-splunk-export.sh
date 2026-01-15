@@ -78,7 +78,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.2.0"
+SCRIPT_VERSION="4.2.1"
 SCRIPT_NAME="DynaBridge Splunk Export"
 
 # ANSI color codes
@@ -2769,8 +2769,18 @@ select_applications() {
           continue
         fi
 
-        # Skip framework/system apps
-        if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted)$ ]]; then
+        # Skip Splunk's own system apps (splunk_* and Splunk_*)
+        if [[ "$app_name" =~ ^[Ss]plunk_ ]]; then
+          continue
+        fi
+
+        # Skip Splunk Support Add-ons (SA-*)
+        if [[ "$app_name" =~ ^SA- ]]; then
+          continue
+        fi
+
+        # Skip framework/system/default apps that have no user content
+        if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|search|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
           continue
         fi
 
@@ -3662,18 +3672,15 @@ except Exception as e:
         fi
 
         log "Exported Dashboard Studio: $dashboard_app/$dashboard_name"
-        echo "    → Studio: $dashboard_app/$dashboard_name"
       else
         # Classic dashboard - save to app-scoped classic folder (v2 structure)
         mv "$temp_file" "$EXPORT_DIR/$dashboard_app/dashboards/classic/${dashboard_name}.json"
         ((classic_count++))
         log "Exported Classic Dashboard: $dashboard_app/$dashboard_name"
-        echo "    → Classic: $dashboard_app/$dashboard_name"
       fi
     else
       ((failed_count++))
       log "Failed to export: $dashboard_name"
-      echo "    ✗ Failed: $dashboard_name"
       rm -f "$temp_file" 2>/dev/null
     fi
 
@@ -3899,6 +3906,174 @@ get_app_where_clause() {
   fi
 }
 
+# =============================================================================
+# APP-SCOPED ANALYTICS COLLECTION
+# =============================================================================
+# Collects usage analytics specific to a single app. This is called for each
+# app during export to create app-level usage data that's more actionable
+# for migration prioritization than global aggregates.
+#
+# Creates: $EXPORT_DIR/$app/splunk-analysis/
+#   - dashboard_views.json      (views for THIS app's dashboards)
+#   - alert_firing.json         (firing stats for THIS app's alerts)
+#   - search_usage.json         (run counts for THIS app's saved searches)
+#   - index_references.json     (which indexes THIS app queries)
+# =============================================================================
+
+collect_app_analytics() {
+  local app="$1"
+
+  # Skip if no REST API access
+  if [ -z "$SPLUNK_USER" ]; then
+    return 0
+  fi
+
+  # Skip if usage collection disabled
+  if [ "$COLLECT_USAGE" = false ]; then
+    return 0
+  fi
+
+  local analysis_dir="$EXPORT_DIR/$app/splunk-analysis"
+  mkdir -p "$analysis_dir"
+
+  log "Collecting app-scoped analytics for: $app"
+
+  # Helper to run a quick search for this app (shorter timeout for per-app queries)
+  run_app_search() {
+    local search_query="$1"
+    local output_file="$2"
+    local description="$3"
+    local max_wait="${4:-120}"  # 2 minute default for app-specific queries
+
+    # Rate limiting
+    sleep "$API_DELAY_SECONDS"
+
+    local temp_file=$(mktemp)
+    local http_code
+
+    http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+      -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" \
+      -d "earliest_time=-${USAGE_PERIOD}" \
+      -d "latest_time=now" \
+      --data-urlencode "search=$search_query" \
+      2>/dev/null)
+
+    local job_response=$(cat "$temp_file")
+    rm -f "$temp_file"
+
+    # Handle HTTP errors
+    if [ "$http_code" != "201" ] && [ "$http_code" != "200" ]; then
+      log "Search failed for $app/$description: HTTP $http_code"
+      echo "{\"error\": \"http_$http_code\", \"app\": \"$app\", \"description\": \"$description\"}" > "$output_file"
+      return 1
+    fi
+
+    local sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
+
+    if [ -z "$sid" ]; then
+      log "No SID returned for $app/$description"
+      echo "{\"error\": \"no_sid\", \"app\": \"$app\", \"description\": \"$description\"}" > "$output_file"
+      return 1
+    fi
+
+    # Wait for completion
+    local waited=0
+    local is_done="false"
+
+    while [ "$is_done" != "true" ] && [ "$waited" -lt "$max_wait" ]; do
+      sleep 3
+      waited=$((waited + 3))
+
+      local status=$(curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid" \
+        -d "output_mode=json" 2>/dev/null)
+
+      is_done=$(echo "$status" | grep -o '"isDone":[^,}]*' | cut -d: -f2 | tr -d ' ')
+    done
+
+    if [ "$is_done" = "true" ]; then
+      curl -k -s -o "$output_file" \
+        -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
+        2>/dev/null
+      return 0
+    else
+      echo "{\"error\": \"timeout\", \"app\": \"$app\", \"description\": \"$description\"}" > "$output_file"
+      return 1
+    fi
+  }
+
+  # -------------------------------------------------------------------------
+  # 1. DASHBOARD VIEWS - Top dashboards in THIS app by view count
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_audit action=search info=granted search_type=dashboard app=\"$app\" | stats count as view_count, dc(user) as unique_users, latest(_time) as last_viewed by dashboard | sort - view_count | head 100" \
+    "$analysis_dir/dashboard_views.json" \
+    "Dashboard views for $app"
+
+  # -------------------------------------------------------------------------
+  # 2. ALERT FIRING STATS - Alert execution stats for THIS app's alerts
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_internal sourcetype=scheduler app=\"$app\" status=* | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by savedsearch_name | sort - total_runs | head 100" \
+    "$analysis_dir/alert_firing.json" \
+    "Alert firing stats for $app"
+
+  # -------------------------------------------------------------------------
+  # 3. SAVED SEARCH USAGE - Run frequency for THIS app's saved searches
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_internal sourcetype=scheduler app=\"$app\" | stats count as run_count, avg(run_time) as avg_runtime, max(run_time) as max_runtime, latest(_time) as last_run by savedsearch_name | sort - run_count | head 100" \
+    "$analysis_dir/search_usage.json" \
+    "Search usage for $app"
+
+  # -------------------------------------------------------------------------
+  # 4. INDEX REFERENCES - Which indexes does THIS app query?
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_audit action=search info=granted app=\"$app\" | rex field=search \"index\\s*=\\s*(?<idx>[\\w\\*_-]+)\" | stats count as query_count, dc(user) as unique_users by idx | where isnotnull(idx) | sort - query_count | head 50" \
+    "$analysis_dir/index_references.json" \
+    "Index references for $app"
+
+  # -------------------------------------------------------------------------
+  # 5. SOURCETYPE REFERENCES - Which sourcetypes does THIS app query?
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_audit action=search info=granted app=\"$app\" | rex field=search \"sourcetype\\s*=\\s*(?<st>[\\w\\*_-]+)\" | stats count as query_count by st | where isnotnull(st) | sort - query_count | head 50" \
+    "$analysis_dir/sourcetype_references.json" \
+    "Sourcetype references for $app"
+
+  # -------------------------------------------------------------------------
+  # 6. DASHBOARDS NEVER VIEWED - Candidates for elimination in THIS app
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_audit action=search info=granted search_type=dashboard app=\"$app\" | stats count by dashboard | append [| rest /servicesNS/-/$app/data/ui/views | table title | rename title as dashboard | eval count=0] | stats sum(count) as total_views by dashboard | where total_views=0 | table dashboard" \
+    "$analysis_dir/dashboards_never_viewed.json" \
+    "Never-viewed dashboards for $app"
+
+  # -------------------------------------------------------------------------
+  # 7. ALERTS NEVER FIRED - Alerts in THIS app that never triggered
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_internal sourcetype=scheduler app=\"$app\" | stats count by savedsearch_name | append [| rest /servicesNS/-/$app/saved/searches | search is_scheduled=1 | table title | rename title as savedsearch_name | eval count=0] | stats sum(count) as total_runs by savedsearch_name | where total_runs=0 | table savedsearch_name" \
+    "$analysis_dir/alerts_never_fired.json" \
+    "Never-fired alerts for $app"
+
+  log "Completed app-scoped analytics for: $app"
+}
+
+# =============================================================================
+# GLOBAL USAGE ANALYTICS (Infrastructure-level)
+# =============================================================================
+# Collects system-wide analytics that don't make sense at app level:
+#   - Index sizes and volume (infrastructure)
+#   - Ingestion infrastructure (how data arrives)
+#   - RBAC/user mapping (org-level)
+#   - License consumption (org-level)
+# =============================================================================
+
 collect_usage_analytics() {
   if [ -z "$SPLUNK_USER" ]; then
     warning "Skipping usage analytics (no REST API access)"
@@ -3926,19 +4101,15 @@ collect_usage_analytics() {
   fi
 
   # Define collection tasks for progress tracking
-  # IMPORTANT: This array must match the actual number of sections in this function
+  # NOTE: Per-app analytics (dashboard views, alert firing, search usage) are now
+  # collected in each app's splunk-analysis/ folder. This function collects
+  # GLOBAL/INFRASTRUCTURE analytics that span all apps.
   local tasks=(
-    "dashboard_views:Dashboard view statistics"
-    "user_activity:User activity metrics"
-    "alert_executions:Alert firing history"
-    "search_patterns:Search usage patterns"
+    "user_activity:User activity metrics (org-level)"
     "data_source_usage:Data source consumption"
     "daily_volume:Daily volume analysis"
     "ingestion_infra:Ingestion infrastructure"
-    "ownership:Ownership mapping"
-    "alert_migration:Alert migration data"
-    "user_role_mapping:User/role mapping"
-    "saved_searches:Saved search metadata"
+    "user_role_mapping:User/role mapping (RBAC)"
     "scheduler_status:Scheduler execution stats"
   )
 
@@ -4086,41 +4257,14 @@ collect_usage_analytics() {
     fi
   }
 
-  # ==========================================================================
-  # 1. DASHBOARD VIEW STATISTICS
-  # ==========================================================================
-  ((task_num++))
-  info "Collecting dashboard view statistics..."
-
   # Build app filter string for use in searches (empty if not in scoped mode)
   local app_search_filter=""
   if [ -n "$app_filter" ]; then
     app_search_filter="$app_filter "
   fi
 
-  # Most viewed dashboards (filtered to selected apps in scoped mode)
-  run_usage_search \
-    "search index=_audit action=search info=granted search_type=dashboard ${app_search_filter}| stats count as view_count, dc(user) as unique_users, latest(_time) as last_viewed by app, dashboard | sort - view_count | head 100" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_top100.json" \
-    "Top 100 most viewed dashboards"
-
-  # Dashboard views by day (trend)
-  run_usage_search \
-    "search index=_audit action=search info=granted search_type=dashboard ${app_search_filter}| timechart span=1d count as views by dashboard limit=20" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_trend.json" \
-    "Dashboard view trends"
-
-  # Dashboards with ZERO views (candidates for elimination)
-  run_usage_search \
-    "search index=_audit action=search info=granted search_type=dashboard ${app_search_filter}| stats count by dashboard | append [| rest /servicesNS/-/-/data/ui/views | table title | rename title as dashboard | eval count=0] | stats sum(count) as total_views by dashboard | where total_views=0 | table dashboard" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboards_never_viewed.json" \
-    "Dashboards with zero views"
-
-  progress_update "$task_num"
-  task_complete "Dashboard usage statistics"
-
   # ==========================================================================
-  # 2. USER ACTIVITY METRICS
+  # 1. USER ACTIVITY METRICS (Org-level)
   # ==========================================================================
   ((task_num++))
   info "Collecting user activity metrics..."
@@ -4152,80 +4296,11 @@ collect_usage_analytics() {
   progress_update "$task_num"
   task_complete "User activity metrics"
 
-  # ==========================================================================
-  # 3. ALERT EXECUTION STATISTICS
-  # ==========================================================================
-  ((task_num++))
-  info "Collecting alert execution statistics..."
-
-  # Most fired alerts (filtered to selected apps in scoped mode)
-  run_usage_search \
-    "search index=_internal sourcetype=scheduler status=success savedsearch_name=* ${app_search_filter}| stats count as fire_count, avg(run_time) as avg_runtime, latest(_time) as last_fired by savedsearch_name, app | where fire_count > 0 | sort - fire_count | head 100" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_most_fired.json" \
-    "Most fired alerts"
-
-  # Alerts that triggered actions (email, webhook, etc.)
-  run_usage_search \
-    "search index=_internal sourcetype=scheduler status=success alert_actions!=\"\" ${app_search_filter}| stats count as action_count, values(alert_actions) as actions by savedsearch_name | sort - action_count | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_with_actions.json" \
-    "Alerts with triggered actions"
-
-  # Failed/skipped alerts
-  run_usage_search \
-    "search index=_internal sourcetype=scheduler (status=failed OR status=skipped) ${app_search_filter}| stats count as failure_count, latest(status) as last_status, latest(reason) as last_reason by savedsearch_name | sort - failure_count | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_failed.json" \
-    "Failed/skipped alerts"
-
-  # Alerts that NEVER fired (candidates for elimination)
-  run_usage_search \
-    "search index=_internal sourcetype=scheduler ${app_search_filter}| stats count by savedsearch_name | append [| rest /servicesNS/-/-/saved/searches search=\"alert.track=1\" | table title | rename title as savedsearch_name | eval count=0] | stats sum(count) as total_fires by savedsearch_name | where total_fires=0 | table savedsearch_name" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_never_fired.json" \
-    "Alerts that never fired"
-
-  # Alert firing trend
-  run_usage_search \
-    "search index=_internal sourcetype=scheduler status=success ${app_search_filter}| timechart span=1d count as alert_fires by savedsearch_name limit=20" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_firing_trend.json" \
-    "Alert firing trend"
-
-  progress_update "$task_num"
-  task_complete "Alert execution statistics"
+  # NOTE: Alert execution statistics are now collected per-app
+  # See each app's splunk-analysis/alert_firing.json for app-specific data
 
   # ==========================================================================
-  # 4. SEARCH USAGE PATTERNS
-  # ==========================================================================
-  ((task_num++))
-  info "Collecting search usage patterns..."
-
-  # Most common search commands (filtered to selected apps in scoped mode)
-  run_usage_search \
-    "search index=_audit action=search info=granted search=* ${app_search_filter}| rex field=search \"^\\s*\\|?\\s*(?<first_command>\\w+)\" | stats count by first_command | sort - count | head 30" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/search_commands_popular.json" \
-    "Most popular search commands"
-
-  # Searches by type (adhoc vs scheduled vs dashboard)
-  run_usage_search \
-    "search index=_audit action=search info=granted ${app_search_filter}| stats count by search_type | sort - count" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/search_by_type.json" \
-    "Searches by type"
-
-  # Long-running searches (performance concerns)
-  run_usage_search \
-    "search index=_audit action=search info=completed ${app_search_filter}| where total_run_time > 60 | stats count as slow_runs, avg(total_run_time) as avg_time, max(total_run_time) as max_time by search_id, user | sort - avg_time | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/searches_slow.json" \
-    "Slow running searches"
-
-  # Most common search terms (for understanding what users look for)
-  run_usage_search \
-    "search index=_audit action=search info=granted search=* ${app_search_filter}| rex field=search \"index=(?<searched_index>\\w+)\" | stats count by searched_index | sort - count | head 20" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_searched.json" \
-    "Most searched indexes"
-
-  progress_update "$task_num"
-  task_complete "Search usage patterns"
-
-  # ==========================================================================
-  # 5. DATA SOURCE USAGE
+  # 2. DATA SOURCE USAGE (Infrastructure-level)
   # ==========================================================================
   ((task_num++))
   info "Collecting data source usage patterns..."
@@ -4252,7 +4327,7 @@ collect_usage_analytics() {
   task_complete "Data source usage patterns"
 
   # ==========================================================================
-  # 5b. DAILY VOLUME ANALYSIS (Critical for capacity planning)
+  # 3. DAILY VOLUME ANALYSIS (Infrastructure - capacity planning)
   # ==========================================================================
   ((task_num++))
   info "Collecting daily volume statistics (last 30 days)..."
@@ -6385,9 +6460,10 @@ main() {
 
   # =========================================================================
   # DETERMINE INTERACTIVE VS NON-INTERACTIVE MODE
-  # Non-interactive requires: username AND password
+  # Non-interactive requires: -y flag AND (username AND password)
+  # Environment variables alone should NOT trigger non-interactive mode
   # =========================================================================
-  if [ -n "$SPLUNK_USER" ] && [ -n "$SPLUNK_PASSWORD" ]; then
+  if [ "$AUTO_CONFIRM" = "true" ] && [ -n "$SPLUNK_USER" ] && [ -n "$SPLUNK_PASSWORD" ]; then
     NON_INTERACTIVE=true
   fi
 
@@ -6556,6 +6632,33 @@ main() {
         show_histogram "Dashboards by Application (Top 15)" "${sorted_data[@]}"
       fi
     fi
+  fi
+
+  # =========================================================================
+  # APP-SCOPED ANALYTICS COLLECTION
+  # Collect usage analytics for each app (dashboard views, alert firing, etc.)
+  # This runs after configs so we know which apps have content worth analyzing.
+  # =========================================================================
+  if [ "$SPLUNK_FLAVOR" != "uf" ] && [ "$COLLECT_USAGE" = true ] && [ -n "$SPLUNK_USER" ]; then
+    echo ""
+    info "Collecting app-scoped usage analytics..."
+
+    progress_init "Collecting App Usage Analytics" "$total_apps"
+
+    local analytics_index=0
+    for app in "${SELECTED_APPS[@]}"; do
+      ((analytics_index++))
+
+      # Only collect analytics for apps that have content
+      if [ -d "$EXPORT_DIR/$app" ]; then
+        collect_app_analytics "$app"
+      fi
+
+      progress_update "$analytics_index"
+    done
+
+    progress_complete
+    success "App-scoped analytics collected (see each app's splunk-analysis/ folder)"
   fi
 
   if [ "$SPLUNK_FLAVOR" != "uf" ]; then

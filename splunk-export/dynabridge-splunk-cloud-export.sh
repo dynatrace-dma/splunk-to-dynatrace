@@ -98,7 +98,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.2.0"
+SCRIPT_VERSION="4.2.1"
 SCRIPT_NAME="DynaBridge Splunk Cloud Export"
 
 # ANSI color codes
@@ -1891,6 +1891,40 @@ select_applications() {
     done < <(echo "$apps_response" | grep -oP '"name"\s*:\s*"\K[^"]+')
   fi
 
+  # Filter out Splunk internal/system apps (users don't want to migrate these)
+  local filtered_apps=()
+  local filtered_labels=()
+  local i=0
+  for app_name in "${apps[@]}"; do
+    # Skip internal apps (start with _)
+    if [[ "$app_name" =~ ^_ ]]; then
+      ((i++))
+      continue
+    fi
+    # Skip Splunk's own system apps (splunk_* and Splunk_*)
+    if [[ "$app_name" =~ ^[Ss]plunk_ ]]; then
+      ((i++))
+      continue
+    fi
+    # Skip Splunk Support Add-ons (SA-*)
+    if [[ "$app_name" =~ ^SA- ]]; then
+      ((i++))
+      continue
+    fi
+    # Skip framework/system/default apps that have no user content
+    if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|search|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
+      ((i++))
+      continue
+    fi
+    filtered_apps+=("$app_name")
+    filtered_labels+=("${app_labels[$i]}")
+    ((i++))
+  done
+
+  # Replace with filtered list
+  apps=("${filtered_apps[@]}")
+  app_labels=("${filtered_labels[@]}")
+
   local total_apps=${#apps[@]}
 
   echo ""
@@ -2546,6 +2580,116 @@ get_app_where_clause() {
     echo ""
   fi
 }
+
+# =============================================================================
+# APP-SCOPED ANALYTICS COLLECTION (Splunk Cloud)
+# =============================================================================
+# Collects usage analytics specific to a single app. This is called for each
+# app during export to create app-level usage data that's more actionable
+# for migration prioritization than global aggregates.
+#
+# Creates: $EXPORT_DIR/$app/splunk-analysis/
+#   - dashboard_views.json      (views for THIS app's dashboards)
+#   - alert_firing.json         (firing stats for THIS app's alerts)
+#   - search_usage.json         (run counts for THIS app's saved searches)
+#   - index_references.json     (which indexes THIS app queries)
+#
+# Note: Some searches may be limited in Splunk Cloud due to _internal restrictions
+# =============================================================================
+
+collect_app_analytics() {
+  local app="$1"
+
+  # Skip if usage collection disabled
+  if [ "$COLLECT_USAGE" != "true" ]; then
+    return 0
+  fi
+
+  local analysis_dir="$EXPORT_DIR/$app/splunk-analysis"
+  mkdir -p "$analysis_dir"
+
+  log "Collecting app-scoped analytics for: $app"
+
+  # -------------------------------------------------------------------------
+  # 1. DASHBOARD VIEWS - Top dashboards in THIS app by view count
+  # Uses _audit which IS accessible in Splunk Cloud
+  # -------------------------------------------------------------------------
+  run_analytics_search \
+    "search index=_audit action=search info=granted search_type=dashboard app=\"$app\" earliest=-${USAGE_PERIOD} | where user!=\"splunk-system-user\" | stats count as view_count, dc(user) as unique_users, latest(_time) as last_viewed by savedsearch_name | rename savedsearch_name as dashboard | where isnotnull(dashboard) | sort -view_count | head 100" \
+    "$analysis_dir/dashboard_views.json" \
+    "Dashboard views for $app" 2>/dev/null || true
+
+  # -------------------------------------------------------------------------
+  # 2. ALERT FIRING STATS - Alert execution stats for THIS app's alerts
+  # Note: _internal may not be accessible in Splunk Cloud - will produce error
+  # -------------------------------------------------------------------------
+  if [ "$SKIP_INTERNAL" != "true" ]; then
+    run_analytics_search \
+      "search index=_internal sourcetype=scheduler app=\"$app\" status=* earliest=-${USAGE_PERIOD} | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by savedsearch_name | sort - total_runs | head 100" \
+      "$analysis_dir/alert_firing.json" \
+      "Alert firing stats for $app" 2>/dev/null || true
+  else
+    echo '{"note": "_internal index not accessible in Splunk Cloud. Check Monitoring Console for scheduler statistics."}' > "$analysis_dir/alert_firing.json"
+  fi
+
+  # -------------------------------------------------------------------------
+  # 3. SAVED SEARCH USAGE - Run frequency for THIS app's saved searches
+  # Note: _internal may not be accessible in Splunk Cloud
+  # -------------------------------------------------------------------------
+  if [ "$SKIP_INTERNAL" != "true" ]; then
+    run_analytics_search \
+      "search index=_internal sourcetype=scheduler app=\"$app\" earliest=-${USAGE_PERIOD} | stats count as run_count, avg(run_time) as avg_runtime, max(run_time) as max_runtime, latest(_time) as last_run by savedsearch_name | sort - run_count | head 100" \
+      "$analysis_dir/search_usage.json" \
+      "Search usage for $app" 2>/dev/null || true
+  else
+    echo '{"note": "_internal index not accessible in Splunk Cloud."}' > "$analysis_dir/search_usage.json"
+  fi
+
+  # -------------------------------------------------------------------------
+  # 4. INDEX REFERENCES - Which indexes does THIS app query?
+  # Uses _audit which IS accessible in Splunk Cloud
+  # -------------------------------------------------------------------------
+  run_analytics_search \
+    "search index=_audit action=search info=granted app=\"$app\" earliest=-${USAGE_PERIOD} | rex field=search \"index\\s*=\\s*(?<idx>[\\w\\*_-]+)\" | stats count as query_count, dc(user) as unique_users by idx | where isnotnull(idx) | sort - query_count | head 50" \
+    "$analysis_dir/index_references.json" \
+    "Index references for $app" 2>/dev/null || true
+
+  # -------------------------------------------------------------------------
+  # 5. SOURCETYPE REFERENCES - Which sourcetypes does THIS app query?
+  # Uses _audit which IS accessible in Splunk Cloud
+  # -------------------------------------------------------------------------
+  run_analytics_search \
+    "search index=_audit action=search info=granted app=\"$app\" earliest=-${USAGE_PERIOD} | rex field=search \"sourcetype\\s*=\\s*(?<st>[\\w\\*_-]+)\" | stats count as query_count by st | where isnotnull(st) | sort - query_count | head 50" \
+    "$analysis_dir/sourcetype_references.json" \
+    "Sourcetype references for $app" 2>/dev/null || true
+
+  # -------------------------------------------------------------------------
+  # 6. DASHBOARDS NEVER VIEWED - Candidates for elimination in THIS app
+  # Uses _audit and REST API (both accessible in Splunk Cloud)
+  # -------------------------------------------------------------------------
+  run_analytics_search \
+    "| rest /servicesNS/-/$app/data/ui/views | rename title as dashboard | table dashboard | join type=left dashboard [search index=_audit action=search search_type=dashboard app=\"$app\" earliest=-${USAGE_PERIOD} | where user!=\"splunk-system-user\" | stats count as views by savedsearch_name | rename savedsearch_name as dashboard] | where isnull(views) OR views=0 | table dashboard" \
+    "$analysis_dir/dashboards_never_viewed.json" \
+    "Never-viewed dashboards for $app" 2>/dev/null || true
+
+  # -------------------------------------------------------------------------
+  # 7. ALERTS INVENTORY - Get all scheduled searches/alerts for THIS app
+  # Uses REST API (accessible in Splunk Cloud)
+  # -------------------------------------------------------------------------
+  run_analytics_search \
+    "| rest /servicesNS/-/$app/saved/searches | search (is_scheduled=1 OR alert.track=1) | table title, cron_schedule, alert.severity, alert.track, actions, disabled | rename title as alert_name" \
+    "$analysis_dir/alerts_inventory.json" \
+    "Alerts inventory for $app" 2>/dev/null || true
+
+  log "Completed app-scoped analytics for: $app"
+}
+
+# =============================================================================
+# GLOBAL USAGE ANALYTICS (Infrastructure-level)
+# =============================================================================
+# Collects system-wide analytics that don't make sense at app level.
+# Per-app analytics are now in each app's splunk-analysis/ folder.
+# =============================================================================
 
 collect_usage_analytics() {
   if [ "$COLLECT_USAGE" != "true" ]; then
@@ -4720,9 +4864,21 @@ run_collection() {
   echo -e "  [${current_step}/${total_steps}] Collecting knowledge objects..."
   collect_knowledge_objects
 
-  # Usage analytics
+  # App-scoped analytics (per-app usage data)
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Running usage analytics..."
+  echo -e "  [${current_step}/${total_steps}] Collecting app-scoped analytics..."
+  if [ "$COLLECT_USAGE" = "true" ]; then
+    for app in "${SELECTED_APPS[@]}"; do
+      if [ -d "$EXPORT_DIR/$app" ]; then
+        collect_app_analytics "$app"
+      fi
+    done
+    success "App-scoped analytics collected (see each app's splunk-analysis/ folder)"
+  fi
+
+  # Global/infrastructure usage analytics
+  ((current_step++))
+  echo -e "  [${current_step}/${total_steps}] Running global usage analytics..."
   collect_usage_analytics
 
   # Indexes
