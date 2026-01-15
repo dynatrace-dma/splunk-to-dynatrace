@@ -5002,13 +5002,13 @@ generate_manifest() {
   # NOTE: Only count .json files that are NOT _definition.json (those are extracted definitions, not separate dashboards)
   local studio_count=0
   local classic_count=0
-  for dir in "$EXPORT_DIR"/*/dashboards/studio 2>/dev/null; do
+  for dir in "$EXPORT_DIR"/*/dashboards/studio; do
     if [ -d "$dir" ]; then
       local count=$(ls -1 "$dir"/*.json 2>/dev/null | grep -v '_definition\.json$' | wc -l | tr -d ' ')
       studio_count=$((studio_count + count))
     fi
   done
-  for dir in "$EXPORT_DIR"/*/dashboards/classic 2>/dev/null; do
+  for dir in "$EXPORT_DIR"/*/dashboards/classic; do
     if [ -d "$dir" ]; then
       local count=$(ls -1 "$dir"/*.json 2>/dev/null | wc -l | tr -d ' ')
       classic_count=$((classic_count + count))
