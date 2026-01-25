@@ -98,7 +98,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.2.2"
+SCRIPT_VERSION="4.2.3"
 SCRIPT_NAME="DynaBridge Splunk Cloud Export"
 
 # ANSI color codes
@@ -3717,47 +3717,88 @@ collect_knowledge_objects() {
   for app in "${SELECTED_APPS[@]}"; do
     mkdir -p "$EXPORT_DIR/$app"
 
+    # CRITICAL (v4.2.2): Filter ALL knowledge objects by acl.app
+    # The REST API returns ALL objects VISIBLE to the app (including globally shared ones)
+    # We must filter by acl.app to get only objects that actually BELONG to this app
+    # This matches the fix in savedsearches (v4.2.1) and prevents duplicate data
+
+    # Helper function to filter and save JSON response by acl.app
+    filter_and_save_json() {
+      local json_data="$1"
+      local target_app="$2"
+      local output_file="$3"
+      local object_type="$4"
+
+      if $HAS_JQ; then
+        local filtered_response
+        filtered_response=$(echo "$json_data" | jq --arg app "$target_app" '{
+          links: .links,
+          origin: .origin,
+          updated: .updated,
+          generator: .generator,
+          entry: [.entry[] | select(.acl.app == $app)],
+          paging: .paging
+        }' 2>/dev/null)
+
+        if [ -n "$filtered_response" ] && [ "$filtered_response" != "null" ]; then
+          local entry_count=$(echo "$filtered_response" | jq '.entry | length // 0' 2>/dev/null || echo 0)
+          if [ "$entry_count" -gt 0 ]; then
+            echo "$filtered_response" > "$output_file"
+            debug "  $target_app/$object_type: $entry_count entries (after filtering)"
+          else
+            debug "  $target_app/$object_type: 0 entries belong to this app (skipped)"
+          fi
+          return 0
+        fi
+      fi
+
+      # Fallback without jq - save unfiltered and log warning
+      echo "$json_data" > "$output_file"
+      warn "Could not filter $object_type for $target_app by ACL - saved unfiltered"
+      return 0
+    }
+
     # Macros
     local response
     response=$(api_call "/servicesNS/-/$app/admin/macros" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/macros.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/macros.json" "macros"
     fi
 
     # Eventtypes
     response=$(api_call "/servicesNS/-/$app/saved/eventtypes" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/eventtypes.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/eventtypes.json" "eventtypes"
     fi
 
     # Tags
     response=$(api_call "/servicesNS/-/$app/configs/conf-tags" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/tags.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/tags.json" "tags"
     fi
 
     # Field extractions
     response=$(api_call "/servicesNS/-/$app/data/transforms/extractions" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/field_extractions.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/field_extractions.json" "field_extractions"
     fi
 
     # Inputs (data inputs with sourcetype definitions)
     response=$(api_call "/servicesNS/-/$app/data/inputs/all" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/inputs.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/inputs.json" "inputs"
     fi
 
     # Props (sourcetype configurations)
     response=$(api_call "/servicesNS/-/$app/configs/conf-props" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/props.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/props.json" "props"
     fi
 
     # Transforms (field extractions and routing)
     response=$(api_call "/servicesNS/-/$app/configs/conf-transforms" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/$app/transforms.json"
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/transforms.json" "transforms"
     fi
 
     # Lookups
