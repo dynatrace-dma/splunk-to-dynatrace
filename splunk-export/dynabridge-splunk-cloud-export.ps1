@@ -3664,9 +3664,9 @@ function New-ExportSummary {
 
 ## Data Categories Collected
 
-- $($collectStatus.Configs -eq 'Collected' ? 'Configurations (via REST API reconstruction)' : 'Configurations (skipped)')
-- $($collectStatus.Dashboards -eq 'Collected' ? 'Dashboards (Classic and Dashboard Studio)' : 'Dashboards (skipped)')
-- $($collectStatus.Alerts -eq 'Collected' ? 'Alerts and Saved Searches' : 'Alerts (skipped)')
+- $(if ($collectStatus.Configs -eq 'Collected') { 'Configurations (via REST API reconstruction)' } else { 'Configurations (skipped)' })
+- $(if ($collectStatus.Dashboards -eq 'Collected') { 'Dashboards (Classic and Dashboard Studio)' } else { 'Dashboards (skipped)' })
+- $(if ($collectStatus.Alerts -eq 'Collected') { 'Alerts and Saved Searches' } else { 'Alerts (skipped)' })
 - $($collectStatus.RBAC)
 - $($collectStatus.Usage)
 - $($collectStatus.Indexes)
