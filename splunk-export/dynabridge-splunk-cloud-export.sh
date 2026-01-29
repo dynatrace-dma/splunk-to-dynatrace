@@ -231,6 +231,10 @@ API_TIMEOUT=${API_TIMEOUT:-120}            # Per-request timeout (2 min - handle
 # Total runtime limit - prevents runaway scripts
 MAX_TOTAL_TIME=${MAX_TOTAL_TIME:-14400}    # Maximum total script runtime (4 hours for 5000+ assets)
 
+# Proxy settings
+PROXY_URL=""                               # Optional proxy server (e.g., http://proxy.company.com:8080)
+CURL_PROXY_ARGS=""                         # Built at runtime from PROXY_URL
+
 # Retry settings
 MAX_RETRIES=${MAX_RETRIES:-3}              # Number of retry attempts for failed requests
 BACKOFF_MULTIPLIER=2                       # Exponential backoff multiplier
@@ -1069,12 +1073,14 @@ api_call() {
         http_code=$(curl -s -k -w "%{http_code}" -o "$tmp_file" \
           --connect-timeout "$CONNECT_TIMEOUT" \
           --max-time "$API_TIMEOUT" \
+          $CURL_PROXY_ARGS \
           -H "$auth_header" \
           "${url}?${data}")
       else
         http_code=$(curl -s -k -w "%{http_code}" -o "$tmp_file" \
           --connect-timeout "$CONNECT_TIMEOUT" \
           --max-time "$API_TIMEOUT" \
+          $CURL_PROXY_ARGS \
           -H "$auth_header" \
           "$url?output_mode=json")
       fi
@@ -1082,6 +1088,7 @@ api_call() {
       http_code=$(curl -s -k -w "%{http_code}" -o "$tmp_file" \
         --connect-timeout "$CONNECT_TIMEOUT" \
         --max-time "$API_TIMEOUT" \
+        $CURL_PROXY_ARGS \
         -X "$method" \
         -H "$auth_header" \
         -H "Content-Type: application/x-www-form-urlencoded" \
@@ -1473,6 +1480,7 @@ test_connectivity() {
   curl_output=$(curl -v -k -o /dev/null -w "\n\nHTTP_CODE:%{http_code}\nTIME_TOTAL:%{time_total}\nTIME_CONNECT:%{time_connect}\nTIME_APPCONNECT:%{time_appconnect}\nTIME_NAMELOOKUP:%{time_namelookup}" \
     --connect-timeout 15 \
     --max-time 60 \
+    $CURL_PROXY_ARGS \
     "$test_url" 2>&1)
   curl_exit_code=$?
 
@@ -1584,7 +1592,7 @@ authenticate() {
   if [ "$AUTH_METHOD" = "token" ]; then
     # Token-based auth - verify token works
     AUTH_HEADER="Authorization: Bearer $AUTH_TOKEN"
-    response=$(curl -s -k \
+    response=$(curl -s -k $CURL_PROXY_ARGS \
       -H "Authorization: Bearer $AUTH_TOKEN" \
       "${SPLUNK_URL}/services/authentication/current-context?output_mode=json")
 
@@ -1599,7 +1607,7 @@ authenticate() {
 
   else
     # Username/password - get session key
-    response=$(curl -s -k \
+    response=$(curl -s -k $CURL_PROXY_ARGS \
       -d "username=$SPLUNK_USER&password=$SPLUNK_PASSWORD" \
       "${SPLUNK_URL}/services/auth/login?output_mode=json")
 
@@ -1974,6 +1982,40 @@ get_authentication() {
   check_capabilities
 
   print_box_footer
+}
+
+# =============================================================================
+# STEP 2.5: PROXY CONFIGURATION (Optional)
+# =============================================================================
+
+get_proxy_settings() {
+  # Skip if proxy was already set via --proxy flag
+  if [ -n "$PROXY_URL" ]; then
+    echo ""
+    echo -e "  ${GREEN}✓${NC} Proxy configured via command line: ${BOLD}$PROXY_URL${NC}"
+    CURL_PROXY_ARGS="-x $PROXY_URL"
+    return
+  fi
+
+  # Skip prompt in non-interactive mode
+  if [ "$NON_INTERACTIVE" = "true" ]; then
+    return
+  fi
+
+  echo ""
+  if prompt_yn "  Does your environment require a proxy server to connect to Splunk Cloud?" "N"; then
+    echo ""
+    local proxy_input
+    echo -ne "  ${YELLOW}Enter proxy URL (e.g., http://proxy.company.com:8080): ${NC}"
+    read -r proxy_input
+
+    if [ -n "$proxy_input" ]; then
+      PROXY_URL="$proxy_input"
+      CURL_PROXY_ARGS="-x $PROXY_URL"
+      echo ""
+      echo -e "  ${GREEN}✓${NC} Proxy configured: ${BOLD}$PROXY_URL${NC}"
+    fi
+  fi
 }
 
 # =============================================================================
@@ -5372,6 +5414,10 @@ main() {
         SCOPE_TO_APPS=true
         shift
         ;;
+      --proxy)
+        PROXY_URL="$2"
+        shift 2
+        ;;
       --debug|-d)
         # Enable verbose debug logging for troubleshooting
         DEBUG_MODE=true
@@ -5392,6 +5438,7 @@ main() {
         echo "  --usage           Collect usage analytics (OFF by default - requires _audit/_internal)"
         echo "  --skip-internal   Skip searches requiring _internal index (use if restricted)"
         echo "  --scoped          Scope all collections to selected apps only"
+        echo "  --proxy URL       Route all connections through a proxy server (e.g., http://proxy:8080)"
         echo "  -d, --debug       Enable verbose debug logging (writes to export_debug.log)"
         echo "  --help            Show this help"
         echo ""
@@ -5456,9 +5503,17 @@ main() {
     SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:8089||' | sed 's|/$||')
     SPLUNK_URL="https://${SPLUNK_STACK}:8089"
 
+    # Set proxy args if --proxy was provided
+    if [ -n "$PROXY_URL" ]; then
+      CURL_PROXY_ARGS="-x $PROXY_URL"
+    fi
+
     info "Running in NON-INTERACTIVE mode (all required parameters provided)"
     info "  Stack: $SPLUNK_STACK"
     info "  Auth:  ${AUTH_METHOD:-token}"
+    if [ -n "$PROXY_URL" ]; then
+      info "  Proxy: $PROXY_URL"
+    fi
     if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
       info "  Apps:  ${SELECTED_APPS[*]}"
     else
@@ -5553,6 +5608,7 @@ main() {
     show_introduction
     get_splunk_stack
     get_authentication
+    get_proxy_settings
     detect_environment
     select_applications
     select_data_categories
