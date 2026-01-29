@@ -1420,57 +1420,68 @@ test_connectivity() {
   echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
-  # =========================================================================
-  # STEP 1: DNS Resolution Test
-  # =========================================================================
-  echo -e "${YELLOW}[STEP 1/3] Testing DNS Resolution...${NC}"
-  local dns_result
-  dns_result=$(nslookup "$hostname" 2>&1) || dns_result=$(host "$hostname" 2>&1) || dns_result=$(dig +short "$hostname" 2>&1)
-  local dns_ip=$(echo "$dns_result" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
-
-  if [ -n "$dns_ip" ]; then
-    echo -e "  ${GREEN}✓ DNS resolved: ${hostname} → ${dns_ip}${NC}"
-  else
-    echo -e "  ${RED}✗ DNS FAILED: Cannot resolve ${hostname}${NC}"
-    echo -e "  ${DIM}DNS output:${NC}"
-    echo "$dns_result" | sed 's/^/    /'
+  # When proxy is configured, skip direct DNS/TCP tests (proxy handles those)
+  if [ -n "$PROXY_URL" ]; then
+    echo -e "  ${CYAN}ℹ${NC}  Proxy configured: ${BOLD}$PROXY_URL${NC}"
+    echo -e "  ${DIM}Skipping direct DNS and TCP tests (connections routed through proxy)${NC}"
     echo ""
-    error "DNS resolution failed for $hostname"
-    return 1
-  fi
-  echo ""
-
-  # =========================================================================
-  # STEP 2: TCP Port Connectivity Test
-  # =========================================================================
-  echo -e "${YELLOW}[STEP 2/3] Testing TCP Connection to Port 8089...${NC}"
-  local nc_result
-  if command -v nc &> /dev/null; then
-    nc_result=$(nc -zv -w 10 "$hostname" 8089 2>&1)
-    local nc_exit=$?
-    if [ $nc_exit -eq 0 ]; then
-      echo -e "  ${GREEN}✓ TCP port 8089 is OPEN${NC}"
-    else
-      echo -e "  ${RED}✗ TCP port 8089 is BLOCKED or UNREACHABLE${NC}"
-      echo -e "  ${DIM}nc output:${NC}"
-      echo "$nc_result" | sed 's/^/    /'
-      echo ""
-      echo -e "  ${YELLOW}This usually means:${NC}"
-      echo -e "  ${DIM}  • Corporate firewall blocking outbound port 8089${NC}"
-      echo -e "  ${DIM}  • VPN blocking non-standard ports${NC}"
-      echo -e "  ${DIM}  • Network security policy${NC}"
-      echo ""
-    fi
   else
-    echo -e "  ${DIM}(nc not available, skipping TCP test)${NC}"
+    # =========================================================================
+    # STEP 1: DNS Resolution Test
+    # =========================================================================
+    echo -e "${YELLOW}[STEP 1/3] Testing DNS Resolution...${NC}"
+    local dns_result
+    dns_result=$(nslookup "$hostname" 2>&1) || dns_result=$(host "$hostname" 2>&1) || dns_result=$(dig +short "$hostname" 2>&1)
+    local dns_ip=$(echo "$dns_result" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+
+    if [ -n "$dns_ip" ]; then
+      echo -e "  ${GREEN}✓ DNS resolved: ${hostname} → ${dns_ip}${NC}"
+    else
+      echo -e "  ${RED}✗ DNS FAILED: Cannot resolve ${hostname}${NC}"
+      echo -e "  ${DIM}DNS output:${NC}"
+      echo "$dns_result" | sed 's/^/    /'
+      echo ""
+      error "DNS resolution failed for $hostname"
+      return 1
+    fi
+    echo ""
+
+    # =========================================================================
+    # STEP 2: TCP Port Connectivity Test
+    # =========================================================================
+    echo -e "${YELLOW}[STEP 2/3] Testing TCP Connection to Port 8089...${NC}"
+    local nc_result
+    if command -v nc &> /dev/null; then
+      nc_result=$(nc -zv -w 10 "$hostname" 8089 2>&1)
+      local nc_exit=$?
+      if [ $nc_exit -eq 0 ]; then
+        echo -e "  ${GREEN}✓ TCP port 8089 is OPEN${NC}"
+      else
+        echo -e "  ${RED}✗ TCP port 8089 is BLOCKED or UNREACHABLE${NC}"
+        echo -e "  ${DIM}nc output:${NC}"
+        echo "$nc_result" | sed 's/^/    /'
+        echo ""
+        echo -e "  ${YELLOW}This usually means:${NC}"
+        echo -e "  ${DIM}  • Corporate firewall blocking outbound port 8089${NC}"
+        echo -e "  ${DIM}  • VPN blocking non-standard ports${NC}"
+        echo -e "  ${DIM}  • Network security policy${NC}"
+        echo ""
+      fi
+    else
+      echo -e "  ${DIM}(nc not available, skipping TCP test)${NC}"
+    fi
+    echo ""
   fi
-  echo ""
 
   # =========================================================================
-  # STEP 3: Full HTTPS Connection with Verbose Curl
+  # HTTPS Connection Test (via proxy if configured)
   # =========================================================================
   echo -e "${YELLOW}[STEP 3/3] Testing HTTPS Connection (verbose)...${NC}"
-  echo -e "${DIM}Running: curl -v -k --connect-timeout 15 --max-time 60 \"$test_url\"${NC}"
+  if [ -n "$PROXY_URL" ]; then
+    echo -e "${DIM}Running: curl -v -k --connect-timeout 15 --max-time 60 -x \"$PROXY_URL\" \"$test_url\"${NC}"
+  else
+    echo -e "${DIM}Running: curl -v -k --connect-timeout 15 --max-time 60 \"$test_url\"${NC}"
+  fi
   echo ""
   echo -e "${CYAN}┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
   echo -e "${CYAN}│ CURL VERBOSE OUTPUT                                                         │${NC}"
