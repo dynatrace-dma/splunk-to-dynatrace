@@ -229,11 +229,15 @@ CONNECT_TIMEOUT=${CONNECT_TIMEOUT:-30}     # Initial connection timeout
 API_TIMEOUT=${API_TIMEOUT:-120}            # Per-request timeout (2 min - handles large result sets)
 
 # Total runtime limit - prevents runaway scripts
-MAX_TOTAL_TIME=${MAX_TOTAL_TIME:-14400}    # Maximum total script runtime (4 hours for 5000+ assets)
+MAX_TOTAL_TIME=${MAX_TOTAL_TIME:-43200}    # Maximum total script runtime (12 hours for very large environments)
 
 # Proxy settings
 PROXY_URL=""                               # Optional proxy server (e.g., http://proxy.company.com:8080)
 CURL_PROXY_ARGS=""                         # Built at runtime from PROXY_URL
+
+# Resume settings
+RESUME_ARCHIVE=""                          # Path to previous archive for --resume-collect
+RESUME_MODE=false                          # Set to true when resuming from previous export
 
 # Retry settings
 MAX_RETRIES=${MAX_RETRIES:-3}              # Number of retry attempts for failed requests
@@ -5387,6 +5391,138 @@ show_completion() {
 }
 
 # =============================================================================
+# RESUME SUPPORT (v4.2.6)
+# =============================================================================
+
+resume_from_archive() {
+  local archive="$1"
+
+  if [ ! -f "$archive" ]; then
+    error "Resume archive not found: $archive"
+    exit 1
+  fi
+
+  progress "Extracting previous export archive for resume..."
+
+  # Extract and find the directory name inside the archive
+  local dir_name
+  dir_name=$(tar -tzf "$archive" 2>/dev/null | head -1 | cut -d'/' -f1)
+
+  if [ -z "$dir_name" ]; then
+    error "Could not determine export directory from archive"
+    exit 1
+  fi
+
+  # Check if directory already exists (don't overwrite)
+  if [ -d "./$dir_name" ]; then
+    warning "Directory $dir_name already exists - using existing directory"
+  else
+    # Extract the archive
+    tar -xzf "$archive"
+
+    if [ ! -d "./$dir_name" ]; then
+      error "Failed to extract archive - directory $dir_name not found"
+      exit 1
+    fi
+  fi
+
+  # Set globals to match the extracted export
+  EXPORT_NAME="$dir_name"
+  EXPORT_DIR="./$dir_name"
+  LOG_FILE="${EXPORT_DIR}/_export.log"
+
+  # Re-initialize debug log path if debug mode
+  if [ "$DEBUG_MODE" = "true" ]; then
+    DEBUG_LOG_FILE="${EXPORT_DIR}/_export_debug.log"
+  fi
+
+  log "=== RESUME MODE ==="
+  log "Resumed from archive: $archive"
+  log "Export directory: $EXPORT_DIR"
+
+  success "Extracted previous export: $dir_name"
+}
+
+has_collected_data() {
+  local check_type="$1"
+
+  case "$check_type" in
+    system_info)
+      [ -f "$EXPORT_DIR/dynabridge_analytics/system_info/server_info.json" ] && \
+      [ -s "$EXPORT_DIR/dynabridge_analytics/system_info/server_info.json" ]
+      ;;
+    configurations)
+      [ -d "$EXPORT_DIR/_configs" ] && \
+      [ "$(find "$EXPORT_DIR/_configs" -name "*.json" -type f 2>/dev/null | head -1)" != "" ]
+      ;;
+    dashboards)
+      local has_dashboards=false
+      for app in "${SELECTED_APPS[@]}"; do
+        if [ -d "$EXPORT_DIR/$app/dashboards" ]; then
+          local count
+          count=$(find "$EXPORT_DIR/$app/dashboards" -name "*.json" -type f 2>/dev/null | wc -l)
+          if [ "$count" -gt 0 ]; then
+            has_dashboards=true
+            break
+          fi
+        fi
+      done
+      [ "$has_dashboards" = "true" ]
+      ;;
+    alerts)
+      local has_alerts=false
+      for app in "${SELECTED_APPS[@]}"; do
+        if [ -f "$EXPORT_DIR/$app/savedsearches.json" ] && [ -s "$EXPORT_DIR/$app/savedsearches.json" ]; then
+          has_alerts=true
+          break
+        fi
+      done
+      [ "$has_alerts" = "true" ]
+      ;;
+    rbac)
+      [ -f "$EXPORT_DIR/dynabridge_analytics/rbac/users.json" ] && \
+      [ -s "$EXPORT_DIR/dynabridge_analytics/rbac/users.json" ]
+      ;;
+    knowledge_objects)
+      local has_ko=false
+      for app in "${SELECTED_APPS[@]}"; do
+        if [ -d "$EXPORT_DIR/$app" ]; then
+          local count
+          count=$(find "$EXPORT_DIR/$app" -name "*.json" -not -path "*/dashboards/*" -not -name "savedsearches.json" -not -path "*/splunk-analysis/*" -type f 2>/dev/null | wc -l)
+          if [ "$count" -gt 0 ]; then
+            has_ko=true
+            break
+          fi
+        fi
+      done
+      [ "$has_ko" = "true" ]
+      ;;
+    app_analytics)
+      local has_analytics=false
+      for app in "${SELECTED_APPS[@]}"; do
+        if [ -d "$EXPORT_DIR/$app/splunk-analysis" ]; then
+          local count
+          count=$(find "$EXPORT_DIR/$app/splunk-analysis" -name "*.json" -type f 2>/dev/null | wc -l)
+          if [ "$count" -gt 0 ]; then
+            has_analytics=true
+            break
+          fi
+        fi
+      done
+      [ "$has_analytics" = "true" ]
+      ;;
+    usage_analytics)
+      [ -d "$EXPORT_DIR/dynabridge_analytics/usage_analytics" ] && \
+      [ "$(find "$EXPORT_DIR/dynabridge_analytics/usage_analytics" -name "*.json" -type f 2>/dev/null | head -1)" != "" ]
+      ;;
+    indexes)
+      [ -f "$EXPORT_DIR/dynabridge_analytics/indexes/indexes.json" ] && \
+      [ -s "$EXPORT_DIR/dynabridge_analytics/indexes/indexes.json" ]
+      ;;
+  esac
+}
+
+# =============================================================================
 # MAIN EXECUTION
 # =============================================================================
 
@@ -5394,65 +5530,135 @@ run_collection() {
   print_box_header "STEP 6: DATA COLLECTION"
 
   echo ""
+
+  if [ "$RESUME_MODE" = "true" ]; then
+    info "RESUME MODE - skipping previously collected data"
+    echo ""
+  fi
+
   info "Starting data collection..."
   echo ""
 
-  setup_export_directory
+  # In resume mode, use existing directory; otherwise create new one
+  if [ "$RESUME_MODE" != "true" ]; then
+    setup_export_directory
+  fi
 
   local total_steps=8
   local current_step=0
+  local skipped=0
+  local collected=0
 
   # System info
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting server information..."
-  collect_system_info
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "system_info"; then
+    echo -e "  [${current_step}/${total_steps}] Server information... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting server information..."
+    collect_system_info
+    ((collected++))
+  fi
 
   # Configurations
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting configurations..."
-  collect_configurations
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "configurations"; then
+    echo -e "  [${current_step}/${total_steps}] Configurations... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting configurations..."
+    collect_configurations
+    ((collected++))
+  fi
 
   # Dashboards
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting dashboards..."
-  collect_dashboards
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "dashboards"; then
+    echo -e "  [${current_step}/${total_steps}] Dashboards... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting dashboards..."
+    collect_dashboards
+    ((collected++))
+  fi
 
   # Alerts
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting alerts and saved searches..."
-  collect_alerts
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "alerts"; then
+    echo -e "  [${current_step}/${total_steps}] Alerts and saved searches... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting alerts and saved searches..."
+    collect_alerts
+    ((collected++))
+  fi
 
   # RBAC
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting users and roles..."
-  collect_rbac
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "rbac"; then
+    echo -e "  [${current_step}/${total_steps}] Users and roles... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting users and roles..."
+    collect_rbac
+    ((collected++))
+  fi
 
   # Knowledge objects
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting knowledge objects..."
-  collect_knowledge_objects
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "knowledge_objects"; then
+    echo -e "  [${current_step}/${total_steps}] Knowledge objects... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting knowledge objects..."
+    collect_knowledge_objects
+    ((collected++))
+  fi
 
   # App-scoped analytics (per-app usage data)
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting app-scoped analytics..."
-  if [ "$COLLECT_USAGE" = "true" ]; then
-    for app in "${SELECTED_APPS[@]}"; do
-      if [ -d "$EXPORT_DIR/$app" ]; then
-        collect_app_analytics "$app"
-      fi
-    done
-    success "App-scoped analytics collected (see each app's splunk-analysis/ folder)"
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "app_analytics"; then
+    echo -e "  [${current_step}/${total_steps}] App-scoped analytics... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting app-scoped analytics..."
+    if [ "$COLLECT_USAGE" = "true" ]; then
+      for app in "${SELECTED_APPS[@]}"; do
+        if [ -d "$EXPORT_DIR/$app" ]; then
+          collect_app_analytics "$app"
+        fi
+      done
+      success "App-scoped analytics collected (see each app's splunk-analysis/ folder)"
+    fi
+    ((collected++))
   fi
 
   # Global/infrastructure usage analytics
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Running global usage analytics..."
-  collect_usage_analytics
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "usage_analytics"; then
+    echo -e "  [${current_step}/${total_steps}] Global usage analytics... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Running global usage analytics..."
+    collect_usage_analytics
+    ((collected++))
+  fi
 
   # Indexes
   ((current_step++))
-  echo -e "  [${current_step}/${total_steps}] Collecting index information..."
-  collect_indexes
+  if [ "$RESUME_MODE" = "true" ] && has_collected_data "indexes"; then
+    echo -e "  [${current_step}/${total_steps}] Index information... ${GREEN}SKIP (already collected)${NC}"
+    ((skipped++))
+  else
+    echo -e "  [${current_step}/${total_steps}] Collecting index information..."
+    collect_indexes
+    ((collected++))
+  fi
+
+  if [ "$RESUME_MODE" = "true" ]; then
+    echo ""
+    info "Resume summary: $collected collected, $skipped skipped (already had data)"
+  fi
 
   echo ""
 
@@ -5565,6 +5771,15 @@ main() {
         PROXY_URL="$2"
         shift 2
         ;;
+      --resume-collect)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --resume-collect requires a path to a .tar.gz archive" >&2
+          exit 1
+        fi
+        RESUME_ARCHIVE="$2"
+        RESUME_MODE=true
+        shift 2
+        ;;
       --debug|-d)
         # Enable verbose debug logging for troubleshooting
         DEBUG_MODE=true
@@ -5586,6 +5801,7 @@ main() {
         echo "  --skip-internal   Skip searches requiring _internal index (use if restricted)"
         echo "  --scoped          Scope all collections to selected apps only"
         echo "  --proxy URL       Route all connections through a proxy server (e.g., http://proxy:8080)"
+        echo "  --resume-collect FILE  Resume a previous interrupted export from a .tar.gz archive"
         echo "  -d, --debug       Enable verbose debug logging (writes to export_debug.log)"
         echo "  --help            Show this help"
         echo ""
@@ -5602,6 +5818,14 @@ main() {
         ;;
     esac
   done
+
+  # =========================================================================
+  # HANDLE RESUME MODE
+  # Extract previous archive early so EXPORT_DIR is set before collection
+  # =========================================================================
+  if [ "$RESUME_MODE" = "true" ]; then
+    resume_from_archive "$RESUME_ARCHIVE"
+  fi
 
   # =========================================================================
   # DETERMINE INTERACTIVE VS NON-INTERACTIVE MODE
@@ -5817,6 +6041,18 @@ except:
     generate_troubleshooting_report
   fi
 
+  # v4.2.6: Versioned archive naming for resumed exports
+  # Avoid overwriting the original archive when resuming
+  if [ "$RESUME_MODE" = "true" ]; then
+    local version=2
+    while [ -f "${EXPORT_NAME}-v${version}.tar.gz" ] || [ -f "${EXPORT_NAME}-v${version}_masked.tar.gz" ]; do
+      ((version++))
+    done
+    local original_export_name="$EXPORT_NAME"
+    EXPORT_NAME="${original_export_name}-v${version}"
+    info "Resume archive will be named: ${EXPORT_NAME}.tar.gz"
+  fi
+
   # v4.2.5: Two-archive approach for anonymization
   # Always create original archive first (untouched), then create masked copy if needed
   if [ "$ANONYMIZE_DATA" = "true" ]; then
@@ -5828,6 +6064,11 @@ except:
   else
     # No anonymization - just create single archive
     create_archive
+  fi
+
+  # Restore original EXPORT_NAME if it was modified for versioning
+  if [ "$RESUME_MODE" = "true" ]; then
+    EXPORT_NAME="$original_export_name"
   fi
 
   # Show export timing statistics (v4.0.0)
