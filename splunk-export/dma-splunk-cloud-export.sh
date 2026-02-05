@@ -4205,6 +4205,9 @@ generate_manifest() {
 
   local manifest_file="$EXPORT_DIR/dma_analytics/manifest.json"
 
+  # Ensure dma_analytics directory exists
+  mkdir -p "$EXPORT_DIR/dma_analytics"
+
   # Calculate export duration
   local export_duration=$(($(date +%s) - EXPORT_START_TIME))
 
@@ -4212,7 +4215,12 @@ generate_manifest() {
   local saved_search_count=0
   for app in "${SELECTED_APPS[@]}"; do
     if [ -f "$EXPORT_DIR/$app/savedsearches.json" ]; then
-      local count=$(jq -r '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+      local count
+      if $HAS_JQ; then
+        count=$(jq -r '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+      else
+        count=$(json_length "$EXPORT_DIR/$app/savedsearches.json" ".entry")
+      fi
       saved_search_count=$((saved_search_count + count))
     fi
   done
@@ -4235,257 +4243,221 @@ generate_manifest() {
   local total_files=$(find "$EXPORT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
   local total_size=$(du -sb "$EXPORT_DIR" 2>/dev/null | cut -f1 || echo "0")
 
-  # Build apps array with v2 structure (counts from app-scoped folders)
-  local apps_json="[]"
-  for app in "${SELECTED_APPS[@]}"; do
-    local app_classic=0
-    local app_studio=0
-    local app_alerts=0
-    local app_saved=0
+  # Build apps array and usage intelligence using Python (works with or without jq)
+  # This single Python script handles all the complex JSON operations that previously required jq
+  local apps_json
+  local usage_intel_json
+  local manifest_data
+  manifest_data=$($PYTHON_CMD -c "
+import json, os, sys, re
+
+export_dir = sys.argv[1]
+apps_list = sys.argv[2].split(',') if sys.argv[2] else []
+
+# ---- Build apps array ----
+apps = []
+for app in apps_list:
+    app = app.strip()
+    if not app:
+        continue
+    app_classic = 0
+    app_studio = 0
+    app_alerts = 0
+    app_saved = 0
 
     # Count dashboards from v2 app-scoped folders
-    if [ -d "$EXPORT_DIR/$app/dashboards/classic" ]; then
-      app_classic=$(find "$EXPORT_DIR/$app/dashboards/classic" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
-    fi
-    if [ -d "$EXPORT_DIR/$app/dashboards/studio" ]; then
-      app_studio=$(find "$EXPORT_DIR/$app/dashboards/studio" -name "*.json" ! -name "*_definition.json" 2>/dev/null | wc -l | tr -d ' ')
-    fi
-    local app_dashboards=$((app_classic + app_studio))
+    classic_dir = os.path.join(export_dir, app, 'dashboards', 'classic')
+    if os.path.isdir(classic_dir):
+        app_classic = len([f for f in os.listdir(classic_dir) if f.endswith('.json')])
 
-    if [ -f "$EXPORT_DIR/$app/savedsearches.json" ]; then
-      # Count alerts using SAME LOGIC as TypeScript parser (SINGLE SOURCE OF TRUTH v4.2.1)
-      # Only count as alert if ENABLED alert indicators present:
-      # - alert.track = "1" or "true" (NOT "0" or "false")
-      # - alert_type = "always", "custom", or "number of ..." (NOT empty or other values)
-      # - alert_condition has a value
-      # - alert_comparator or alert_threshold has a value
-      # - counttype contains "number of"
-      # - actions has non-empty comma-separated values
-      # - action.* = "1" or "true" (NOT "0" or "false" or false)
-      app_alerts=$(jq -r '[.entry[] | select(
-        ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
-        ((.content["alert_condition"] // "") | length > 0) or
-        ((.content["alert_comparator"] // "") | length > 0) or
-        ((.content["alert_threshold"] // "") | length > 0) or
-        ((.content["counttype"] // "") | test("number of"; "i")) or
-        ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
-        ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
-        ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
-      )] | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
-      app_saved=$(jq -r '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
-    fi
+    studio_dir = os.path.join(export_dir, app, 'dashboards', 'studio')
+    if os.path.isdir(studio_dir):
+        app_studio = len([f for f in os.listdir(studio_dir) if f.endswith('.json') and not f.endswith('_definition.json')])
 
-    local app_entry=$(jq -n \
-      --arg name "$app" \
-      --argjson dashboards "$app_dashboards" \
-      --argjson dashboards_classic "$app_classic" \
-      --argjson dashboards_studio "$app_studio" \
-      --argjson alerts "$app_alerts" \
-      --argjson saved "$app_saved" \
-      '{
-        name: $name,
-        dashboards: $dashboards,
-        dashboards_classic: $dashboards_classic,
-        dashboards_studio: $dashboards_studio,
-        alerts: $alerts,
-        saved_searches: $saved
-      }')
+    app_dashboards = app_classic + app_studio
 
-    apps_json=$(echo "$apps_json" | jq ". += [$app_entry]")
-  done
+    ss_file = os.path.join(export_dir, app, 'savedsearches.json')
+    if os.path.isfile(ss_file):
+        try:
+            with open(ss_file, 'r') as f:
+                ss_data = json.load(f)
+            entries = ss_data.get('entry', [])
+            app_saved = len(entries)
 
-  # Build usage intelligence summary for programmatic access
-  local usage_intel_json="{}"
-  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
-    progress "Extracting usage intelligence for manifest..."
+            # Count alerts using SAME LOGIC as TypeScript parser (SINGLE SOURCE OF TRUTH v4.2.1)
+            alert_count = 0
+            for entry in entries:
+                c = entry.get('content', {})
+                is_alert = False
 
-    # Top 10 most viewed dashboards
-    local top_dashboards="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_top100.json" ]; then
-      top_dashboards=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_top100.json" 2>/dev/null || echo "[]")
-    fi
+                track = str(c.get('alert.track', ''))
+                if track in ('1', 'true'):
+                    is_alert = True
 
-    # Top 10 most active users
-    local top_users="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" ]; then
-      top_users=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" 2>/dev/null || echo "[]")
-    fi
+                atype = str(c.get('alert_type', '')).lower()
+                if atype in ('always', 'custom') or atype.startswith('number of'):
+                    is_alert = True
 
-    # Top 10 most fired alerts
-    local top_alerts="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_most_fired.json" ]; then
-      top_alerts=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_most_fired.json" 2>/dev/null || echo "[]")
-    fi
+                if c.get('alert_condition', ''):
+                    is_alert = True
+                if c.get('alert_comparator', ''):
+                    is_alert = True
+                if c.get('alert_threshold', ''):
+                    is_alert = True
 
-    # Never viewed dashboards count
-    local never_viewed_count=0
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json" ]; then
-      never_viewed_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json" 2>/dev/null || echo "0")
-    fi
+                ctype = str(c.get('counttype', ''))
+                if 'number of' in ctype.lower():
+                    is_alert = True
 
-    # Never fired alerts count
-    local never_fired_count=0
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_never_fired.json" ]; then
-      never_fired_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_never_fired.json" 2>/dev/null || echo "0")
-    fi
+                actions = str(c.get('actions', ''))
+                if any(a.strip() for a in actions.split(',')):
+                    is_alert = True
 
-    # Inactive users count
-    local inactive_users_count=0
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" ]; then
-      inactive_users_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" 2>/dev/null || echo "0")
-    fi
+                for action_key in ('action.email', 'action.webhook', 'action.script',
+                                   'action.slack', 'action.pagerduty',
+                                   'action.summary_index', 'action.populate_lookup'):
+                    val = str(c.get(action_key, ''))
+                    if val in ('1', 'true'):
+                        is_alert = True
 
-    # Failed alerts count
-    local failed_alerts_count=0
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_failed.json" ]; then
-      failed_alerts_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_failed.json" 2>/dev/null || echo "0")
-    fi
+                if is_alert:
+                    alert_count += 1
 
-    # Top searched sourcetypes
-    local top_sourcetypes="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" ]; then
-      top_sourcetypes=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" 2>/dev/null || echo "[]")
-    fi
+            app_alerts = alert_count
+        except Exception:
+            pass
 
-    # Top searched indexes
-    local top_indexes="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_searched.json" ]; then
-      top_indexes=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_searched.json" 2>/dev/null || echo "[]")
-    fi
+    apps.append({
+        'name': app,
+        'dashboards': app_dashboards,
+        'dashboards_classic': app_classic,
+        'dashboards_studio': app_studio,
+        'alerts': app_alerts,
+        'saved_searches': app_saved
+    })
 
-    # Volume summary
-    local avg_daily_gb="0"
-    local peak_daily_gb="0"
-    local total_30d_gb="0"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" ]; then
-      avg_daily_gb=$(jq -r '.results[0].avg_daily_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
-      peak_daily_gb=$(jq -r '.results[0].peak_daily_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
-      total_30d_gb=$(jq -r '.results[0].total_30d_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
-    fi
+# ---- Build usage intelligence ----
+usage_intel = {}
+usage_dir = os.path.join(export_dir, 'dma_analytics', 'usage_analytics')
+if os.path.isdir(usage_dir):
+    def read_json(path):
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
-    # Top 10 indexes by volume
-    local top_indexes_by_volume="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" ]; then
-      top_indexes_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" 2>/dev/null || echo "[]")
-    fi
+    def get_results_slice(path, n=10):
+        data = read_json(path)
+        return data.get('results', [])[:n] if data else []
 
-    # Top 10 sourcetypes by volume
-    local top_sourcetypes_by_volume="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" ]; then
-      top_sourcetypes_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" 2>/dev/null || echo "[]")
-    fi
+    def get_results_len(path):
+        data = read_json(path)
+        results = data.get('results', [])
+        return len(results) if isinstance(results, list) else 0
 
-    # Top 10 hosts by volume
-    local top_hosts_by_volume="[]"
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" ]; then
-      top_hosts_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" 2>/dev/null || echo "[]")
-    fi
+    def get_result_field(path, field, default='0'):
+        data = read_json(path)
+        results = data.get('results', [])
+        if results and isinstance(results, list) and len(results) > 0:
+            return results[0].get(field, default)
+        return default
 
-    # Ingestion infrastructure data
-    local total_forwarding_hosts="0"
-    local ingestion_daily_gb="0"
-    local hec_enabled="false"
-    local hec_daily_gb="0"
-    local by_connection_type="[]"
-    local by_input_method="[]"
-    local by_sourcetype_category="[]"
+    top_dashboards = get_results_slice(os.path.join(usage_dir, 'dashboard_views_top100.json'))
+    top_users = get_results_slice(os.path.join(usage_dir, 'users_most_active.json'))
+    top_alerts = get_results_slice(os.path.join(usage_dir, 'alerts_most_fired.json'))
+    never_viewed_count = get_results_len(os.path.join(usage_dir, 'dashboards_never_viewed.json'))
+    never_fired_count = get_results_len(os.path.join(usage_dir, 'alerts_never_fired.json'))
+    inactive_users_count = get_results_len(os.path.join(usage_dir, 'users_inactive.json'))
+    failed_alerts_count = get_results_len(os.path.join(usage_dir, 'alerts_failed.json'))
+    top_sourcetypes = get_results_slice(os.path.join(usage_dir, 'sourcetypes_searched.json'))
+    top_indexes = get_results_slice(os.path.join(usage_dir, 'indexes_searched.json'))
 
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" ]; then
-      total_forwarding_hosts=$(jq -r '.results[0].total_forwarding_hosts // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" 2>/dev/null || echo "0")
-      ingestion_daily_gb=$(jq -r '.results[0].daily_avg_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" 2>/dev/null || echo "0")
-    fi
+    avg_daily_gb = get_result_field(os.path.join(usage_dir, 'daily_volume_summary.json'), 'avg_daily_gb', 0)
+    peak_daily_gb = get_result_field(os.path.join(usage_dir, 'daily_volume_summary.json'), 'peak_daily_gb', 0)
+    total_30d_gb = get_result_field(os.path.join(usage_dir, 'daily_volume_summary.json'), 'total_30d_gb', 0)
 
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" ]; then
-      hec_daily_gb=$(jq -r '.results[0].daily_avg_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" 2>/dev/null || echo "0")
-      local hec_token_count=$(jq -r '.results[0].token_count // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" 2>/dev/null || echo "0")
-      if [ "$hec_token_count" != "0" ] && [ -n "$hec_token_count" ]; then
-        hec_enabled="true"
-      fi
-    fi
+    top_indexes_by_volume = get_results_slice(os.path.join(usage_dir, 'top_indexes_by_volume.json'))
+    top_sourcetypes_by_volume = get_results_slice(os.path.join(usage_dir, 'top_sourcetypes_by_volume.json'))
+    top_hosts_by_volume = get_results_slice(os.path.join(usage_dir, 'top_hosts_by_volume.json'))
 
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" ]; then
-      by_connection_type=$(jq -r '.results // []' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" 2>/dev/null || echo "[]")
-    fi
+    # Ingestion infrastructure
+    infra_dir = os.path.join(usage_dir, 'ingestion_infrastructure')
+    total_forwarding_hosts = get_result_field(os.path.join(infra_dir, 'summary.json'), 'total_forwarding_hosts', 0)
+    ingestion_daily_gb = get_result_field(os.path.join(infra_dir, 'summary.json'), 'daily_avg_gb', 0)
+    hec_daily_gb = get_result_field(os.path.join(infra_dir, 'hec_usage.json'), 'daily_avg_gb', 0)
+    hec_token_count = get_result_field(os.path.join(infra_dir, 'hec_usage.json'), 'token_count', 0)
+    hec_enabled = str(hec_token_count) != '0' and hec_token_count is not None
 
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" ]; then
-      by_input_method=$(jq -r '.results // []' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" 2>/dev/null || echo "[]")
-    fi
+    by_connection_type = read_json(os.path.join(infra_dir, 'by_connection_type.json')).get('results', [])
+    by_input_method = read_json(os.path.join(infra_dir, 'by_input_method.json')).get('results', [])
+    by_sourcetype_category = read_json(os.path.join(infra_dir, 'by_sourcetype_category.json')).get('results', [])
 
-    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" ]; then
-      by_sourcetype_category=$(jq -r '.results // []' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" 2>/dev/null || echo "[]")
-    fi
+    # Coerce numeric strings to numbers
+    def to_num(v):
+        try:
+            f = float(v)
+            return int(f) if f == int(f) else f
+        except (ValueError, TypeError):
+            return 0
 
-    # Build usage intelligence JSON
-    usage_intel_json=$(jq -n \
-      --argjson top_dashboards "$top_dashboards" \
-      --argjson top_users "$top_users" \
-      --argjson top_alerts "$top_alerts" \
-      --argjson never_viewed "$never_viewed_count" \
-      --argjson never_fired "$never_fired_count" \
-      --argjson inactive_users "$inactive_users_count" \
-      --argjson failed_alerts "$failed_alerts_count" \
-      --argjson top_sourcetypes "$top_sourcetypes" \
-      --argjson top_indexes "$top_indexes" \
-      --argjson avg_daily_gb "$avg_daily_gb" \
-      --argjson peak_daily_gb "$peak_daily_gb" \
-      --argjson total_30d_gb "$total_30d_gb" \
-      --argjson top_indexes_by_volume "$top_indexes_by_volume" \
-      --argjson top_sourcetypes_by_volume "$top_sourcetypes_by_volume" \
-      --argjson top_hosts_by_volume "$top_hosts_by_volume" \
-      --argjson total_forwarding_hosts "$total_forwarding_hosts" \
-      --argjson ingestion_daily_gb "$ingestion_daily_gb" \
-      --argjson hec_enabled "$hec_enabled" \
-      --argjson hec_daily_gb "$hec_daily_gb" \
-      --argjson by_connection_type "$by_connection_type" \
-      --argjson by_input_method "$by_input_method" \
-      --argjson by_sourcetype_category "$by_sourcetype_category" \
-      '{
-        "summary": {
-          "dashboards_never_viewed": $never_viewed,
-          "alerts_never_fired": $never_fired,
-          "users_inactive_30d": $inactive_users,
-          "alerts_with_failures": $failed_alerts
+    usage_intel = {
+        'summary': {
+            'dashboards_never_viewed': never_viewed_count,
+            'alerts_never_fired': never_fired_count,
+            'users_inactive_30d': inactive_users_count,
+            'alerts_with_failures': failed_alerts_count
         },
-        "volume": {
-          "avg_daily_gb": $avg_daily_gb,
-          "peak_daily_gb": $peak_daily_gb,
-          "total_30d_gb": $total_30d_gb,
-          "top_indexes_by_volume": $top_indexes_by_volume,
-          "top_sourcetypes_by_volume": $top_sourcetypes_by_volume,
-          "top_hosts_by_volume": $top_hosts_by_volume,
-          "note": "See _usage_analytics/daily_volume_*.json for full daily breakdown"
+        'volume': {
+            'avg_daily_gb': to_num(avg_daily_gb),
+            'peak_daily_gb': to_num(peak_daily_gb),
+            'total_30d_gb': to_num(total_30d_gb),
+            'top_indexes_by_volume': top_indexes_by_volume,
+            'top_sourcetypes_by_volume': top_sourcetypes_by_volume,
+            'top_hosts_by_volume': top_hosts_by_volume,
+            'note': 'See _usage_analytics/daily_volume_*.json for full daily breakdown'
         },
-        "ingestion_infrastructure": {
-          "summary": {
-            "total_forwarding_hosts": $total_forwarding_hosts,
-            "daily_ingestion_gb": $ingestion_daily_gb,
-            "hec_enabled": $hec_enabled,
-            "hec_daily_gb": $hec_daily_gb
-          },
-          "by_connection_type": $by_connection_type,
-          "by_input_method": $by_input_method,
-          "by_sourcetype_category": $by_sourcetype_category,
-          "note": "See _usage_analytics/ingestion_infrastructure/ for detailed breakdown"
+        'ingestion_infrastructure': {
+            'summary': {
+                'total_forwarding_hosts': to_num(total_forwarding_hosts),
+                'daily_ingestion_gb': to_num(ingestion_daily_gb),
+                'hec_enabled': hec_enabled,
+                'hec_daily_gb': to_num(hec_daily_gb)
+            },
+            'by_connection_type': by_connection_type,
+            'by_input_method': by_input_method,
+            'by_sourcetype_category': by_sourcetype_category,
+            'note': 'See _usage_analytics/ingestion_infrastructure/ for detailed breakdown'
         },
-        "prioritization": {
-          "top_dashboards": $top_dashboards,
-          "top_users": $top_users,
-          "top_alerts": $top_alerts,
-          "top_sourcetypes": $top_sourcetypes,
-          "top_indexes": $top_indexes
+        'prioritization': {
+            'top_dashboards': top_dashboards,
+            'top_users': top_users,
+            'top_alerts': top_alerts,
+            'top_sourcetypes': top_sourcetypes,
+            'top_indexes': top_indexes
         },
-        "elimination_candidates": {
-          "dashboards_never_viewed_count": $never_viewed,
-          "alerts_never_fired_count": $never_fired,
-          "note": "See _usage_analytics/ for full lists of candidates"
+        'elimination_candidates': {
+            'dashboards_never_viewed_count': never_viewed_count,
+            'alerts_never_fired_count': never_fired_count,
+            'note': 'See _usage_analytics/ for full lists of candidates'
         }
-      }')
+    }
+
+# Output as two-line JSON: apps_json then usage_intel_json
+print(json.dumps(apps))
+print(json.dumps(usage_intel if usage_intel else {}))
+" "$EXPORT_DIR" "$(IFS=,; echo "${SELECTED_APPS[*]}")" 2>/dev/null)
+
+  # Parse the two lines of output
+  apps_json=$(echo "$manifest_data" | head -1)
+  usage_intel_json=$(echo "$manifest_data" | tail -1)
+
+  # Fallback if Python failed
+  if [ -z "$apps_json" ] || [ "$apps_json" = "" ]; then
+    apps_json="[]"
+  fi
+  if [ -z "$usage_intel_json" ] || [ "$usage_intel_json" = "" ]; then
+    usage_intel_json="{}"
   fi
 
   # Generate manifest
