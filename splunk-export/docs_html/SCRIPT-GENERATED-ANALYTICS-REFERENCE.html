@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DynaBridge Script Analytics Reference | DynaBridge for Splunk</title>
+    <title>DMA Script Analytics Reference | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -245,12 +245,12 @@
     <header class="header-banner">
         <div class="header-content">
             <div class="logo-container">
-                <img class="logo-image" src="dynabridge-symbol.png" alt="DynaBridge" onerror="this.style.display='none'" />
-                <div class="logo-text"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+                <img class="logo-image" src="dma-symbol.png" alt="DMA" onerror="this.style.display='none'" />
+                <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
             <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DynaBridge Script Analytics Reference</h2></div>
+            <div class="doc-title"><h2>DMA Script Analytics Reference</h2></div>
         </div>
     </header>
 
@@ -267,25 +267,25 @@
 
     <main class="content">
 <h1>Script-Generated Analytics Reference</h1>
-<h2>DynaBridge Splunk Export - Complete Analytics File Reference</h2>
+<h2>DMA Splunk Export - Complete Analytics File Reference</h2>
 <p>
 <strong>Applies To</strong>: Splunk Enterprise & Splunk Cloud Export Scripts
 <strong>Version</strong>: 4.2.4 (Enterprise) / 4.3.0 (Cloud Bash & PowerShell)
 <strong>Last Updated</strong>: February 2026
 </p>
-<blockquote><p><strong>Note</strong>: The PowerShell Cloud script (<code>dynabridge-splunk-cloud-export.ps1</code>) generates the same analytics files as the Bash Cloud script (<code>dynabridge-splunk-cloud-export.sh</code>).</p></blockquote>
+<blockquote><p><strong>Note</strong>: The PowerShell Cloud script (<code>dma-splunk-cloud-export.ps1</code>) generates the same analytics files as the Bash Cloud script (<code>dma-splunk-cloud-export.sh</code>).</p></blockquote>
 <h3>Important: v4.2.4 Default Behavior Change</h3>
 <p>
 <strong>RBAC/Users and Usage Analytics are now OFF by default</strong> for faster exports. To collect these analytics files, you must explicitly enable them:
 </p>
 <pre><code class="language-bash"># Enable RBAC/user collection
-./dynabridge-splunk-export.sh --rbac ...
+./dma-splunk-export.sh --rbac ...
 
 # Enable usage analytics collection
-./dynabridge-splunk-export.sh --usage ...
+./dma-splunk-export.sh --usage ...
 
 # Enable both
-./dynabridge-splunk-export.sh --rbac --usage ...</code></pre>
+./dma-splunk-export.sh --rbac --usage ...</code></pre>
 <p>
 Without these flags, the following file categories will be empty or skipped:
 </p>
@@ -296,12 +296,12 @@ Without these flags, the following file categories will be empty or skipped:
 <hr>
 <h2>Executive Summary</h2>
 <p>
-The DynaBridge Splunk Export Scripts generate <strong>migration intelligence files</strong> by running SPL queries against Splunk's internal indexes (<code><em>audit</code>, <code></em>internal</code>). These files provide insights that <strong>do not exist natively in Splunk</strong> and are specifically designed to support data-driven migration decisions.
+The DMA Splunk Export Scripts generate <strong>migration intelligence files</strong> by running SPL queries against Splunk's internal indexes (<code><em>audit</code>, <code></em>internal</code>). These files provide insights that <strong>do not exist natively in Splunk</strong> and are specifically designed to support data-driven migration decisions.
 </p>
 <h3>Key Value Proposition</h3>
 <table>
 <thead>
-<tr><th>What Splunk Provides</th><th>What DynaBridge Generates</th></tr>
+<tr><th>What Splunk Provides</th><th>What DMA Generates</th></tr>
 </thead>
 <tbody>
 <tr><td>Raw configurations</td><td><strong>Migration prioritization scores</strong></td></tr>
@@ -322,7 +322,7 @@ Both the <strong>Enterprise</strong> and <strong>Cloud</strong> export scripts g
 <tr><th>Aspect</th><th>Enterprise Script</th><th>Cloud Script</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Script File</strong></td><td><code>dynabridge-splunk-export.sh</code></td><td><code>dynabridge-splunk-cloud-export.sh</code></td></tr>
+<tr><td><strong>Script File</strong></td><td><code>dma-splunk-export.sh</code></td><td><code>dma-splunk-cloud-export.sh</code></td></tr>
 <tr><td><strong>Access Method</strong></td><td>File system + REST API</td><td>REST API only</td></tr>
 <tr><td><strong>Run Location</strong></td><td>On the Splunk server</td><td>Any machine with network access</td></tr>
 <tr><td><strong>Authentication</strong></td><td>Username/password</td><td>API Token (recommended) or username/password</td></tr>
@@ -363,7 +363,7 @@ If analytics files fail in Splunk Cloud:
 </ol>
 <h3>File Status Indicators</h3>
 <p>
-When parsing export archives, DynaBridge handles missing analytics gracefully:
+When parsing export archives, DMA handles missing analytics gracefully:
 </p>
 <pre><code class="language-json">{
   &quot;analytics_status&quot;: {
@@ -441,7 +441,7 @@ Lists the top 100 most-viewed dashboards in the Splunk environment over the anal
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Prioritization</strong>: Dashboards with high view counts should be migrated first</li>
@@ -466,7 +466,7 @@ Lists the top 100 most-viewed dashboards in the Splunk environment over the anal
 Daily view trends for the top 20 dashboards over the analysis period. Shows usage patterns over time.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Trend Analysis</strong>: Identify dashboards with growing vs. declining usage</li>
@@ -504,7 +504,7 @@ Lists all dashboards that have <strong>zero views</strong> during the analysis p
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Cost Reduction</strong>: Avoid migrating unused dashboards (saves conversion effort)</li>
@@ -543,7 +543,7 @@ Complete mapping of every dashboard to its owner, app, and sharing level.
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>User-Centric Migration</strong>: Show users only their own dashboards during migration</li>
@@ -572,7 +572,7 @@ Complete mapping of every dashboard to its owner, app, and sharing level.
 Top 50 most active users ranked by search count. Shows total searches, variety of searches, and last activity time.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Stakeholder Engagement</strong>: Identify power users who should be consulted during migration</li>
@@ -596,7 +596,7 @@ Top 50 most active users ranked by search count. Shows total searches, variety o
 Users with no search activity in the last 30 days.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Scope Reduction</strong>: Don't migrate personal content for inactive users</li>
@@ -618,7 +618,7 @@ Users with no search activity in the last 30 days.
 Daily count of unique active users over the analysis period.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Adoption Baseline</strong>: Establish pre-migration user engagement metrics</li>
@@ -641,7 +641,7 @@ Daily count of unique active users over the analysis period.
 Search activity broken down by Splunk role.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Role-Based Migration</strong>: Prioritize migration for high-activity roles</li>
@@ -685,7 +685,7 @@ Top 100 most frequently executed alerts with execution count, average runtime, a
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Critical Alert Identification</strong>: High-fire alerts are operationally critical</li>
@@ -710,7 +710,7 @@ Top 100 most frequently executed alerts with execution count, average runtime, a
 Alerts that have triggered actions (email, webhook, PagerDuty, etc.) ranked by action count.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Action Mapping</strong>: Identify Splunk alert actions to map to Dynatrace workflows</li>
@@ -735,7 +735,7 @@ Alerts that have triggered actions (email, webhook, PagerDuty, etc.) ranked by a
 Alerts with execution failures or skips, including failure reasons.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Fix Before Migrate</strong>: Address broken alerts before converting to Dynatrace</li>
@@ -760,7 +760,7 @@ Alerts with execution failures or skips, including failure reasons.
 Alerts that exist but have never executed during the analysis period.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Elimination Candidates</strong>: Why migrate alerts that never fire?</li>
@@ -782,7 +782,7 @@ Alerts that exist but have never executed during the analysis period.
 Daily firing trends for the top 20 alerts over the analysis period.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Trend Analysis</strong>: Identify alerts with increasing/decreasing activity</li>
@@ -805,7 +805,7 @@ Daily firing trends for the top 20 alerts over the analysis period.
 Complete mapping of every saved search/alert to its owner, app, and scheduling status.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Ownership Tracking</strong>: Know who to contact for alert requirements</li>
@@ -841,7 +841,7 @@ Most frequently used SPL commands across all searches.
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>DQL Mapping Priority</strong>: Focus SPL→DQL conversion on most-used commands</li>
@@ -864,7 +864,7 @@ Most frequently used SPL commands across all searches.
 Search activity broken down by type (ad-hoc, scheduled, dashboard, etc.).
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Usage Pattern Understanding</strong>: Know the mix of interactive vs. scheduled queries</li>
@@ -890,7 +890,7 @@ Search activity broken down by type (ad-hoc, scheduled, dashboard, etc.).
 Searches with runtime greater than 60 seconds, ranked by average runtime.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Performance Optimization</strong>: Identify queries that need optimization before/during migration</li>
@@ -915,7 +915,7 @@ Searches with runtime greater than 60 seconds, ranked by average runtime.
 Most frequently searched indexes extracted from query patterns.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Data Ingestion Priority</strong>: Ensure frequently searched indexes are available in Grail</li>
@@ -941,7 +941,7 @@ Most frequently searched indexes extracted from query patterns.
 Most frequently searched sourcetypes extracted from query patterns.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>OpenPipeline Priority</strong>: Create OpenPipeline processors for most-searched sourcetypes</li>
@@ -965,7 +965,7 @@ Most frequently searched sourcetypes extracted from query patterns.
 All indexes that appear in search queries, ranked by query frequency.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Active Index Identification</strong>: Distinguish actively-queried indexes from dormant ones</li>
@@ -988,7 +988,7 @@ All indexes that appear in search queries, ranked by query frequency.
 Storage size and event count for each index.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Grail Capacity Planning</strong>: Size Dynatrace buckets based on Splunk index sizes</li>
@@ -1008,7 +1008,7 @@ Storage size and event count for each index.
 Complete metadata for all saved searches from Splunk REST API.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Comprehensive Inventory</strong>: Full saved search catalog for migration planning</li>
@@ -1036,7 +1036,7 @@ Complete metadata for all saved searches from Splunk REST API.
 Daily ingestion volume (GB) per index over the last 30 days.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Grail Bucket Sizing</strong>: Size each bucket based on actual daily volume</li>
@@ -1060,7 +1060,7 @@ Daily ingestion volume (GB) per index over the last 30 days.
 Daily ingestion volume (GB) per sourcetype over the last 30 days.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>OpenPipeline Sizing</strong>: Size processing capacity by sourcetype volume</li>
@@ -1096,7 +1096,7 @@ Summary statistics: average daily volume, peak daily volume, and 30-day total.
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>License Planning</strong>: Estimate Dynatrace DPS/DDU requirements</li>
@@ -1119,7 +1119,7 @@ Summary statistics: average daily volume, peak daily volume, and 30-day total.
 Daily event count per index over the last 30 days.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Event Rate Planning</strong>: Understand events per second (EPS) by index</li>
@@ -1144,7 +1144,7 @@ Daily event count per index over the last 30 days.
 Hourly ingestion pattern showing which hours have highest volume.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Peak Hour Identification</strong>: Know when peak ingestion occurs</li>
@@ -1169,7 +1169,7 @@ Hourly ingestion pattern showing which hours have highest volume.
 Top 20 indexes ranked by daily average volume.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>80/20 Analysis</strong>: Typically 20% of indexes contain 80% of volume</li>
@@ -1194,7 +1194,7 @@ Top 20 indexes ranked by daily average volume.
 Top 20 sourcetypes ranked by daily average volume.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>OpenPipeline Priority</strong>: Build processors for highest-volume sourcetypes first</li>
@@ -1219,7 +1219,7 @@ Top 20 sourcetypes ranked by daily average volume.
 Top 50 hosts ranked by daily average volume sent.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>OneAgent Deployment</strong>: Prioritize OneAgent installation on high-volume hosts</li>
@@ -1246,7 +1246,7 @@ Top 50 hosts ranked by daily average volume sent.
 Data ingestion broken down by connection type (cooked from UF, raw from HF, etc.).
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Forwarder Inventory</strong>: Understand ratio of Universal vs. Heavy Forwarders</li>
@@ -1271,7 +1271,7 @@ Data ingestion broken down by connection type (cooked from UF, raw from HF, etc.
 Data ingestion broken down by input method (splunktcp, http, monitor, udp, tcp, etc.).
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Input Mapping</strong>: Map Splunk inputs to Dynatrace ingestion methods</li>
@@ -1294,7 +1294,7 @@ Data ingestion broken down by input method (splunktcp, http, monitor, udp, tcp, 
 HTTP Event Collector (HEC) usage statistics including volume and token count.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>API Migration</strong>: Size Dynatrace Log Ingest API capacity</li>
@@ -1320,7 +1320,7 @@ HTTP Event Collector (HEC) usage statistics including volume and token count.
 Inventory of up to 500 forwarding hosts with volume, last activity, and connection type.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>OneAgent Deployment List</strong>: Direct list of hosts needing OneAgent installation</li>
@@ -1356,7 +1356,7 @@ Inventory of up to 500 forwarding hosts with volume, last activity, and connecti
 Sourcetypes grouped into logical categories (OpenTelemetry, cloud, Windows, Linux, network/security, web, containers, other).
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Migration Strategy</strong>: Different categories may have different migration paths</li>
@@ -1380,7 +1380,7 @@ Sourcetypes grouped into logical categories (OpenTelemetry, cloud, Windows, Linu
 Data input definitions grouped by app with enabled/disabled status.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Input Inventory</strong>: Complete catalog of data inputs per app</li>
@@ -1405,7 +1405,7 @@ Data input definitions grouped by app with enabled/disabled status.
 Syslog input volume breakdown by UDP and TCP listeners.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Syslog Migration</strong>: Plan Dynatrace ActiveGate syslog receiver configuration</li>
@@ -1428,7 +1428,7 @@ Syslog input volume breakdown by UDP and TCP listeners.
 Inventory of scripted inputs with app, status, and execution interval.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Custom Integration Mapping</strong>: Scripted inputs often represent custom integrations</li>
@@ -1451,7 +1451,7 @@ Inventory of scripted inputs with app, status, and execution interval.
 High-level summary of forwarding infrastructure: total hosts, total volume, daily average.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Migration Scope</strong>: Quick view of infrastructure size</li>
@@ -1498,7 +1498,7 @@ Summary of dashboard and alert ownership by user.
   ]
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Workload Distribution</strong>: Identify owners with most content to migrate</li>
@@ -1521,7 +1521,7 @@ Summary of dashboard and alert ownership by user.
 Hourly scheduler activity showing search count and average runtime.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Workflow Capacity</strong>: Plan Dynatrace workflow execution capacity</li>
@@ -1545,7 +1545,7 @@ Hourly scheduler activity showing search count and average runtime.
 Top 30 saved search owners ranked by search count.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Owner Identification</strong>: Know who owns the most scheduled content</li>
@@ -1565,7 +1565,7 @@ Top 30 saved search owners ranked by search count.
 Last 1000 search jobs with full metadata from Splunk REST API.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Search Pattern Analysis</strong>: Understand recent query patterns</li>
@@ -1585,7 +1585,7 @@ Last 1000 search jobs with full metadata from Splunk REST API.
 KV Store statistics and health metrics.
 </p>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>KV Store Migration</strong>: Identify KV Store collections for potential migration</li>
@@ -1618,10 +1618,10 @@ Master manifest containing all export metadata, statistics, and migration intell
 <li>Checksums</li>
 </ul>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
-<li><strong>Programmatic Parsing</strong>: DynaBridge parser reads manifest first</li>
+<li><strong>Programmatic Parsing</strong>: DMA parser reads manifest first</li>
 <li><strong>Migration Planning</strong>: High-level statistics for project scoping</li>
 <li><strong>Validation</strong>: Checksums ensure export integrity</li>
 </ul>
@@ -1655,7 +1655,7 @@ Detected environment profile including hostname, platform, Splunk version, and d
   &quot;export_version&quot;: &quot;4.0.0&quot;
 }</code></pre>
 <p>
-<strong>DynaBridge Migration Purpose</strong>:
+<strong>DMA Migration Purpose</strong>:
 </p>
 <ul>
 <li><strong>Environment Identification</strong>: Distinguish exports from different environments</li>
@@ -1910,14 +1910,14 @@ When converting queries that reference these analytics, remember:
 <hr>
 <p>
 <em>Document Version: 4.0.0</em>
-<em>Applies To: DynaBridge Splunk Enterprise & Cloud Export Scripts</em>
+<em>Applies To: DMA Splunk Enterprise & Cloud Export Scripts</em>
 <em>Last Updated: January 2026</em>
 </p>
     </main>
 
     <footer class="footer">
         <div class="footer-content">
-            <div class="footer-logo"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+            <div class="footer-logo">Dynatrace Migration Assistant</div>
             <p>Migration intelligence for Splunk to Dynatrace Gen3 Grail</p>
             <div class="footer-links">
                 <a href="README-SPLUNK-ENTERPRISE.html">Enterprise Guide</a>
@@ -1925,7 +1925,7 @@ When converting queries that reference these analytics, remember:
                 <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics</a>
                 <a href="EXPORT-SCHEMA.html">Schema</a>
             </div>
-            <p class="footer-copyright">DynaBridge Project &bull; Built for Dynatrace Gen3 Platform</p>
+            <p class="footer-copyright">DMA Project &bull; Built for Dynatrace Gen3 Platform</p>
         </div>
     </footer>
 </body>

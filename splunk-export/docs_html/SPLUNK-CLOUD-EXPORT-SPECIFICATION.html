@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DynaBridge Splunk Cloud Export - Specification | DynaBridge for Splunk</title>
+    <title>DMA Splunk Cloud Export - Specification | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -245,12 +245,12 @@
     <header class="header-banner">
         <div class="header-content">
             <div class="logo-container">
-                <img class="logo-image" src="dynabridge-symbol.png" alt="DynaBridge" onerror="this.style.display='none'" />
-                <div class="logo-text"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+                <img class="logo-image" src="dma-symbol.png" alt="DMA" onerror="this.style.display='none'" />
+                <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
             <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DynaBridge Splunk Cloud Export - Specification</h2></div>
+            <div class="doc-title"><h2>DMA Splunk Cloud Export - Specification</h2></div>
         </div>
     </header>
 
@@ -266,7 +266,7 @@
     </nav>
 
     <main class="content">
-<h1>DynaBridge Splunk Cloud Export Script - Technical Specification</h1>
+<h1>DMA Splunk Cloud Export Script - Technical Specification</h1>
 <h2>Version 4.3.0 | REST API-Only Data Collection for Splunk Cloud</h2>
 <p>
 <strong>Last Updated</strong>: February 2026
@@ -289,10 +289,10 @@ Resume from a previous export archive to fill gaps without re-collecting everyth
 <li><strong>Global skip logic</strong>: Skips configs, RBAC, usage analytics, and indexes if already present in the previous archive</li>
 </ul>
 <pre><code class="language-bash"># Resume from a previous export
-./dynabridge-splunk-cloud-export.sh --resume-collect dynabridge_cloud_export_acme_20260115.tar.gz
+./dma-splunk-cloud-export.sh --resume-collect dma_cloud_export_acme_20260115.tar.gz
 
 # PowerShell equivalent
-.\dynabridge-splunk-cloud-export.ps1 -ResumeCollect dynabridge_cloud_export_acme_20260115.tar.gz</code></pre>
+.\dma-splunk-cloud-export.ps1 -ResumeCollect dma_cloud_export_acme_20260115.tar.gz</code></pre>
 <h3>12-Hour Max Runtime</h3>
 <ul>
 <li><code>MAX<em>TOTAL</em>TIME=43200</code> (43,200 seconds = 12 hours) enforced across all scripts</li>
@@ -301,7 +301,7 @@ Resume from a previous export archive to fill gaps without re-collecting everyth
 </ul>
 <h3>PowerShell Edition</h3>
 <ul>
-<li><strong><code>dynabridge-splunk-cloud-export.ps1</code></strong> v4.3.0 provides identical functionality for Windows environments</li>
+<li><strong><code>dma-splunk-cloud-export.ps1</code></strong> v4.3.0 provides identical functionality for Windows environments</li>
 <li>Zero external dependencies (no Python, no curl, no jq required)</li>
 <li>Supports PowerShell 5.1+ (Windows PowerShell) and PowerShell 7+ (cross-platform)</li>
 <li>See the <a href="#powershell-edition">PowerShell Edition</a> section below for full parameter mapping</li>
@@ -343,7 +343,7 @@ This preserves the original data in case anonymization corrupts files. Users can
 <ul>
 <li><strong>No more flat folders</strong>: Dashboards are now saved to <code>{AppName}/dashboards/classic/</code> and <code>{AppName}/dashboards/studio/</code> instead of root-level <code>dashboards<em>classic/</code> and <code>dashboards</em>studio/</code></li>
 <li><strong>Prevents name collisions</strong>: Multiple apps can now have dashboards with the same name without data loss</li>
-<li><strong>Manifest Schema v4.0</strong>: Added <code>archive<em>structure</em>version: "v2"</code> for DynaBridge to detect and process the new structure</li>
+<li><strong>Manifest Schema v4.0</strong>: Added <code>archive<em>structure</em>version: "v2"</code> for DMA to detect and process the new structure</li>
 </ul>
 <hr>
 <h2>Executive Summary</h2>
@@ -852,22 +852,22 @@ curl -k -u &quot;$USER:$PASS&quot; \
 │ STEP 7: ARCHIVE CREATION &amp; COMPLETION                               │
 │                                                                      │
 │ Creating compressed archive...                                       │
-│ ✓ Archive created: ./dynabridge_cloud_export_acme_20240115.tar.gz  │
+│ ✓ Archive created: ./dma_cloud_export_acme_20240115.tar.gz  │
 │ ✓ Size: 125 MB                                                      │
 │                                                                      │
 │ NEXT STEPS:                                                         │
-│ 1. Upload this file to DynaBridge in Dynatrace                      │
+│ 1. Upload this file to DMA in Dynatrace                             │
 │ 2. The export format is compatible with Enterprise exports          │
 └─────────────────────────────────────────────────────────────────────┘</code></pre>
 <hr>
 <h2>6. Output Structure</h2>
 <h3>6.1 Directory Structure</h3>
 <p>
-The output structure matches the Enterprise export for DynaBridge compatibility:
+The output structure matches the Enterprise export for DMA compatibility:
 </p>
-<pre><code>dynabridge_cloud_export_[stack]_[timestamp]/
+<pre><code>dma_cloud_export_[stack]_[timestamp]/
 │
-├── dynabridge-env-summary.md          # Master summary
+├── dma-env-summary.md          # Master summary
 ├── _metadata.json                      # Export metadata
 ├── _environment_profile.json           # Cloud environment details
 │
@@ -914,10 +914,10 @@ The output structure matches the Enterprise export for DynaBridge compatibility:
 <p>
 The v4.0.0 output includes additional usage intelligence files:
 </p>
-<pre><code>dynabridge_cloud_export_[stack]_[timestamp]/
+<pre><code>dma_cloud_export_[stack]_[timestamp]/
 │
 ├── manifest.json                         # Standardized metadata schema
-├── dynabridge-env-summary.md             # Human-readable summary report
+├── dma-env-summary.md             # Human-readable summary report
 │
 ├── _usage_analytics/
 │   ├── search_activity.json              # Search frequency data
@@ -1034,7 +1034,7 @@ Identifies unused assets that may be candidates for retirement:
 <h2>8. Manifest Schema</h2>
 <h3>8.1 Guaranteed manifest.json Schema</h3>
 <p>
-The script generates a standardized <code>manifest.json</code> file with a guaranteed schema for DynaBridge consumption:
+The script generates a standardized <code>manifest.json</code> file with a guaranteed schema for DMA consumption:
 </p>
 <pre><code class="language-json">{
   &quot;schemaVersion&quot;: &quot;4.1.0&quot;,
@@ -1243,7 +1243,7 @@ curl -k &quot;$URL/services/server/info&quot;  # Not recommended</code></pre>
 <h2>PowerShell Edition</h2>
 <h3>Overview</h3>
 <p>
-<strong><code>dynabridge-splunk-cloud-export.ps1</code></strong> v4.3.0 provides identical export functionality for Windows environments. It requires zero external dependencies -- no Python, no curl, no jq. It uses native PowerShell cmdlets for all operations.
+<strong><code>dma-splunk-cloud-export.ps1</code></strong> v4.3.0 provides identical export functionality for Windows environments. It requires zero external dependencies -- no Python, no curl, no jq. It uses native PowerShell cmdlets for all operations.
 </p>
 <ul>
 <li><strong>PowerShell 5.1+</strong> (Windows PowerShell, included with Windows 10/Server 2016+)</li>
@@ -1287,20 +1287,20 @@ curl -k &quot;$URL/services/server/info&quot;  # Not recommended</code></pre>
 </table>
 <h3>Usage Examples</h3>
 <pre><code class="language-powershell"># Token-based authentication (recommended)
-.\dynabridge-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;your-api-token&quot; -AllApps
+.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;your-api-token&quot; -AllApps
 
 # Username/password authentication with specific apps
-.\dynabridge-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -User &quot;admin&quot; -Password &quot;pass&quot; -Apps &quot;search,myapp&quot;
+.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -User &quot;admin&quot; -Password &quot;pass&quot; -Apps &quot;search,myapp&quot;
 
 # Resume from previous export
-.\dynabridge-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;token&quot; -ResumeCollect &quot;dynabridge_cloud_export_acme_20260115.tar.gz&quot;
+.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;token&quot; -ResumeCollect &quot;dma_cloud_export_acme_20260115.tar.gz&quot;
 
 # Full export with RBAC and usage analytics
-.\dynabridge-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;token&quot; -AllApps -Rbac -Usage</code></pre>
+.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;token&quot; -AllApps -Rbac -Usage</code></pre>
 <hr>
 <h2>Appendix A: Full API Collection Script Outline</h2>
 <pre><code class="language-bash">#!/bin/bash
-# dynabridge-splunk-cloud-export.sh
+# dma-splunk-cloud-export.sh
 
 # 1. Parse arguments and show banner
 # 2. Get stack URL from user
@@ -1326,7 +1326,7 @@ curl -k &quot;$URL/services/server/info&quot;  # Not recommended</code></pre>
 # 13. Cleanup and display next steps</code></pre>
 <hr>
 <h2>Appendix B: JSON Processing Dependencies</h2>
-<h3>Bash Script (<code>dynabridge-splunk-cloud-export.sh</code>)</h3>
+<h3>Bash Script (<code>dma-splunk-cloud-export.sh</code>)</h3>
 <p>
 The Bash script uses <strong>Python 3</strong> (not jq) for all JSON processing. Python 3 is typically available on systems where Splunk is installed (Splunk bundles its own Python). The script uses the <code>json</code> module from the Python standard library.
 </p>
@@ -1348,7 +1348,7 @@ Python 3 is used for:
 <p>
 <strong>Note</strong>: <code>jq</code> is NOT required. Earlier versions of this specification referenced jq, but the script has used Python 3 since v3.6.0.
 </p>
-<h3>PowerShell Script (<code>dynabridge-splunk-cloud-export.ps1</code>)</h3>
+<h3>PowerShell Script (<code>dma-splunk-cloud-export.ps1</code>)</h3>
 <p>
 The PowerShell script uses <strong>native PowerShell cmdlets</strong> for all JSON processing -- no external dependencies are required:
 </p>
@@ -1366,7 +1366,7 @@ The PowerShell script uses <strong>native PowerShell cmdlets</strong> for all JS
 
     <footer class="footer">
         <div class="footer-content">
-            <div class="footer-logo"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+            <div class="footer-logo">Dynatrace Migration Assistant</div>
             <p>Migration intelligence for Splunk to Dynatrace Gen3 Grail</p>
             <div class="footer-links">
                 <a href="README-SPLUNK-ENTERPRISE.html">Enterprise Guide</a>
@@ -1374,7 +1374,7 @@ The PowerShell script uses <strong>native PowerShell cmdlets</strong> for all JS
                 <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics</a>
                 <a href="EXPORT-SCHEMA.html">Schema</a>
             </div>
-            <p class="footer-copyright">DynaBridge Project &bull; Built for Dynatrace Gen3 Platform</p>
+            <p class="footer-copyright">DMA Project &bull; Built for Dynatrace Gen3 Platform</p>
         </div>
     </footer>
 </body>

@@ -1,13 +1,13 @@
-# DynaBridge Splunk Export Schema v4.3
+# DMA Splunk Export Schema v4.3
 
 ## Purpose
 
-This document defines the **guaranteed output schema** for all DynaBridge Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DynaBridge can reliably parse them.
+This document defines the **guaranteed output schema** for all DMA Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DMA can reliably parse them.
 
 > **Applies to all three export scripts:**
-> - `dynabridge-splunk-export.sh` (Enterprise, Bash)
-> - `dynabridge-splunk-cloud-export.sh` (Cloud, Bash)
-> - `dynabridge-splunk-cloud-export.ps1` (Cloud, PowerShell)
+> - `dma-splunk-export.sh` (Enterprise, Bash)
+> - `dma-splunk-cloud-export.sh` (Cloud, Bash)
+> - `dma-splunk-cloud-export.ps1` (Cloud, PowerShell)
 
 ---
 
@@ -16,11 +16,11 @@ This document defines the **guaranteed output schema** for all DynaBridge Splunk
 Every export produces a `.tar.gz` archive with this **exact** structure:
 
 ```
-dynabridge_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
+dma_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
 │
 ├── manifest.json                    # REQUIRED - Export metadata
 ├── _anonymization_report.json       # OPTIONAL - Only present if anonymization enabled
-├── dynabridge-env-summary.md        # REQUIRED - Human-readable summary
+├── dma-env-summary.md        # REQUIRED - Human-readable summary
 ├── export.log                       # REQUIRED - Export process log
 │
 ├── _systeminfo/                     # REQUIRED - System information
@@ -91,9 +91,9 @@ dynabridge_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
 
 ## File Source Categories
 
-Understanding the origin of each file helps distinguish between **raw Splunk data** and **DynaBridge-generated migration intelligence**.
+Understanding the origin of each file helps distinguish between **raw Splunk data** and **DMA-generated migration intelligence**.
 
-### Category 1: Script-Generated Analytics (DynaBridge Migration Intelligence)
+### Category 1: Script-Generated Analytics (DMA Migration Intelligence)
 
 These files are **created by the export script** by running SPL queries against Splunk's internal indexes (`_audit`, `_internal`). They provide migration-specific insights that don't exist natively in Splunk.
 
@@ -189,7 +189,7 @@ These are **direct copies** of Splunk configuration files from the file system (
 
 ### Why This Matters
 
-1. **Script-Generated Analytics** = **Unique DynaBridge Value**
+1. **Script-Generated Analytics** = **Unique DMA Value**
    - These don't exist in Splunk natively
    - Enable data-driven migration prioritization
    - Identify what to migrate vs. eliminate
@@ -208,7 +208,7 @@ Every export MUST include a `manifest.json` at the root with this exact schema:
 ```json
 {
   "schema_version": "4.0",
-  "export_tool": "dynabridge-splunk-export",
+  "export_tool": "dma-splunk-export",
   "export_tool_version": "4.0.0",
   "export_timestamp": "2025-12-03T14:25:30Z",
   "export_duration_seconds": 847,
@@ -460,7 +460,7 @@ The `_anonymization_report.json` file is **only present in the `_masked` archive
     "ip_addresses": "all_redacted"
   },
   "transformations": {
-    "emails": "original@domain.com → user######@anon.dynabridge.local",
+    "emails": "original@domain.com → user######@anon.dma.local",
     "hostnames": "server.example.com → host-########.anon.local",
     "ipv4": "x.x.x.x → [IP-REDACTED]",
     "ipv6": "xxxx:xxxx:... → [IPv6-REDACTED]"
@@ -644,7 +644,7 @@ All dashboard XML files must be valid Splunk SimpleXML:
 
 ## Validation Rules
 
-DynaBridge validates exports against these rules:
+DMA validates exports against these rules:
 
 ### MUST Have (Export Fails Without These)
 1. `manifest.json` exists and is valid JSON
@@ -654,7 +654,7 @@ DynaBridge validates exports against these rules:
 
 ### SHOULD Have (Warnings If Missing)
 1. `export.log` for troubleshooting
-2. `dynabridge-env-summary.md` for human review
+2. `dma-env-summary.md` for human review
 3. `manifest.json.statistics` section populated
 4. `manifest.json.usage_intelligence` section (for migration prioritization)
 
@@ -714,7 +714,7 @@ Example for missing RBAC:
 The smallest valid export contains:
 
 ```
-dynabridge_export_splunk01_20251203_142530.tar.gz
+dma_export_splunk01_20251203_142530.tar.gz
 ├── manifest.json
 ├── _systeminfo/
 │   └── environment.json
@@ -725,7 +725,7 @@ With `manifest.json`:
 ```json
 {
   "schema_version": "4.0",
-  "export_tool": "dynabridge-splunk-export",
+  "export_tool": "dma-splunk-export",
   "export_tool_version": "4.0.0",
   "export_timestamp": "2025-12-03T14:25:30Z",
   "source": {
@@ -744,12 +744,12 @@ With `manifest.json`:
 
 ---
 
-## DynaBridge Parser Contract
+## DMA Parser Contract
 
-DynaBridge guarantees it can parse any export conforming to this schema:
+DMA guarantees it can parse any export conforming to this schema:
 
 ```typescript
-interface DynaBridgeExport {
+interface DMAExport {
   manifest: ExportManifest;           // Always present
   systemInfo: SystemInfo;             // Always present
   apps: Map<string, AppExport>;       // May be empty

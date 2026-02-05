@@ -1,4 +1,4 @@
-# DynaBridge Splunk Cloud Export Script
+# DMA Splunk Cloud Export Script
 ## Prerequisites Guide for Splunk Cloud (Classic & Victoria Experience)
 
 **Version**: 4.3.0
@@ -14,17 +14,17 @@ Pass a previous `.tar.gz` export to the script, and it will extract it, detect w
 `MAX_TOTAL_TIME` has been increased to `43200` seconds (12 hours), up from 14400 (4 hours), to support very large Splunk Cloud environments with thousands of apps and dashboards.
 
 #### PowerShell Edition
-A new `dynabridge-splunk-cloud-export.ps1` script provides identical functionality for Windows environments. It requires only PowerShell 5.1+ and has zero external dependencies (no Python, curl, or jq needed). See the [PowerShell Edition](#powershell-edition) section below for details.
+A new `dma-splunk-cloud-export.ps1` script provides identical functionality for Windows environments. It requires only PowerShell 5.1+ and has zero external dependencies (no Python, curl, or jq needed). See the [PowerShell Edition](#powershell-edition) section below for details.
 
 #### Proxy Support (`--proxy` / `-Proxy`)
 Both Cloud scripts now support routing all connections through a corporate proxy server. This is essential for enterprise environments where direct internet access to Splunk Cloud is blocked by a firewall or security policy.
 
 ```bash
 # Bash: Route through corporate proxy
-./dynabridge-splunk-cloud-export.sh --proxy http://proxy.company.com:8080
+./dma-splunk-cloud-export.sh --proxy http://proxy.company.com:8080
 
 # PowerShell: Route through corporate proxy
-.\dynabridge-splunk-cloud-export.ps1 -Proxy "http://proxy.company.com:8080"
+.\dma-splunk-cloud-export.ps1 -Proxy "http://proxy.company.com:8080"
 ```
 
 When a proxy is configured:
@@ -51,7 +51,7 @@ This preserves the original data in case anonymization corrupts files. Users can
 ### Previous v4.2.0 Changes
 
 - **App-Centric Dashboard Structure (v2)**: Dashboards now saved to `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/` to prevent name collisions
-- **Manifest Schema v4.0**: Added `archive_structure_version: "v2"` for DynaBridge to detect the new structure
+- **Manifest Schema v4.0**: Added `archive_structure_version: "v2"` for DMA to detect the new structure
 - **No More Flat Folders**: Removed `dashboards_classic/` and `dashboards_studio/` at root level
 
 ---
@@ -67,17 +67,17 @@ This preserves the original data in case anonymization corrupts files. Users can
 # This script runs from YOUR machine (not on Splunk Cloud)
 # You need network access to your Splunk Cloud instance
 
-./dynabridge-splunk-cloud-export.sh
+./dma-splunk-cloud-export.sh
 ```
 
 ### Quick Start (PowerShell - Windows)
 
 ```powershell
 # This script runs from YOUR Windows machine (not on Splunk Cloud)
-.\dynabridge-splunk-cloud-export.ps1
+.\dma-splunk-cloud-export.ps1
 
 # Non-interactive with token
-.\dynabridge-splunk-cloud-export.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
+.\dma-splunk-cloud-export.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
 ```
 
 ---
@@ -139,7 +139,7 @@ You need ONE of the following:
 │  3. Click "New Token"                                                   │
 │                                                                          │
 │  4. Configure the token:                                                │
-│     • Name: DynaBridge Export Token                                     │
+│     • Name: DMA Export Token                                            │
 │     • Expiration: Set appropriate (e.g., 7 days)                        │
 │     • Audience: Search (if asked)                                       │
 │                                                                          │
@@ -304,10 +304,10 @@ Contact your Splunk Cloud admin or check:
 
 ```bash
 # Make executable
-chmod +x dynabridge-splunk-cloud-export.sh
+chmod +x dma-splunk-cloud-export.sh
 
 # Run interactively
-./dynabridge-splunk-cloud-export.sh
+./dma-splunk-cloud-export.sh
 ```
 
 ### With Pre-set Values
@@ -319,13 +319,13 @@ export SPLUNK_CLOUD_STACK="acme-corp.splunkcloud.com"
 # Set token via environment (more secure than command line)
 export SPLUNK_CLOUD_TOKEN="your-api-token"
 
-./dynabridge-splunk-cloud-export.sh
+./dma-splunk-cloud-export.sh
 ```
 
 ### Non-Interactive Mode (for automation)
 
 ```bash
-./dynabridge-splunk-cloud-export.sh \
+./dma-splunk-cloud-export.sh \
   --stack "acme-corp.splunkcloud.com" \
   --token "$SPLUNK_CLOUD_TOKEN" \
   --all-apps \
@@ -363,14 +363,14 @@ For large Splunk Cloud environments, dramatically reduce export time by targetin
 
 ```bash
 # Export only specific apps (fastest option)
-./dynabridge-splunk-cloud-export.sh \
+./dma-splunk-cloud-export.sh \
   --stack acme.splunkcloud.com \
   --token "$TOKEN" \
   --apps "search,myapp,security_essentials" \
   --quick
 
 # Scoped mode - exports app configs + only users/searches related to those apps
-./dynabridge-splunk-cloud-export.sh \
+./dma-splunk-cloud-export.sh \
   --stack acme.splunkcloud.com \
   --token "$TOKEN" \
   --apps "myapp,otherapp" \
@@ -410,16 +410,16 @@ The script extracts the previous archive, inspects what was already collected, s
 
 ```bash
 # Resume a previous incomplete export
-./dynabridge-splunk-cloud-export.sh \
+./dma-splunk-cloud-export.sh \
   --stack acme.splunkcloud.com \
   --token "$TOKEN" \
-  --resume-collect ./dynabridge_cloud_export_acme-corp_20260115_093000.tar.gz
+  --resume-collect ./dma_cloud_export_acme-corp_20260115_093000.tar.gz
 
 # Resume AND add RBAC + usage data that were skipped originally
-./dynabridge-splunk-cloud-export.sh \
+./dma-splunk-cloud-export.sh \
   --stack acme.splunkcloud.com \
   --token "$TOKEN" \
-  --resume-collect ./dynabridge_cloud_export_acme-corp_20260115_093000.tar.gz \
+  --resume-collect ./dma_cloud_export_acme-corp_20260115_093000.tar.gz \
   --rbac --usage
 ```
 
@@ -427,16 +427,16 @@ The script extracts the previous archive, inspects what was already collected, s
 
 ```powershell
 # Resume a previous incomplete export
-.\dynabridge-splunk-cloud-export.ps1 `
+.\dma-splunk-cloud-export.ps1 `
   -Stack "acme.splunkcloud.com" `
   -Token $TOKEN `
-  -ResumeCollect ".\dynabridge_cloud_export_acme-corp_20260115_093000.tar.gz"
+  -ResumeCollect ".\dma_cloud_export_acme-corp_20260115_093000.tar.gz"
 
 # Resume AND add RBAC + usage data
-.\dynabridge-splunk-cloud-export.ps1 `
+.\dma-splunk-cloud-export.ps1 `
   -Stack "acme.splunkcloud.com" `
   -Token $TOKEN `
-  -ResumeCollect ".\dynabridge_cloud_export_acme-corp_20260115_093000.tar.gz" `
+  -ResumeCollect ".\dma_cloud_export_acme-corp_20260115_093000.tar.gz" `
   -Rbac -Usage
 ```
 
@@ -444,9 +444,9 @@ The script extracts the previous archive, inspects what was already collected, s
 
 When resuming, the script creates a versioned archive to avoid overwriting the original:
 
-- Original: `dynabridge_cloud_export_acme-corp_20260115_093000.tar.gz`
-- First resume: `dynabridge_cloud_export_acme-corp_20260115_093000-v1.tar.gz`
-- Second resume: `dynabridge_cloud_export_acme-corp_20260115_093000-v2.tar.gz`
+- Original: `dma_cloud_export_acme-corp_20260115_093000.tar.gz`
+- First resume: `dma_cloud_export_acme-corp_20260115_093000-v1.tar.gz`
+- Second resume: `dma_cloud_export_acme-corp_20260115_093000-v2.tar.gz`
 
 #### What Gets Skipped vs Collected
 
@@ -465,7 +465,7 @@ When resuming, the script creates a versioned archive to avoid overwriting the o
 When troubleshooting issues, enable debug mode to capture detailed logs:
 
 ```bash
-./dynabridge-splunk-cloud-export.sh \
+./dma-splunk-cloud-export.sh \
   --stack acme.splunkcloud.com \
   --token "$TOKEN" \
   --apps myapp \
@@ -502,7 +502,7 @@ If the export is interrupted (timeout, network error, Ctrl+C), you can resume:
 
 ```bash
 # Script detects previous incomplete export
-./dynabridge-splunk-cloud-export.sh
+./dma-splunk-cloud-export.sh
 
 # Output:
 # Found checkpoint from 2025-01-06 14:30:00
@@ -535,17 +535,17 @@ For very large Splunk Cloud environments, tune via environment variables:
 # Large environment (5000+ dashboards)
 export BATCH_SIZE=50
 export API_TIMEOUT=180
-./dynabridge-splunk-cloud-export.sh
+./dma-splunk-cloud-export.sh
 
 # Or inline
-BATCH_SIZE=50 API_TIMEOUT=180 ./dynabridge-splunk-cloud-export.sh
+BATCH_SIZE=50 API_TIMEOUT=180 ./dma-splunk-cloud-export.sh
 ```
 
 ---
 
 ## PowerShell Edition
 
-The `dynabridge-splunk-cloud-export.ps1` script provides the same functionality as the Bash script for Windows environments. It is written in pure PowerShell with zero external dependencies -- no Python, curl, jq, or any other tools are required.
+The `dma-splunk-cloud-export.ps1` script provides the same functionality as the Bash script for Windows environments. It is written in pure PowerShell with zero external dependencies -- no Python, curl, jq, or any other tools are required.
 
 ### Supported PowerShell Versions
 
@@ -573,22 +573,22 @@ The `dynabridge-splunk-cloud-export.ps1` script provides the same functionality 
 | `--proxy` | `-Proxy` | `-Proxy "http://proxy:8080"` |
 | `--output` | `-Output` | `-Output "C:\exports"` |
 | `--debug` | `-Debug` | `-Debug` |
-| `--help` | `-Help` or `Get-Help` | `Get-Help .\dynabridge-splunk-cloud-export.ps1` |
+| `--help` | `-Help` or `Get-Help` | `Get-Help .\dma-splunk-cloud-export.ps1` |
 
 ### Example Commands
 
 ```powershell
 # Interactive mode (prompts for all inputs)
-.\dynabridge-splunk-cloud-export.ps1
+.\dma-splunk-cloud-export.ps1
 
 # Non-interactive full export
-.\dynabridge-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -AllApps
+.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -AllApps
 
 # Export specific apps with RBAC and usage
-.\dynabridge-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -Apps "search,security_app" -Rbac -Usage
+.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -Apps "search,security_app" -Rbac -Usage
 
 # Resume a previous incomplete export
-.\dynabridge-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -ResumeCollect ".\previous_export.tar.gz"
+.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -ResumeCollect ".\previous_export.tar.gz"
 ```
 
 ### Key Differences from Bash
@@ -690,7 +690,7 @@ Error: SSL certificate problem: unable to get local issuer certificate
 # Secure transfer
 scp export.tar.gz user@secure-server:/path/
 
-# Delete after upload to DynaBridge
+# Delete after upload to DMA
 rm export.tar.gz
 ```
 
@@ -698,11 +698,11 @@ rm export.tar.gz
 
 ## What Gets Exported
 
-The export creates a `.tar.gz` file compatible with DynaBridge containing:
+The export creates a `.tar.gz` file compatible with DMA containing:
 
 ```
-dynabridge_cloud_export_[stack]_[timestamp]/
-├── dynabridge-env-summary.md      # Summary report
+dma_cloud_export_[stack]_[timestamp]/
+├── dma-env-summary.md      # Summary report
 ├── manifest.json                   # Export metadata (schema v4.0)
 ├── _systeminfo/                    # Server info
 ├── _rbac/                         # Users and roles
@@ -758,12 +758,12 @@ dynabridge_cloud_export_[stack]_[timestamp]/
 ```bash
 export SPLUNK_CLOUD_STACK="your-stack.splunkcloud.com"
 export SPLUNK_CLOUD_TOKEN="your-token"
-./dynabridge-splunk-cloud-export.sh --all-apps --output /exports/
+./dma-splunk-cloud-export.sh --all-apps --output /exports/
 ```
 
 ### Q: Can I run this on Windows?
 
-**A: Yes!** Use `dynabridge-splunk-cloud-export.ps1` which requires only PowerShell 5.1+ and has zero external dependencies. See the [PowerShell Edition](#powershell-edition) section for details.
+**A: Yes!** Use `dma-splunk-cloud-export.ps1` which requires only PowerShell 5.1+ and has zero external dependencies. See the [PowerShell Edition](#powershell-edition) section for details.
 
 ### Q: My previous export timed out. Do I need to start over?
 
@@ -771,10 +771,10 @@ export SPLUNK_CLOUD_TOKEN="your-token"
 
 ```bash
 # Bash
-./dynabridge-splunk-cloud-export.sh --stack acme.splunkcloud.com --token "$TOKEN" --resume-collect ./previous_export.tar.gz
+./dma-splunk-cloud-export.sh --stack acme.splunkcloud.com --token "$TOKEN" --resume-collect ./previous_export.tar.gz
 
 # PowerShell
-.\dynabridge-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $TOKEN -ResumeCollect ".\previous_export.tar.gz"
+.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $TOKEN -ResumeCollect ".\previous_export.tar.gz"
 ```
 
 ### Q: What if I have multiple Splunk Cloud stacks?
@@ -789,7 +789,7 @@ If you encounter issues:
 
 1. Check the troubleshooting section above
 2. Review the export log file generated during the run
-3. Contact the DynaBridge team with:
+3. Contact the DMA team with:
    - Error messages
    - Stack URL (without credentials)
    - Splunk Cloud type (Classic/Victoria)
@@ -802,7 +802,7 @@ This section shows exactly what you'll see when running the script successfully.
 
 ### Step 1: Launch and Welcome Screen
 
-When you run `./dynabridge-splunk-cloud-export.sh`, you'll see:
+When you run `./dma-splunk-cloud-export.sh`, you'll see:
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -985,7 +985,7 @@ Ready to proceed? (Y/n):
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
 ║  Export Archive:                                                             ║
-║    📦 dynabridge_cloud_export_acme-corp_20241203_143052.tar.gz               ║
+║    📦 dma_cloud_export_acme-corp_20241203_143052.tar.gz               ║
 ║                                                                              ║
 ║  Summary:                                                                    ║
 ║    • Dashboards:        59 (47 Classic + 12 Studio)                          ║
@@ -1003,12 +1003,12 @@ Ready to proceed? (Y/n):
 ║                                                                              ║
 ║  NEXT STEPS:                                                                 ║
 ║                                                                              ║
-║  1. Upload to DynaBridge:                                                    ║
-║     Open DynaBridge for Splunk app → Data Sources → Upload Export            ║
+║  1. Upload to DMA:                                                           ║
+║     Open Dynatrace Migration Assistant app → Data Sources → Upload Export    ║
 ║                                                                              ║
 ║  2. Review the summary report:                                               ║
-║     cat dynabridge_cloud_export_acme-corp_20241203_143052/                   ║
-║         dynabridge-env-summary.md                                            ║
+║     cat dma_cloud_export_acme-corp_20241203_143052/                   ║
+║         dma-env-summary.md                                            ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -1018,24 +1018,24 @@ Ready to proceed? (Y/n):
 After a successful export, you'll have a `.tar.gz` file. Extract it to see:
 
 ```bash
-$ tar -tzf dynabridge_cloud_export_acme-corp_20241203_143052.tar.gz | head -20
+$ tar -tzf dma_cloud_export_acme-corp_20241203_143052.tar.gz | head -20
 
-dynabridge_cloud_export_acme-corp_20241203_143052/
-dynabridge_cloud_export_acme-corp_20241203_143052/manifest.json
-dynabridge_cloud_export_acme-corp_20241203_143052/dynabridge-env-summary.md
-dynabridge_cloud_export_acme-corp_20241203_143052/_export.log
-dynabridge_cloud_export_acme-corp_20241203_143052/_systeminfo/
-dynabridge_cloud_export_acme-corp_20241203_143052/_systeminfo/server_info.json
-dynabridge_cloud_export_acme-corp_20241203_143052/_systeminfo/installed_apps.json
-dynabridge_cloud_export_acme-corp_20241203_143052/_rbac/
-dynabridge_cloud_export_acme-corp_20241203_143052/_rbac/users.json
-dynabridge_cloud_export_acme-corp_20241203_143052/_rbac/roles.json
-dynabridge_cloud_export_acme-corp_20241203_143052/_usage_analytics/
-dynabridge_cloud_export_acme-corp_20241203_143052/_usage_analytics/dashboard_views.json
-dynabridge_cloud_export_acme-corp_20241203_143052/_usage_analytics/users_most_active.json
-dynabridge_cloud_export_acme-corp_20241203_143052/security_app/
-dynabridge_cloud_export_acme-corp_20241203_143052/security_app/dashboards/
-dynabridge_cloud_export_acme-corp_20241203_143052/security_app/savedsearches.json
+dma_cloud_export_acme-corp_20241203_143052/
+dma_cloud_export_acme-corp_20241203_143052/manifest.json
+dma_cloud_export_acme-corp_20241203_143052/dma-env-summary.md
+dma_cloud_export_acme-corp_20241203_143052/_export.log
+dma_cloud_export_acme-corp_20241203_143052/_systeminfo/
+dma_cloud_export_acme-corp_20241203_143052/_systeminfo/server_info.json
+dma_cloud_export_acme-corp_20241203_143052/_systeminfo/installed_apps.json
+dma_cloud_export_acme-corp_20241203_143052/_rbac/
+dma_cloud_export_acme-corp_20241203_143052/_rbac/users.json
+dma_cloud_export_acme-corp_20241203_143052/_rbac/roles.json
+dma_cloud_export_acme-corp_20241203_143052/_usage_analytics/
+dma_cloud_export_acme-corp_20241203_143052/_usage_analytics/dashboard_views.json
+dma_cloud_export_acme-corp_20241203_143052/_usage_analytics/users_most_active.json
+dma_cloud_export_acme-corp_20241203_143052/security_app/
+dma_cloud_export_acme-corp_20241203_143052/security_app/dashboards/
+dma_cloud_export_acme-corp_20241203_143052/security_app/savedsearches.json
 ```
 
 ### If Something Goes Wrong
@@ -1066,12 +1066,12 @@ Review `TROUBLESHOOTING.md` in the export directory for specific remediation ste
 
 ## Sample Output Files
 
-### Example: dynabridge-env-summary.md
+### Example: dma-env-summary.md
 
 This human-readable summary report is generated in the export directory:
 
 ```markdown
-# DynaBridge Splunk Cloud Environment Summary
+# DMA Splunk Cloud Environment Summary
 
 **Export Date**: 2025-12-03 14:30:52 EST
 **Export Script Version**: 4.1.0
@@ -1166,24 +1166,24 @@ No errors occurred.
 
 ## Next Steps
 
-1. **Upload to DynaBridge**: Upload the `.tar.gz` file to DynaBridge in Dynatrace
+1. **Upload to DMA**: Upload the `.tar.gz` file to DMA in Dynatrace
 2. **Review Dashboards**: Check the dashboard conversion preview
 3. **Review Alerts**: Check alert conversion recommendations
 4. **Plan Data Ingestion**: Use OpenPipeline templates for log ingestion
 
 ---
 
-*Generated by DynaBridge Splunk Cloud Export Script v4.0.0*
+*Generated by DMA Splunk Cloud Export Script v4.0.0*
 ```
 
 ### Example: manifest.json (Schema)
 
-This machine-readable manifest is used by DynaBridge to process your export:
+This machine-readable manifest is used by DMA to process your export:
 
 ```json
 {
   "schema_version": "3.3",
-  "export_tool": "dynabridge-splunk-cloud-export",
+  "export_tool": "dma-splunk-cloud-export",
   "export_tool_version": "4.0.0",
   "export_timestamp": "2025-12-03T19:30:52Z",
   "export_duration_seconds": 263,
@@ -1295,7 +1295,7 @@ This machine-readable manifest is used by DynaBridge to process your export:
 }
 ```
 
-This manifest enables DynaBridge to:
+This manifest enables DMA to:
 - **Prioritize migration** based on actual usage data
 - **Identify elimination candidates** (unused dashboards/alerts)
 - **Estimate data volume** for Dynatrace ingestion planning
@@ -1303,4 +1303,4 @@ This manifest enables DynaBridge to:
 
 ---
 
-*For Splunk Enterprise (on-premises), use `dynabridge-splunk-export.sh` instead.*
+*For Splunk Enterprise (on-premises), use `dma-splunk-export.sh` instead.*

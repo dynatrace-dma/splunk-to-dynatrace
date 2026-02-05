@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DynaBridge Splunk Enterprise Export - Specification | DynaBridge for Splunk</title>
+    <title>DMA Splunk Enterprise Export - Specification | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -245,12 +245,12 @@
     <header class="header-banner">
         <div class="header-content">
             <div class="logo-container">
-                <img class="logo-image" src="dynabridge-symbol.png" alt="DynaBridge" onerror="this.style.display='none'" />
-                <div class="logo-text"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+                <img class="logo-image" src="dma-symbol.png" alt="DMA" onerror="this.style.display='none'" />
+                <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
             <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DynaBridge Splunk Enterprise Export - Specification</h2></div>
+            <div class="doc-title"><h2>DMA Splunk Enterprise Export - Specification</h2></div>
         </div>
     </header>
 
@@ -266,7 +266,7 @@
     </nav>
 
     <main class="content">
-<h1>DynaBridge Splunk Enterprise Export Script - Comprehensive Specification</h1>
+<h1>DMA Splunk Enterprise Export Script - Comprehensive Specification</h1>
 <h2>Version 4.2.4 | Complete Data Collection Framework</h2>
 <p>
 <strong>Last Updated</strong>: February 2026
@@ -286,7 +286,7 @@ This specification defines the complete requirements for a Splunk data collectio
 <li><strong>Usage Analytics</strong>: Query frequency, dashboard views, alert triggers, index volume trends</li>
 <li><strong>Migration Prioritization</strong>: Scoring of high-value assets worth migrating</li>
 </ul>
-<blockquote><p><strong>Note</strong>: For Splunk Cloud environments, dedicated Cloud export scripts are available: <code>dynabridge-splunk-cloud-export.sh</code> (Bash) and <code>dynabridge-splunk-cloud-export.ps1</code> (PowerShell). See <a href="README-SPLUNK-CLOUD.md">README-SPLUNK-CLOUD.md</a> for details.</p></blockquote>
+<blockquote><p><strong>Note</strong>: For Splunk Cloud environments, dedicated Cloud export scripts are available: <code>dma-splunk-cloud-export.sh</code> (Bash) and <code>dma-splunk-cloud-export.ps1</code> (PowerShell). See <a href="README-SPLUNK-CLOUD.md">README-SPLUNK-CLOUD.md</a> for details.</p></blockquote>
 <hr>
 <h2>What's New in v4.2.4</h2>
 <h3>Two-Archive Anonymization (Preserves Original Data)</h3>
@@ -314,7 +314,7 @@ This preserves the original data in case anonymization corrupts files. Users can
 <ul>
 <li><strong>No more flat folders</strong>: Dashboards are now saved to <code>{AppName}/dashboards/classic/</code> and <code>{AppName}/dashboards/studio/</code> instead of root-level <code>dashboards<em>classic/</code> and <code>dashboards</em>studio/</code></li>
 <li><strong>Prevents name collisions</strong>: Multiple apps can now have dashboards with the same name without data loss</li>
-<li><strong>Manifest Schema v4.0</strong>: Added <code>archive<em>structure</em>version: "v2"</code> for DynaBridge to detect and process the new structure</li>
+<li><strong>Manifest Schema v4.0</strong>: Added <code>archive<em>structure</em>version: "v2"</code> for DMA to detect and process the new structure</li>
 </ul>
 <hr>
 <h2>What Was New in v4.1.0</h2>
@@ -1115,7 +1115,7 @@ index=_audit action=login OR action=search
 <pre><code>splunk_export_[env_name]_[timestamp]/
 │
 ├── manifest.json                       # 📋 STANDARDIZED METADATA (v3.5.0)
-├── dynabridge-env-summary.md           # 📊 MASTER SUMMARY FILE
+├── dma-env-summary.md           # 📊 MASTER SUMMARY FILE
 ├── _metadata.json                      # Export metadata
 ├── _environment_profile.json           # Detected environment profile
 │
@@ -1191,7 +1191,7 @@ index=_audit action=login OR action=search
     └── audit_sample.log                # Last 10000 audit entries</code></pre>
 <h3>6.2 manifest.json Schema (v4.2.0)</h3>
 <p>
-The script generates a standardized <code>manifest.json</code> with guaranteed schema for DynaBridge:
+The script generates a standardized <code>manifest.json</code> with guaranteed schema for DMA:
 </p>
 <pre><code class="language-json">{
   &quot;schemaVersion&quot;: &quot;4.0&quot;,
@@ -1242,7 +1242,7 @@ The script generates a standardized <code>manifest.json</code> with guaranteed s
     &quot;durationSeconds&quot;: 465
   }
 }</code></pre>
-<h3>6.3 Master Summary File: dynabridge-env-summary.md</h3>
+<h3>6.3 Master Summary File: dma-env-summary.md</h3>
 <pre><code class="language-markdown"># DynaSplunk Environment Summary
 
 **Export Date**: 2025-12-03T10:30:00Z
@@ -1563,7 +1563,7 @@ Assets are scored on a scale of 0-100 based on:
 
 ---
 
-*Generated by DynaBridge Splunk Export Tool v4.0.0*</code></pre>
+*Generated by DMA Splunk Export Tool v4.0.0*</code></pre>
 <hr>
 <h2>7. Script Flow & Interactive Prompts</h2>
 <h3>7.0 Verbosity & User Guidance Philosophy</h3>
@@ -1639,7 +1639,7 @@ The script should feel like a guided conversation with an expert, not a terse co
 │ ║                                                                 ║  │
 │ ║  RECOMMENDATION:                                                ║  │
 │ ║  For a complete migration assessment, we recommend exporting    ║  │
-│ ║  ALL apps. This gives DynaBridge the full picture of your       ║  │
+│ ║  ALL apps. This gives DMA the full picture of your              ║  │
 │ ║  Splunk environment and enables accurate migration planning.    ║  │
 │ ║                                                                 ║  │
 │ ╚════════════════════════════════════════════════════════════════╝  │
@@ -1825,7 +1825,7 @@ The script should feel like a guided conversation with an expert, not a terse co
 │ STEP 6: SUMMARY GENERATION                                          │
 │                                                                      │
 │ Calculating migration priority scores...                             │
-│ Generating dynabridge-env-summary.md...                             │
+│ Generating dma-env-summary.md...                             │
 │                                                                      │
 │ Summary Preview:                                                     │
 │ ┌────────────────────────────────────────────────────────┐          │
@@ -1865,10 +1865,10 @@ The script should feel like a guided conversation with an expert, not a terse co
 │                                                                      │
 │ NEXT STEPS:                                                         │
 │ 1. Download the export file                                         │
-│ 2. Open DynaBridge in Dynatrace                                     │
+│ 2. Open DMA in Dynatrace                                            │
 │ 3. Upload the .tar.gz file                                          │
 │                                                                      │
-│ The dynabridge-env-summary.md file contains:                        │
+│ The dma-env-summary.md file contains:                        │
 │ • Environment overview                                              │
 │ • User and access summary                                           │
 │ • Usage analytics for last 30 days                                  │
@@ -2132,11 +2132,11 @@ sha256sum export.tar.gz &gt; export.tar.gz.sha256
 
 # 3. Recommend secure transfer
 echo &quot;Transfer this file using SCP, SFTP, or other encrypted method&quot;
-echo &quot;Delete the export file after upload to DynaBridge&quot;</code></pre>
+echo &quot;Delete the export file after upload to DMA&quot;</code></pre>
 <hr>
 <h2>Appendix A: Complete Script Pseudocode</h2>
 <pre><code class="language-bash">#!/bin/bash
-# DynaBridge Splunk Export Script v3.0.0
+# DMA Splunk Export Script v3.0.0
 
 # =============================================================================
 # INITIALIZATION
@@ -2407,13 +2407,13 @@ display_next_steps()</code></pre>
 <hr>
 <p>
 <em>End of Specification Document</em>
-<em>Version 4.0.0 | DynaBridge Splunk Export Framework</em>
+<em>Version 4.0.0 | DMA Splunk Export Framework</em>
 </p>
     </main>
 
     <footer class="footer">
         <div class="footer-content">
-            <div class="footer-logo"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+            <div class="footer-logo">Dynatrace Migration Assistant</div>
             <p>Migration intelligence for Splunk to Dynatrace Gen3 Grail</p>
             <div class="footer-links">
                 <a href="README-SPLUNK-ENTERPRISE.html">Enterprise Guide</a>
@@ -2421,7 +2421,7 @@ display_next_steps()</code></pre>
                 <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics</a>
                 <a href="EXPORT-SCHEMA.html">Schema</a>
             </div>
-            <p class="footer-copyright">DynaBridge Project &bull; Built for Dynatrace Gen3 Platform</p>
+            <p class="footer-copyright">DMA Project &bull; Built for Dynatrace Gen3 Platform</p>
         </div>
     </footer>
 </body>

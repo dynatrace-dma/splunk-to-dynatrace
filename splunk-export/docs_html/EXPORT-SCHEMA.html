@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DynaBridge Export Schema Reference | DynaBridge for Splunk</title>
+    <title>DMA Export Schema Reference | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -245,12 +245,12 @@
     <header class="header-banner">
         <div class="header-content">
             <div class="logo-container">
-                <img class="logo-image" src="dynabridge-symbol.png" alt="DynaBridge" onerror="this.style.display='none'" />
-                <div class="logo-text"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+                <img class="logo-image" src="dma-symbol.png" alt="DMA" onerror="this.style.display='none'" />
+                <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
             <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DynaBridge Export Schema Reference</h2></div>
+            <div class="doc-title"><h2>DMA Export Schema Reference</h2></div>
         </div>
     </header>
 
@@ -266,25 +266,25 @@
     </nav>
 
     <main class="content">
-<h1>DynaBridge Splunk Export Schema v4.3</h1>
+<h1>DMA Splunk Export Schema v4.3</h1>
 <h2>Purpose</h2>
 <p>
-This document defines the <strong>guaranteed output schema</strong> for all DynaBridge Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DynaBridge can reliably parse them.
+This document defines the <strong>guaranteed output schema</strong> for all DMA Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DMA can reliably parse them.
 </p>
 <blockquote><p><strong>Applies to all three export scripts:</strong></p></blockquote>
-<blockquote><p>- <code>dynabridge-splunk-export.sh</code> (Enterprise, Bash)</p></blockquote>
-<blockquote><p>- <code>dynabridge-splunk-cloud-export.sh</code> (Cloud, Bash)</p></blockquote>
-<blockquote><p>- <code>dynabridge-splunk-cloud-export.ps1</code> (Cloud, PowerShell)</p></blockquote>
+<blockquote><p>- <code>dma-splunk-export.sh</code> (Enterprise, Bash)</p></blockquote>
+<blockquote><p>- <code>dma-splunk-cloud-export.sh</code> (Cloud, Bash)</p></blockquote>
+<blockquote><p>- <code>dma-splunk-cloud-export.ps1</code> (Cloud, PowerShell)</p></blockquote>
 <hr>
 <h2>Archive Structure</h2>
 <p>
 Every export produces a <code>.tar.gz</code> archive with this <strong>exact</strong> structure:
 </p>
-<pre><code>dynabridge_export_&lt;hostname&gt;_&lt;YYYYMMDD_HHMMSS&gt;.tar.gz
+<pre><code>dma_export_&lt;hostname&gt;_&lt;YYYYMMDD_HHMMSS&gt;.tar.gz
 │
 ├── manifest.json                    # REQUIRED - Export metadata
 ├── _anonymization_report.json       # OPTIONAL - Only present if anonymization enabled
-├── dynabridge-env-summary.md        # REQUIRED - Human-readable summary
+├── dma-env-summary.md        # REQUIRED - Human-readable summary
 ├── export.log                       # REQUIRED - Export process log
 │
 ├── _systeminfo/                     # REQUIRED - System information
@@ -352,9 +352,9 @@ Every export produces a <code>.tar.gz</code> archive with this <strong>exact</st
 <hr>
 <h2>File Source Categories</h2>
 <p>
-Understanding the origin of each file helps distinguish between <strong>raw Splunk data</strong> and <strong>DynaBridge-generated migration intelligence</strong>.
+Understanding the origin of each file helps distinguish between <strong>raw Splunk data</strong> and <strong>DMA-generated migration intelligence</strong>.
 </p>
-<h3>Category 1: Script-Generated Analytics (DynaBridge Migration Intelligence)</h3>
+<h3>Category 1: Script-Generated Analytics (DMA Migration Intelligence)</h3>
 <p>
 These files are <strong>created by the export script</strong> by running SPL queries against Splunk's internal indexes (<code><em>audit</code>, <code></em>internal</code>). They provide migration-specific insights that don't exist natively in Splunk.
 </p>
@@ -467,7 +467,7 @@ These are <strong>direct copies</strong> of Splunk configuration files from the 
 </table>
 <h3>Why This Matters</h3>
 <ol>
-<li><strong>Script-Generated Analytics</strong> = <strong>Unique DynaBridge Value</strong></li>
+<li><strong>Script-Generated Analytics</strong> = <strong>Unique DMA Value</strong></li>
 </ol>
 <ul>
 <li>These don't exist in Splunk natively</li>
@@ -489,7 +489,7 @@ Every export MUST include a <code>manifest.json</code> at the root with this exa
 </p>
 <pre><code class="language-json">{
   &quot;schema_version&quot;: &quot;4.0&quot;,
-  &quot;export_tool&quot;: &quot;dynabridge-splunk-export&quot;,
+  &quot;export_tool&quot;: &quot;dma-splunk-export&quot;,
   &quot;export_tool_version&quot;: &quot;4.0.0&quot;,
   &quot;export_timestamp&quot;: &quot;2025-12-03T14:25:30Z&quot;,
   &quot;export_duration_seconds&quot;: 847,
@@ -740,7 +740,7 @@ The <code><em>anonymization</em>report.json</code> file is <strong>only present 
     &quot;ip_addresses&quot;: &quot;all_redacted&quot;
   },
   &quot;transformations&quot;: {
-    &quot;emails&quot;: &quot;original@domain.com → user######@anon.dynabridge.local&quot;,
+    &quot;emails&quot;: &quot;original@domain.com → user######@anon.dma.local&quot;,
     &quot;hostnames&quot;: &quot;server.example.com → host-########.anon.local&quot;,
     &quot;ipv4&quot;: &quot;x.x.x.x → [IP-REDACTED]&quot;,
     &quot;ipv6&quot;: &quot;xxxx:xxxx:... → [IPv6-REDACTED]&quot;
@@ -922,7 +922,7 @@ All dashboard XML files must be valid Splunk SimpleXML:
 <hr>
 <h2>Validation Rules</h2>
 <p>
-DynaBridge validates exports against these rules:
+DMA validates exports against these rules:
 </p>
 <h3>MUST Have (Export Fails Without These)</h3>
 <ol>
@@ -934,7 +934,7 @@ DynaBridge validates exports against these rules:
 <h3>SHOULD Have (Warnings If Missing)</h3>
 <ol>
 <li><code>export.log</code> for troubleshooting</li>
-<li><code>dynabridge-env-summary.md</code> for human review</li>
+<li><code>dma-env-summary.md</code> for human review</li>
 <li><code>manifest.json.statistics</code> section populated</li>
 <li><code>manifest.json.usage_intelligence</code> section (for migration prioritization)</li>
 </ol>
@@ -994,7 +994,7 @@ Example for missing RBAC:
 <p>
 The smallest valid export contains:
 </p>
-<pre><code>dynabridge_export_splunk01_20251203_142530.tar.gz
+<pre><code>dma_export_splunk01_20251203_142530.tar.gz
 ├── manifest.json
 ├── _systeminfo/
 │   └── environment.json
@@ -1004,7 +1004,7 @@ With <code>manifest.json</code>:
 </p>
 <pre><code class="language-json">{
   &quot;schema_version&quot;: &quot;4.0&quot;,
-  &quot;export_tool&quot;: &quot;dynabridge-splunk-export&quot;,
+  &quot;export_tool&quot;: &quot;dma-splunk-export&quot;,
   &quot;export_tool_version&quot;: &quot;4.0.0&quot;,
   &quot;export_timestamp&quot;: &quot;2025-12-03T14:25:30Z&quot;,
   &quot;source&quot;: {
@@ -1020,11 +1020,11 @@ With <code>manifest.json</code>:
   }
 }</code></pre>
 <hr>
-<h2>DynaBridge Parser Contract</h2>
+<h2>DMA Parser Contract</h2>
 <p>
-DynaBridge guarantees it can parse any export conforming to this schema:
+DMA guarantees it can parse any export conforming to this schema:
 </p>
-<pre><code class="language-typescript">interface DynaBridgeExport {
+<pre><code class="language-typescript">interface DMAExport {
   manifest: ExportManifest;           // Always present
   systemInfo: SystemInfo;             // Always present
   apps: Map&lt;string, AppExport&gt;;       // May be empty
@@ -1046,7 +1046,7 @@ The parser handles:
 
     <footer class="footer">
         <div class="footer-content">
-            <div class="footer-logo"><span class="highlight">Dyna</span>Bridge for Splunk</div>
+            <div class="footer-logo">Dynatrace Migration Assistant</div>
             <p>Migration intelligence for Splunk to Dynatrace Gen3 Grail</p>
             <div class="footer-links">
                 <a href="README-SPLUNK-ENTERPRISE.html">Enterprise Guide</a>
@@ -1054,7 +1054,7 @@ The parser handles:
                 <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics</a>
                 <a href="EXPORT-SCHEMA.html">Schema</a>
             </div>
-            <p class="footer-copyright">DynaBridge Project &bull; Built for Dynatrace Gen3 Platform</p>
+            <p class="footer-copyright">DMA Project &bull; Built for Dynatrace Gen3 Platform</p>
         </div>
     </footer>
 </body>

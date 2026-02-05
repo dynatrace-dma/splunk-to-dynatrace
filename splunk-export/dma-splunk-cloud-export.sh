@@ -9,7 +9,7 @@ fi
 
 ################################################################################
 #
-#  DynaBridge Splunk Cloud Export Script v4.2.4
+#  DMA Splunk Cloud Export Script v4.2.4
 #
 #  v4.2.4 Changes:
 #    - Anonymization now creates TWO archives: original (untouched) + _masked (anonymized)
@@ -26,10 +26,10 @@ fi
 #
 #  This script collects configurations, dashboards, alerts, users, and usage
 #  analytics from your Splunk Cloud environment via REST API to enable migration
-#  planning and execution using the DynaBridge for Splunk application.
+#  planning and execution using the Dynatrace Migration Assistant application.
 #
 #  IMPORTANT: This script is for SPLUNK CLOUD only. For Splunk Enterprise,
-#  use dynabridge-splunk-export.sh instead.
+#  use dma-splunk-export.sh instead.
 #
 ################################################################################
 #
@@ -95,7 +95,7 @@ fi
 #         -H "Authorization: Bearer YOUR-TOKEN"
 #
 #  NON-INTERACTIVE MODE (for automation):
-#    ./dynabridge-splunk-cloud-export.sh \
+#    ./dma-splunk-cloud-export.sh \
 #      --stack acme-corp.splunkcloud.com \
 #      --token "your-api-token" \
 #      --output /path/to/export
@@ -110,7 +110,7 @@ set -o pipefail  # Fail on pipe errors
 # =============================================================================
 
 SCRIPT_VERSION="4.3.0"
-SCRIPT_NAME="DynaBridge Splunk Cloud Export"
+SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
 RED='\033[0;31m'
@@ -218,7 +218,7 @@ SPLUNK_CLOUD_BLOCKED_ENDPOINTS=(
 # ENTERPRISE RESILIENCE CONFIGURATION (v4.0.0)
 # =============================================================================
 # These settings enable enterprise-scale exports (4000+ dashboards, 10K+ alerts)
-# Override via environment variables: BATCH_SIZE=50 ./dynabridge-splunk-cloud-export.sh
+# Override via environment variables: BATCH_SIZE=50 ./dma-splunk-cloud-export.sh
 
 # Pagination settings - OPTIMIZED for large enterprise exports (v4.2.5)
 BATCH_SIZE=${BATCH_SIZE:-250}              # Items per API request (increased from 100)
@@ -448,7 +448,7 @@ init_debug_log() {
   if [ "$DEBUG_MODE" = "true" ]; then
     DEBUG_LOG_FILE="${EXPORT_DIR:-/tmp}/export_debug.log"
     echo "===============================================================================" > "$DEBUG_LOG_FILE"
-    echo "DynaBridge Cloud Export Debug Log" >> "$DEBUG_LOG_FILE"
+    echo "DMA Cloud Export Debug Log" >> "$DEBUG_LOG_FILE"
     echo "Started: $(date -Iseconds 2>/dev/null || date)" >> "$DEBUG_LOG_FILE"
     echo "Script Version: $SCRIPT_VERSION" >> "$DEBUG_LOG_FILE"
     echo "===============================================================================" >> "$DEBUG_LOG_FILE"
@@ -1732,14 +1732,14 @@ show_introduction() {
     "  • Props and Transforms configurations (via REST)" \
     "" \
     "${BOLD}Output:${NC}" \
-    "  A .tar.gz archive compatible with DynaBridge for Splunk app"
+    "  A .tar.gz archive compatible with Dynatrace Migration Assistant app"
 
   print_info_box "IMPORTANT: THIS IS FOR SPLUNK CLOUD ONLY" \
     "" \
     "${YELLOW}⚠  This script works with Splunk Cloud (Classic & Victoria)${NC}" \
     "" \
     "If you have ${BOLD}Splunk Enterprise${NC} (on-premises), please use:" \
-    "  ${GREEN}./dynabridge-splunk-export.sh${NC}" \
+    "  ${GREEN}./dma-splunk-export.sh${NC}" \
     "" \
     "This script uses 100% REST API - no file system access needed."
 
@@ -2490,18 +2490,18 @@ select_data_categories() {
 setup_export_directory() {
   TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
   local stack_clean=$(echo "$SPLUNK_STACK" | sed 's/\.splunkcloud\.com//' | sed 's/[^a-zA-Z0-9_-]/_/g')
-  EXPORT_NAME="dynabridge_cloud_export_${stack_clean}_${TIMESTAMP}"
+  EXPORT_NAME="dma_cloud_export_${stack_clean}_${TIMESTAMP}"
   EXPORT_DIR="./${EXPORT_NAME}"
   LOG_FILE="${EXPORT_DIR}/_export.log"
 
   mkdir -p "$EXPORT_DIR"
-  # DynaBridge analytics - all migration-specific data collected by DynaBridge
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/system_info"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/rbac"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/indexes"
+  # DMA analytics - all migration-specific data collected by DMA
+  mkdir -p "$EXPORT_DIR/dma_analytics"
+  mkdir -p "$EXPORT_DIR/dma_analytics/system_info"
+  mkdir -p "$EXPORT_DIR/dma_analytics/rbac"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure"
+  mkdir -p "$EXPORT_DIR/dma_analytics/indexes"
   # Splunk configurations
   mkdir -p "$EXPORT_DIR/_configs"
   # NOTE: Dashboards are now stored in app-scoped folders (v2 structure)
@@ -2524,27 +2524,27 @@ collect_system_info() {
   local response
   response=$(api_call "/services/server/info" "GET" "output_mode=json")
   if [ $? -eq 0 ]; then
-    echo "$response" > "$EXPORT_DIR/dynabridge_analytics/system_info/server_info.json"
+    echo "$response" > "$EXPORT_DIR/dma_analytics/system_info/server_info.json"
     success "Server info collected"
   fi
 
   # Installed apps
   response=$(api_call "/services/apps/local" "GET" "output_mode=json&count=0")
   if [ $? -eq 0 ]; then
-    echo "$response" > "$EXPORT_DIR/dynabridge_analytics/system_info/installed_apps.json"
+    echo "$response" > "$EXPORT_DIR/dma_analytics/system_info/installed_apps.json"
     success "Installed apps collected"
   fi
 
   # License info (may be restricted)
   response=$(api_call "/services/licenser/licenses" "GET" "output_mode=json")
   if [ $? -eq 0 ]; then
-    echo "$response" > "$EXPORT_DIR/dynabridge_analytics/system_info/license_info.json"
+    echo "$response" > "$EXPORT_DIR/dma_analytics/system_info/license_info.json"
   fi
 
   # Server settings
   response=$(api_call "/services/server/settings" "GET" "output_mode=json")
   if [ $? -eq 0 ]; then
-    echo "$response" > "$EXPORT_DIR/dynabridge_analytics/system_info/server_settings.json"
+    echo "$response" > "$EXPORT_DIR/dma_analytics/system_info/server_settings.json"
   fi
 }
 
@@ -2559,7 +2559,7 @@ collect_configurations() {
   # Props, transforms, and savedsearches are collected PER-APP in collect_knowledge_objects()
   # and collect_alerts() functions. Including them here with /servicesNS/-/-/ would export
   # data from ALL apps (potentially 400+ apps) regardless of which apps the user selected.
-  # This caused DynaBridge to freeze when processing huge amounts of unexpected data.
+  # This caused DMA to freeze when processing huge amounts of unexpected data.
   #
   # Only indexes, inputs, and outputs are truly system-wide and make sense to collect globally.
   local configs=("indexes" "inputs" "outputs")
@@ -2598,7 +2598,7 @@ collect_dashboards() {
   fi
 
   # Save master list
-  echo "$response" > "$EXPORT_DIR/dynabridge_analytics/system_info/all_dashboards.json"
+  echo "$response" > "$EXPORT_DIR/dma_analytics/system_info/all_dashboards.json"
 
   # Process each app
   for app in "${SELECTED_APPS[@]}"; do
@@ -2856,23 +2856,23 @@ collect_rbac() {
     if [ -n "$app_filter" ]; then
       # Use a search to find users who accessed these apps in the usage period
       local user_search="search index=_audit action=search ${app_filter} earliest=-${USAGE_PERIOD} | stats count as activity, latest(_time) as last_active by user | sort -activity"
-      run_analytics_search "$user_search" "$EXPORT_DIR/dynabridge_analytics/rbac/users_active_in_apps.json" "Users active in selected apps"
+      run_analytics_search "$user_search" "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" "Users active in selected apps"
 
       # Count users from the result
-      if [ -f "$EXPORT_DIR/dynabridge_analytics/rbac/users_active_in_apps.json" ] && $HAS_JQ; then
-        STATS_USERS=$(jq '.results | length // 0' "$EXPORT_DIR/dynabridge_analytics/rbac/users_active_in_apps.json" 2>/dev/null || echo "0")
+      if [ -f "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" ] && $HAS_JQ; then
+        STATS_USERS=$(jq '.results | length // 0' "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" 2>/dev/null || echo "0")
         success "Collected $STATS_USERS users with activity in selected apps"
       fi
     fi
 
     # Create a placeholder for full users.json explaining the scoped collection
-    echo "{\"scoped\": true, \"reason\": \"App-scoped mode - only users with activity in selected apps collected\", \"apps\": [$(printf '\"%s\",' "${SELECTED_APPS[@]}" | sed 's/,$//')]}" > "$EXPORT_DIR/dynabridge_analytics/rbac/users.json"
+    echo "{\"scoped\": true, \"reason\": \"App-scoped mode - only users with activity in selected apps collected\", \"apps\": [$(printf '\"%s\",' "${SELECTED_APPS[@]}" | sed 's/,$//')]}" > "$EXPORT_DIR/dma_analytics/rbac/users.json"
 
   else
     # Full collection mode - get all users
     response=$(api_call "/services/authentication/users" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/dynabridge_analytics/rbac/users.json"
+      echo "$response" > "$EXPORT_DIR/dma_analytics/rbac/users.json"
 
       if $HAS_JQ; then
         STATS_USERS=$(echo "$response" | jq '.entry | length' 2>/dev/null)
@@ -2886,7 +2886,7 @@ collect_rbac() {
   # Roles - always collect (relatively small dataset)
   response=$(api_call "/services/authorization/roles" "GET" "output_mode=json&count=0")
   if [ $? -eq 0 ]; then
-    echo "$response" > "$EXPORT_DIR/dynabridge_analytics/rbac/roles.json"
+    echo "$response" > "$EXPORT_DIR/dma_analytics/rbac/roles.json"
     log "Collected roles"
   fi
 
@@ -2894,7 +2894,7 @@ collect_rbac() {
   if [ "$SCOPE_TO_APPS" != "true" ]; then
     response=$(api_call "/services/admin/SAML-groups" "GET" "output_mode=json")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/dynabridge_analytics/rbac/saml_groups.json"
+      echo "$response" > "$EXPORT_DIR/dma_analytics/rbac/saml_groups.json"
       log "Collected SAML groups"
     fi
   fi
@@ -2902,7 +2902,7 @@ collect_rbac() {
   # Current user context - always useful
   response=$(api_call "/services/authentication/current-context" "GET" "output_mode=json")
   if [ $? -eq 0 ]; then
-    echo "$response" > "$EXPORT_DIR/dynabridge_analytics/rbac/current_context.json"
+    echo "$response" > "$EXPORT_DIR/dma_analytics/rbac/current_context.json"
   fi
 }
 
@@ -3147,14 +3147,14 @@ collect_usage_analytics() {
   # OPTIMIZED: Moved user filter to search-time, removed redundant info=granted, changed latest to max
   run_analytics_search \
     "index=_audit action=search search_type=dashboard ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" savedsearch_name=* | stats count as view_count, dc(user) as unique_users, max(_time) as last_viewed by app, savedsearch_name | rename savedsearch_name as dashboard | sort -view_count | head 100" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_top100.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_top100.json" \
     "Top 100 viewed dashboards"
 
   # Dashboard view trends (weekly breakdown via _audit)
   # OPTIMIZED: Moved filters to search-time
   run_analytics_search \
     "index=_audit action=search search_type=dashboard ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" savedsearch_name=* | bucket _time span=1w | stats count as views by _time, app, savedsearch_name | rename savedsearch_name as dashboard | sort -_time | head 200" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_trend.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_trend.json" \
     "Dashboard view trends"
 
   # Dashboard view counts - simplified query (correlation done in Curator app)
@@ -3162,7 +3162,7 @@ collect_usage_analytics() {
   # The Curator app will correlate this with the dashboard list from REST API
   run_analytics_search \
     "index=_audit action=search search_type=dashboard ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" savedsearch_name=* | stats count as views by app, savedsearch_name | rename savedsearch_name as dashboard" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_view_counts.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_view_counts.json" \
     "Dashboard view counts"
 
   # Legacy query for backwards compatibility (may fail in Splunk Cloud)
@@ -3172,13 +3172,13 @@ collect_usage_analytics() {
   fi
   run_analytics_search \
     "| rest /servicesNS/-/-/data/ui/views | rename title as dashboard, eai:acl.app as app | table dashboard, app $rest_app_filter | join type=left dashboard [search index=_audit action=search search_type=dashboard ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" | stats count as views by savedsearch_name | rename savedsearch_name as dashboard] | where isnull(views) OR views=0 | table dashboard, app" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboards_never_viewed.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json" \
     "Never viewed dashboards (legacy)"
 
   # If SPL failed (uses | rest), use fallback - but we already have view counts
-  if grep -q '"error"' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboards_never_viewed.json" 2>/dev/null; then
+  if grep -q '"error"' "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json" 2>/dev/null; then
     info "Legacy never-viewed query failed (expected in Splunk Cloud) - using view counts file instead"
-    collect_dashboards_never_viewed_fallback "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboards_never_viewed.json"
+    collect_dashboards_never_viewed_fallback "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json"
   fi
 
   success "Dashboard statistics collected"
@@ -3195,14 +3195,14 @@ collect_usage_analytics() {
   # OPTIMIZED: Moved user filter to search-time, changed latest to max
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" | stats count as searches, dc(search) as unique_searches, max(_time) as last_active by user | sort -searches | head 100" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_most_active.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" \
     "Most active users"
 
   # Activity by role (excluding system user)
   # Note: Uses | rest which may fail in Splunk Cloud
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" | stats count by user | join user [| rest /services/authentication/users | rename title as user | table user, roles] | stats sum(count) as searches by roles" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/activity_by_role.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/activity_by_role.json" \
     "Activity by role"
 
   # Users with no activity in period (excluding system user from results)
@@ -3210,14 +3210,14 @@ collect_usage_analytics() {
   # Note: Uses | rest which may fail in Splunk Cloud
   run_analytics_search \
     "| rest /services/authentication/users | rename title as user | where user!=\"splunk-system-user\" | table user, realname, email | join type=left user [index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count by user] | where isnull(count) | table user, realname, email" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_inactive.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" \
     "Inactive users"
 
   # Daily active users trend (excluding system user)
   # OPTIMIZED: Moved user filter to search-time
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=\"splunk-system-user\" | timechart span=1d dc(user) as daily_active_users" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_active_users.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/daily_active_users.json" \
     "Daily active users"
 
   success "User activity collected"
@@ -3230,30 +3230,30 @@ collect_usage_analytics() {
   if [ "$SKIP_INTERNAL" = "true" ]; then
     info "Skipping alert execution statistics (_internal index restricted)"
     # Create placeholder files explaining the skip
-    echo '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud", "alternative": "Check Monitoring Console in Splunk Cloud for scheduler statistics"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_most_fired.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_with_actions.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_failed.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_never_fired.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_firing_trend.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud", "alternative": "Check Monitoring Console in Splunk Cloud for scheduler statistics"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_most_fired.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_with_actions.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_failed.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_never_fired.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/alert_firing_trend.json"
   else
     progress "Collecting alert execution statistics..."
 
     # Most fired alerts - in scoped mode, filter by app
     run_analytics_search \
       "search index=_internal sourcetype=scheduler status=success savedsearch_name=* ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count as executions, latest(_time) as last_run by savedsearch_name, app | sort -executions | head 100" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_most_fired.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_most_fired.json" \
       "Most fired alerts"
 
     # Alerts with triggered actions
     run_analytics_search \
       "search index=_internal sourcetype=scheduler result_count>0 ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count as triggers, sum(result_count) as total_results by savedsearch_name, app | sort -triggers | head 50" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_with_actions.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_with_actions.json" \
       "Alerts with actions"
 
     # Failed alert executions
     run_analytics_search \
       "search index=_internal sourcetype=scheduler status=failed ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count as failures, latest(_time) as last_failure by savedsearch_name, app | sort -failures" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_failed.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_failed.json" \
       "Failed alerts"
 
     # Alerts that never fired - in scoped mode, filter REST results by app
@@ -3264,13 +3264,13 @@ collect_usage_analytics() {
     fi
     run_analytics_search \
       "| rest /servicesNS/-/-/saved/searches | search is_scheduled=1 | rename title as savedsearch_name $alerts_rest_filter | table savedsearch_name, eai:acl.app | join type=left savedsearch_name [search index=_internal sourcetype=scheduler ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count by savedsearch_name] | where isnull(count) | table savedsearch_name, eai:acl.app" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_never_fired.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_never_fired.json" \
       "Never fired alerts"
 
     # Alert firing trend
     run_analytics_search \
       "search index=_internal sourcetype=scheduler status=success ${app_search_filter}earliest=-${USAGE_PERIOD} | timechart span=1d count by savedsearch_name | head 20" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_firing_trend.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_firing_trend.json" \
       "Alert firing trend"
 
     success "Alert statistics collected"
@@ -3286,28 +3286,28 @@ collect_usage_analytics() {
   # OPTIMIZED: Added | sample 10 before expensive rex extraction, estimate x10 for final counts
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 10 | rex field=search \"\\|\\s*(?<command>\\w+)\" | stats count as sample_count by command | eval estimated_count=sample_count*10 | sort -estimated_count | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/search_commands_popular.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/search_commands_popular.json" \
     "Popular search commands"
 
   # Search types breakdown
   # OPTIMIZED: Moved filter to search-time (action=search is indexed)
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count by search_type | sort -count" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/search_by_type.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/search_by_type.json" \
     "Search by type"
 
   # Slow searches
   # OPTIMIZED: Moved total_run_time>30 to search-time, added | fields early to reduce memory
   run_analytics_search \
     "index=_audit action=search total_run_time>30 ${app_search_filter}earliest=-${USAGE_PERIOD} | fields total_run_time, search, app | stats avg(total_run_time) as avg_time, count as runs by search, app | sort -avg_time | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/searches_slow.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/searches_slow.json" \
     "Slow searches"
 
   # Most searched indexes - in scoped mode, only from searches in selected apps
   # OPTIMIZED: Added | sample 20 before expensive rex extraction, estimate x20 for final counts
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"index\\s*=\\s*(?<searched_index>\\w+)\" | stats count as sample_count by searched_index | eval estimated_count=sample_count*20 | sort -estimated_count | head 30" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_searched.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_searched.json" \
     "Indexes searched"
 
   success "Search patterns collected"
@@ -3321,23 +3321,23 @@ collect_usage_analytics() {
   # OPTIMIZED: Added | sample 20 before expensive rex extraction, estimate x20 for final counts
   run_analytics_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"sourcetype\\s*=\\s*(?<st>\\w+)\" | stats count as sample_count by st | eval estimated_count=sample_count*20 | sort -estimated_count | head 30" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/sourcetypes_searched.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" \
     "Sourcetypes searched"
 
   # Index size and event counts (REST API - works in Cloud)
   run_analytics_search \
     "| rest /services/data/indexes | table title, currentDBSizeMB, totalEventCount, maxTime, minTime | sort -currentDBSizeMB" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/index_sizes.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/index_sizes.json" \
     "Index sizes"
 
   if [ "$SKIP_INTERNAL" = "true" ]; then
     info "Skipping index query patterns (_internal index restricted)"
-    echo '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_queried.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_queried.json"
   else
     # Index query patterns (requires _internal)
     run_analytics_search \
       "search index=_internal source=*metrics.log group=per_index_thruput earliest=-${USAGE_PERIOD} | stats sum(kb) as total_kb, avg(ev) as avg_events by series | eval total_gb=round(total_kb/1024/1024,2) | sort -total_gb | head 30" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_queried.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_queried.json" \
       "Indexes queried"
   fi
 
@@ -3351,63 +3351,63 @@ collect_usage_analytics() {
     info "Skipping daily volume statistics (_internal index restricted)"
     info "  → Use Splunk Cloud Monitoring Console for license usage data"
     # Create placeholder files
-    echo '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud", "alternative": "Use Monitoring Console > License Usage"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_by_index.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_by_sourcetype.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_events_by_index.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/hourly_volume_pattern.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_indexes_by_volume.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_sourcetypes_by_volume.json"
-    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_hosts_by_volume.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud", "alternative": "Use Monitoring Console > License Usage"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_index.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_sourcetype.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/daily_events_by_index.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/hourly_volume_pattern.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json"
+    echo '{"skipped": true, "reason": "_internal index not accessible"}' > "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json"
   else
     progress "Collecting daily volume statistics (last 30 days)..."
 
     # Daily volume by index (GB per day)
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by idx | eval gb=round(bytes/1024/1024/1024,2) | fields _time, idx, gb" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_by_index.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_index.json" \
       "Daily volume by index (GB)"
 
     # Daily volume by sourcetype
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by st | eval gb=round(bytes/1024/1024/1024,2) | fields _time, st, gb" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_by_sourcetype.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_sourcetype.json" \
       "Daily volume by sourcetype (GB)"
 
     # Total daily volume (for licensing)
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes | eval gb=round(bytes/1024/1024/1024,2) | stats avg(gb) as avg_daily_gb, max(gb) as peak_daily_gb, sum(gb) as total_30d_gb" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" \
       "Daily volume summary"
 
     # Daily event count by index
     run_analytics_search \
       "search index=_internal source=*metrics.log group=per_index_thruput earliest=-30d@d | timechart span=1d sum(ev) as events by series | rename series as index" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_events_by_index.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_events_by_index.json" \
       "Daily event counts by index"
 
     # Hourly pattern analysis (to identify peak hours)
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-7d | eval hour=strftime(_time, \"%H\") | stats sum(b) as bytes by hour | eval gb=round(bytes/1024/1024/1024,2) | sort hour" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/hourly_volume_pattern.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/hourly_volume_pattern.json" \
       "Hourly volume pattern (last 7 days)"
 
     # Top 20 indexes by daily average volume
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by idx | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_indexes_by_volume.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" \
       "Top 20 indexes by daily average volume"
 
     # Top 20 sourcetypes by daily average volume
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by st | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_sourcetypes_by_volume.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" \
       "Top 20 sourcetypes by daily average volume"
 
     # Volume by host (top 50)
     run_analytics_search \
       "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by h | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 50" \
-      "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_hosts_by_volume.json" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" \
       "Top 50 hosts by daily average volume"
 
     success "Daily volume statistics collected"
@@ -3419,48 +3419,48 @@ collect_usage_analytics() {
   progress "Collecting ingestion infrastructure information..."
 
   # Create subdirectory for ingestion infrastructure
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure"
 
   # Connection type breakdown (UF cooked vs HF raw vs other)
   run_analytics_search \
     "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as unique_hosts, sum(kb) as total_kb by connectionType | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" \
     "Ingestion by connection type (UF/HF/other)"
 
   # Input method breakdown (splunktcp, http, udp, tcp, monitor, etc.)
   run_analytics_search \
     'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | rex field=series "^(?<input_type>[^:]+):" | stats sum(kb) as total_kb, dc(series) as unique_sources by input_type | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2) | sort - total_kb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" \
     "Ingestion by input method"
 
   # HEC (HTTP Event Collector) usage
   run_analytics_search \
     'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput series=http:* earliest=-7d | stats sum(kb) as total_kb, dc(series) as token_count | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" \
     "HTTP Event Collector usage"
 
   # Forwarding hosts inventory (unique hosts sending data)
   run_analytics_search \
     "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats sum(kb) as total_kb, latest(_time) as last_seen, values(connectionType) as connection_types by sourceHost | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb | head 500" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/forwarding_hosts.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/forwarding_hosts.json" \
     "Forwarding hosts inventory (top 500)"
 
   # Sourcetype categorization (detect OTel, cloud, security, etc.)
   run_analytics_search \
     'search index=_internal source=*license_usage.log type=Usage earliest=-30d | stats sum(b) as bytes, dc(h) as unique_hosts by st | eval daily_avg_gb=round((bytes/30)/1024/1024/1024,2) | eval category=case(match(st,"^otel|^otlp|opentelemetry"),"opentelemetry", match(st,"^aws:|^azure:|^gcp:|^cloud"),"cloud", match(st,"^WinEventLog|^windows|^wmi"),"windows", match(st,"^linux|^syslog|^nix"),"linux_unix", match(st,"^cisco:|^pan:|^juniper:|^fortinet:|^f5:|^checkpoint"),"network_security", match(st,"^access_combined|^nginx|^apache|^iis"),"web", match(st,"^docker|^kube|^container"),"containers", 1=1,"other") | stats sum(daily_avg_gb) as daily_avg_gb, sum(unique_hosts) as unique_hosts, values(st) as sourcetypes by category | sort - daily_avg_gb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" \
     "Ingestion by sourcetype category"
 
   # Syslog inputs (UDP/TCP) - if visible
   run_analytics_search \
     'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | search series=udp:* OR series=tcp:* | stats sum(kb) as total_kb by series | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/syslog_inputs.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/syslog_inputs.json" \
     "Syslog inputs (UDP/TCP)"
 
   # Summary: Total forwarding infrastructure
   run_analytics_search \
     "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as total_forwarding_hosts, sum(kb) as total_kb | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/summary.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" \
     "Ingestion infrastructure summary"
 
   success "Ingestion infrastructure information collected"
@@ -3474,38 +3474,38 @@ collect_usage_analytics() {
   # Try SPL first, fall back to REST API if restricted
   run_analytics_search \
     "| rest /servicesNS/-/-/data/ui/views | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing | rename title as dashboard, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_ownership.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" \
     "Dashboard ownership mapping"
 
   # If SPL failed, try REST API fallback
-  if grep -q '"error"' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_ownership.json" 2>/dev/null; then
+  if grep -q '"error"' "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" 2>/dev/null; then
     info "SPL | rest failed for dashboard ownership, trying REST API fallback..."
-    collect_dashboard_ownership_rest "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_ownership.json"
+    collect_dashboard_ownership_rest "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json"
   fi
 
   # Alert/Saved search ownership - maps each alert to its owner
   # Try SPL first, fall back to REST API if restricted
   run_analytics_search \
     "| rest /servicesNS/-/-/saved/searches | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track | rename title as alert_name, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_ownership.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json" \
     "Alert/saved search ownership mapping"
 
   # If SPL failed, try REST API fallback
-  if grep -q '"error"' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_ownership.json" 2>/dev/null; then
+  if grep -q '"error"' "$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json" 2>/dev/null; then
     info "SPL | rest failed for alert ownership, trying REST API fallback..."
-    collect_alert_ownership_rest "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_ownership.json"
+    collect_alert_ownership_rest "$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json"
   fi
 
   # Ownership summary by user (how many dashboards and alerts each user owns)
   run_analytics_search \
     "| rest /servicesNS/-/-/data/ui/views | stats count as dashboards by eai:acl.owner | rename eai:acl.owner as owner | append [| rest /servicesNS/-/-/saved/searches | stats count as alerts by eai:acl.owner | rename eai:acl.owner as owner] | stats sum(dashboards) as dashboards, sum(alerts) as alerts by owner | sort - dashboards" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ownership_summary.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ownership_summary.json" \
     "Ownership summary by user"
 
   # If SPL failed (uses | rest), try computing from already-collected REST data
-  if grep -q '"error"' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ownership_summary.json" 2>/dev/null; then
+  if grep -q '"error"' "$EXPORT_DIR/dma_analytics/usage_analytics/ownership_summary.json" 2>/dev/null; then
     info "SPL search failed for ownership summary, computing from REST data..."
-    compute_ownership_summary_from_rest "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ownership_summary.json"
+    compute_ownership_summary_from_rest "$EXPORT_DIR/dma_analytics/usage_analytics/ownership_summary.json"
   fi
 
   success "Ownership information collected"
@@ -3516,11 +3516,11 @@ collect_usage_analytics() {
   progress "Collecting saved search metadata..."
 
   api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
 
   run_analytics_search \
     "| rest /servicesNS/-/-/saved/searches | stats count by eai:acl.owner | sort -count | head 20" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/saved_searches_by_owner.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_by_owner.json" \
     "Saved searches by owner"
 
   success "Saved search metadata collected"
@@ -3531,14 +3531,14 @@ collect_usage_analytics() {
   progress "Collecting scheduler statistics..."
 
   api_call "/services/search/jobs" "GET" "output_mode=json&count=100" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/recent_searches.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/recent_searches.json" 2>/dev/null
 
   api_call "/services/kvstore/status" "GET" "output_mode=json" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
 
   run_analytics_search \
     "search index=_internal sourcetype=scheduler earliest=-${USAGE_PERIOD} | stats count as total, count(eval(status=\"success\")) as success, count(eval(status=\"failed\")) as failed by date_hour | sort date_hour" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/scheduler_load.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/scheduler_load.json" \
     "Scheduler load"
 
   success "Scheduler statistics collected"
@@ -3549,7 +3549,7 @@ collect_usage_analytics() {
   echo ""
   progress "Generating usage intelligence summary..."
 
-  local summary_file="$EXPORT_DIR/dynabridge_analytics/usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md"
+  local summary_file="$EXPORT_DIR/dma_analytics/usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md"
 
   cat > "$summary_file" << 'USAGE_EOF'
 # Usage Intelligence Summary
@@ -3588,7 +3588,7 @@ This export includes comprehensive usage analytics to help prioritize your migra
 4. **Phase 4**: Review never-used items with stakeholders
 
 ---
-*Generated by DynaBridge Splunk Cloud Export*
+*Generated by DMA Splunk Cloud Export*
 USAGE_EOF
 
   success "Usage intelligence summary generated"
@@ -3824,8 +3824,8 @@ run_analytics_search_with_fallback() {
 # Compute ownership summary from already-collected REST API data
 compute_ownership_summary_from_rest() {
   local output_file="$1"
-  local dashboard_file="$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_ownership.json"
-  local alert_file="$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_ownership.json"
+  local dashboard_file="$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json"
+  local alert_file="$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json"
 
   info "Computing ownership summary from REST API data..."
 
@@ -3859,8 +3859,8 @@ compute_ownership_summary_from_rest() {
 # Collect dashboards never viewed - fallback using REST API data
 collect_dashboards_never_viewed_fallback() {
   local output_file="$1"
-  local dashboard_ownership_file="$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_ownership.json"
-  local dashboard_views_file="$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_top100.json"
+  local dashboard_ownership_file="$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json"
+  local dashboard_views_file="$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_top100.json"
 
   info "Computing dashboards never viewed using REST API data..."
 
@@ -3930,23 +3930,23 @@ collect_indexes() {
     local app_filter=$(get_app_filter "app")
     if [ -n "$app_filter" ]; then
       local index_search="search index=_audit action=search ${app_filter} earliest=-${USAGE_PERIOD} | rex field=search \"index\\s*=\\s*(?<idx>[\\w_-]+)\" | where isnotnull(idx) | stats count as searches, dc(user) as users by idx | sort -searches"
-      run_analytics_search "$index_search" "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_used_by_apps.json" "Indexes used by selected apps"
+      run_analytics_search "$index_search" "$EXPORT_DIR/dma_analytics/indexes/indexes_used_by_apps.json" "Indexes used by selected apps"
 
       # Count indexes from the result
-      if [ -f "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_used_by_apps.json" ] && $HAS_JQ; then
-        STATS_INDEXES=$(jq '.results | length // 0' "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_used_by_apps.json" 2>/dev/null || echo "0")
+      if [ -f "$EXPORT_DIR/dma_analytics/indexes/indexes_used_by_apps.json" ] && $HAS_JQ; then
+        STATS_INDEXES=$(jq '.results | length // 0' "$EXPORT_DIR/dma_analytics/indexes/indexes_used_by_apps.json" 2>/dev/null || echo "0")
         success "Collected $STATS_INDEXES indexes used by selected apps"
       fi
     fi
 
     # Create a placeholder for full indexes.json explaining the scoped collection
-    echo "{\"scoped\": true, \"reason\": \"App-scoped mode - only indexes used by selected apps collected\", \"apps\": [$(printf '\"%s\",' "${SELECTED_APPS[@]}" | sed 's/,$//')]}" > "$EXPORT_DIR/dynabridge_analytics/indexes/indexes.json"
+    echo "{\"scoped\": true, \"reason\": \"App-scoped mode - only indexes used by selected apps collected\", \"apps\": [$(printf '\"%s\",' "${SELECTED_APPS[@]}" | sed 's/,$//')]}" > "$EXPORT_DIR/dma_analytics/indexes/indexes.json"
 
   else
     # Full collection mode - get all indexes
     response=$(api_call "/services/data/indexes" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/dynabridge_analytics/indexes/indexes.json"
+      echo "$response" > "$EXPORT_DIR/dma_analytics/indexes/indexes.json"
 
       if $HAS_JQ; then
         STATS_INDEXES=$(echo "$response" | jq '.entry | length' 2>/dev/null)
@@ -3959,7 +3959,7 @@ collect_indexes() {
     # Extended stats (may be limited in cloud) - only in full mode
     response=$(api_call "/services/data/indexes-extended" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
-      echo "$response" > "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_extended.json"
+      echo "$response" > "$EXPORT_DIR/dma_analytics/indexes/indexes_extended.json"
     fi
   fi
 }
@@ -4101,10 +4101,10 @@ except:
 generate_summary() {
   progress "Generating summary report..."
 
-  local summary_file="$EXPORT_DIR/dynabridge-env-summary.md"
+  local summary_file="$EXPORT_DIR/dma-env-summary.md"
 
   cat > "$summary_file" << EOF
-# DynaBridge Splunk Cloud Environment Summary
+# DMA Splunk Cloud Environment Summary
 
 **Export Date**: $(date '+%Y-%m-%d %H:%M:%S %Z')
 **Export Script Version**: $SCRIPT_VERSION
@@ -4187,14 +4187,14 @@ $(if [ ${#WARNINGS_LOG[@]} -eq 0 ]; then echo "No warnings."; else for warn in "
 
 ## Next Steps
 
-1. **Upload to DynaBridge**: Upload the \`.tar.gz\` file to DynaBridge in Dynatrace
+1. **Upload to Dynatrace Migration Assistant**: Upload the \`.tar.gz\` file to Dynatrace Migration Assistant
 2. **Review Dashboards**: Check the dashboard conversion preview
 3. **Review Alerts**: Check alert conversion recommendations
 4. **Plan Data Ingestion**: Use OpenPipeline templates for log ingestion
 
 ---
 
-*Generated by DynaBridge Splunk Cloud Export Script v$SCRIPT_VERSION*
+*Generated by DMA Splunk Cloud Export Script v$SCRIPT_VERSION*
 EOF
 
   success "Summary report generated"
@@ -4203,7 +4203,7 @@ EOF
 generate_manifest() {
   progress "Generating manifest.json (standardized schema)..."
 
-  local manifest_file="$EXPORT_DIR/dynabridge_analytics/manifest.json"
+  local manifest_file="$EXPORT_DIR/dma_analytics/manifest.json"
 
   # Calculate export duration
   local export_duration=$(($(date +%s) - EXPORT_START_TIME))
@@ -4302,89 +4302,89 @@ generate_manifest() {
 
   # Build usage intelligence summary for programmatic access
   local usage_intel_json="{}"
-  if [ -d "$EXPORT_DIR/dynabridge_analytics/usage_analytics" ]; then
+  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
     progress "Extracting usage intelligence for manifest..."
 
     # Top 10 most viewed dashboards
     local top_dashboards="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_top100.json" ]; then
-      top_dashboards=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_views_top100.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_top100.json" ]; then
+      top_dashboards=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_views_top100.json" 2>/dev/null || echo "[]")
     fi
 
     # Top 10 most active users
     local top_users="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_most_active.json" ]; then
-      top_users=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_most_active.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" ]; then
+      top_users=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" 2>/dev/null || echo "[]")
     fi
 
     # Top 10 most fired alerts
     local top_alerts="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_most_fired.json" ]; then
-      top_alerts=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_most_fired.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_most_fired.json" ]; then
+      top_alerts=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_most_fired.json" 2>/dev/null || echo "[]")
     fi
 
     # Never viewed dashboards count
     local never_viewed_count=0
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboards_never_viewed.json" ]; then
-      never_viewed_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboards_never_viewed.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json" ]; then
+      never_viewed_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/dashboards_never_viewed.json" 2>/dev/null || echo "0")
     fi
 
     # Never fired alerts count
     local never_fired_count=0
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_never_fired.json" ]; then
-      never_fired_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_never_fired.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_never_fired.json" ]; then
+      never_fired_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_never_fired.json" 2>/dev/null || echo "0")
     fi
 
     # Inactive users count
     local inactive_users_count=0
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_inactive.json" ]; then
-      inactive_users_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_inactive.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" ]; then
+      inactive_users_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" 2>/dev/null || echo "0")
     fi
 
     # Failed alerts count
     local failed_alerts_count=0
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_failed.json" ]; then
-      failed_alerts_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alerts_failed.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_failed.json" ]; then
+      failed_alerts_count=$(jq -r '.results | length // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/alerts_failed.json" 2>/dev/null || echo "0")
     fi
 
     # Top searched sourcetypes
     local top_sourcetypes="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/sourcetypes_searched.json" ]; then
-      top_sourcetypes=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/sourcetypes_searched.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" ]; then
+      top_sourcetypes=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" 2>/dev/null || echo "[]")
     fi
 
     # Top searched indexes
     local top_indexes="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_searched.json" ]; then
-      top_indexes=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_searched.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_searched.json" ]; then
+      top_indexes=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_searched.json" 2>/dev/null || echo "[]")
     fi
 
     # Volume summary
     local avg_daily_gb="0"
     local peak_daily_gb="0"
     local total_30d_gb="0"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json" ]; then
-      avg_daily_gb=$(jq -r '.results[0].avg_daily_gb // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
-      peak_daily_gb=$(jq -r '.results[0].peak_daily_gb // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
-      total_30d_gb=$(jq -r '.results[0].total_30d_gb // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" ]; then
+      avg_daily_gb=$(jq -r '.results[0].avg_daily_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
+      peak_daily_gb=$(jq -r '.results[0].peak_daily_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
+      total_30d_gb=$(jq -r '.results[0].total_30d_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" 2>/dev/null || echo "0")
     fi
 
     # Top 10 indexes by volume
     local top_indexes_by_volume="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_indexes_by_volume.json" ]; then
-      top_indexes_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_indexes_by_volume.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" ]; then
+      top_indexes_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" 2>/dev/null || echo "[]")
     fi
 
     # Top 10 sourcetypes by volume
     local top_sourcetypes_by_volume="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_sourcetypes_by_volume.json" ]; then
-      top_sourcetypes_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_sourcetypes_by_volume.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" ]; then
+      top_sourcetypes_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" 2>/dev/null || echo "[]")
     fi
 
     # Top 10 hosts by volume
     local top_hosts_by_volume="[]"
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_hosts_by_volume.json" ]; then
-      top_hosts_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_hosts_by_volume.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" ]; then
+      top_hosts_by_volume=$(jq -r '.results[:10] // []' "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" 2>/dev/null || echo "[]")
     fi
 
     # Ingestion infrastructure data
@@ -4396,29 +4396,29 @@ generate_manifest() {
     local by_input_method="[]"
     local by_sourcetype_category="[]"
 
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/summary.json" ]; then
-      total_forwarding_hosts=$(jq -r '.results[0].total_forwarding_hosts // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/summary.json" 2>/dev/null || echo "0")
-      ingestion_daily_gb=$(jq -r '.results[0].daily_avg_gb // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/summary.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" ]; then
+      total_forwarding_hosts=$(jq -r '.results[0].total_forwarding_hosts // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" 2>/dev/null || echo "0")
+      ingestion_daily_gb=$(jq -r '.results[0].daily_avg_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" 2>/dev/null || echo "0")
     fi
 
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" ]; then
-      hec_daily_gb=$(jq -r '.results[0].daily_avg_gb // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" 2>/dev/null || echo "0")
-      local hec_token_count=$(jq -r '.results[0].token_count // 0' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" 2>/dev/null || echo "0")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" ]; then
+      hec_daily_gb=$(jq -r '.results[0].daily_avg_gb // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" 2>/dev/null || echo "0")
+      local hec_token_count=$(jq -r '.results[0].token_count // 0' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" 2>/dev/null || echo "0")
       if [ "$hec_token_count" != "0" ] && [ -n "$hec_token_count" ]; then
         hec_enabled="true"
       fi
     fi
 
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" ]; then
-      by_connection_type=$(jq -r '.results // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" ]; then
+      by_connection_type=$(jq -r '.results // []' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" 2>/dev/null || echo "[]")
     fi
 
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" ]; then
-      by_input_method=$(jq -r '.results // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" ]; then
+      by_input_method=$(jq -r '.results // []' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" 2>/dev/null || echo "[]")
     fi
 
-    if [ -f "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" ]; then
-      by_sourcetype_category=$(jq -r '.results // []' "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" 2>/dev/null || echo "[]")
+    if [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" ]; then
+      by_sourcetype_category=$(jq -r '.results // []' "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" 2>/dev/null || echo "[]")
     fi
 
     # Build usage intelligence JSON
@@ -4493,7 +4493,7 @@ generate_manifest() {
 {
   "schema_version": "4.0",
   "archive_structure_version": "v2",
-  "export_tool": "dynabridge-splunk-cloud-export",
+  "export_tool": "dma-splunk-cloud-export",
   "export_tool_version": "$SCRIPT_VERSION",
   "export_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "export_duration_seconds": $export_duration,
@@ -4602,13 +4602,13 @@ get_anon_email() {
   local real_email="$1"
 
   # Skip if empty or already anonymized
-  if [ -z "$real_email" ] || [[ "$real_email" == *"@anon.dynabridge.local"* ]]; then
+  if [ -z "$real_email" ] || [[ "$real_email" == *"@anon.dma.local"* ]]; then
     echo "$real_email"
     return
   fi
 
   # Check if we already have a mapping (using simple file-based approach for bash 3.x compat)
-  local mapping_file="/tmp/dynabridge_email_map_$$"
+  local mapping_file="/tmp/dma_email_map_$$"
   if [ -f "$mapping_file" ]; then
     local existing=$(grep "^${real_email}|" "$mapping_file" 2>/dev/null | cut -d'|' -f2)
     if [ -n "$existing" ]; then
@@ -4619,7 +4619,7 @@ get_anon_email() {
 
   # Generate new anonymized email
   local anon_id=$(generate_anon_id "$real_email" "user" 6)
-  local anon_email="${anon_id}@anon.dynabridge.local"
+  local anon_email="${anon_id}@anon.dma.local"
 
   # Store mapping
   echo "${real_email}|${anon_email}" >> "$mapping_file"
@@ -4645,7 +4645,7 @@ get_anon_hostname() {
   fi
 
   # Check if we already have a mapping
-  local mapping_file="/tmp/dynabridge_host_map_$$"
+  local mapping_file="/tmp/dma_host_map_$$"
   if [ -f "$mapping_file" ]; then
     local existing=$(grep "^${real_host}|" "$mapping_file" 2>/dev/null | cut -d'|' -f2)
     if [ -n "$existing" ]; then
@@ -4678,7 +4678,7 @@ generate_python_anonymizer() {
   cat > "$script_file" << 'PYTHON_SCRIPT'
 #!/usr/bin/env python3
 """
-DynaBridge Anonymizer - Streaming file anonymization
+DMA Anonymizer - Streaming file anonymization
 Handles large files without memory issues or regex backtracking
 
 v2.0 - Fixed JSON corruption issues:
@@ -4705,11 +4705,11 @@ def anonymize_email(email):
     """Anonymize email address consistently"""
     if email in email_map:
         return email_map[email]
-    if '@anon.dynabridge.local' in email or '@example.com' in email or '@localhost' in email:
+    if '@anon.dma.local' in email or '@example.com' in email or '@localhost' in email:
         return email
     # Use 'anon' prefix instead of 'user' to avoid creating \u sequences
     # (e.g., \user becomes invalid JSON unicode escape)
-    anon = f"anon{get_hash_id(email)}@anon.dynabridge.local"
+    anon = f"anon{get_hash_id(email)}@anon.dma.local"
     email_map[email] = anon
     return anon
 
@@ -4962,7 +4962,7 @@ anonymize_export() {
 
   echo -e "  ${WHITE}Replacing sensitive data with anonymized values:${NC}"
   echo ""
-  echo -e "    ${CYAN}→${NC} Email addresses → user######@anon.dynabridge.local"
+  echo -e "    ${CYAN}→${NC} Email addresses → user######@anon.dma.local"
   echo -e "    ${CYAN}→${NC} Hostnames → host-########.anon.local"
   echo -e "    ${CYAN}→${NC} IP addresses → [IP-REDACTED]"
   echo ""
@@ -5023,7 +5023,7 @@ anonymize_export() {
     "ip_addresses": "all_redacted"
   },
   "transformations": {
-    "emails": "original@domain.com → user######@anon.dynabridge.local",
+    "emails": "original@domain.com → user######@anon.dma.local",
     "hostnames": "server.example.com → host-########.anon.local",
     "ipv4": "x.x.x.x → [IP-REDACTED]",
     "ipv6": "xxxx:xxxx:... → [IPv6-REDACTED]"
@@ -5033,7 +5033,7 @@ anonymize_export() {
 ANON_EOF
 
   # Clean up mapping files
-  rm -f "/tmp/dynabridge_email_map_$$" "/tmp/dynabridge_host_map_$$"
+  rm -f "/tmp/dma_email_map_$$" "/tmp/dma_host_map_$$"
 
   success "Data anonymization complete"
 }
@@ -5158,7 +5158,7 @@ generate_troubleshooting_report() {
   local report_file="$EXPORT_DIR/TROUBLESHOOTING.md"
 
   cat > "$report_file" << 'TROUBLESHOOT_HEADER'
-# DynaBridge Splunk Cloud Export Troubleshooting Report
+# DMA Splunk Cloud Export Troubleshooting Report
 
 This report was generated because errors occurred during the export.
 Use this information to diagnose and resolve issues.
@@ -5190,12 +5190,12 @@ TROUBLESHOOT_HEADER
 EOF
 
   # Scan for error files in _usage_analytics
-  if [ -d "$EXPORT_DIR/dynabridge_analytics/usage_analytics" ]; then
+  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
     echo "## Failed Analytics Searches" >> "$report_file"
     echo "" >> "$report_file"
 
     local error_count=0
-    for json_file in "$EXPORT_DIR/dynabridge_analytics/usage_analytics"/*.json; do
+    for json_file in "$EXPORT_DIR/dma_analytics/usage_analytics"/*.json; do
       if [ -f "$json_file" ] && grep -q '"error":' "$json_file" 2>/dev/null; then
         ((error_count++))
         local filename=$(basename "$json_file")
@@ -5321,7 +5321,7 @@ Settings → Users → [your user] → Roles → Check capabilities
 
 ---
 
-*Report generated by DynaBridge Splunk Cloud Export v${SCRIPT_VERSION}*
+*Report generated by DMA Splunk Cloud Export v${SCRIPT_VERSION}*
 TROUBLESHOOT_GUIDES
 
   log "Generated troubleshooting report: $report_file"
@@ -5353,7 +5353,7 @@ show_completion() {
   fi
   print_box_line ""
   print_box_line "${BOLD}Next Steps:${NC}"
-  print_box_line "  1. Upload the .tar.gz file to DynaBridge in Dynatrace"
+  print_box_line "  1. Upload the .tar.gz file to Dynatrace Migration Assistant"
   print_box_line "  2. Review the migration analysis"
   print_box_line "  3. Begin dashboard and alert conversion"
   print_box_line ""
@@ -5448,8 +5448,8 @@ has_collected_data() {
 
   case "$check_type" in
     system_info)
-      [ -f "$EXPORT_DIR/dynabridge_analytics/system_info/server_info.json" ] && \
-      [ -s "$EXPORT_DIR/dynabridge_analytics/system_info/server_info.json" ]
+      [ -f "$EXPORT_DIR/dma_analytics/system_info/server_info.json" ] && \
+      [ -s "$EXPORT_DIR/dma_analytics/system_info/server_info.json" ]
       ;;
     configurations)
       [ -d "$EXPORT_DIR/_configs" ] && \
@@ -5480,8 +5480,8 @@ has_collected_data() {
       [ "$has_alerts" = "true" ]
       ;;
     rbac)
-      [ -f "$EXPORT_DIR/dynabridge_analytics/rbac/users.json" ] && \
-      [ -s "$EXPORT_DIR/dynabridge_analytics/rbac/users.json" ]
+      [ -f "$EXPORT_DIR/dma_analytics/rbac/users.json" ] && \
+      [ -s "$EXPORT_DIR/dma_analytics/rbac/users.json" ]
       ;;
     knowledge_objects)
       local has_ko=false
@@ -5512,12 +5512,12 @@ has_collected_data() {
       [ "$has_analytics" = "true" ]
       ;;
     usage_analytics)
-      [ -d "$EXPORT_DIR/dynabridge_analytics/usage_analytics" ] && \
-      [ "$(find "$EXPORT_DIR/dynabridge_analytics/usage_analytics" -name "*.json" -type f 2>/dev/null | head -1)" != "" ]
+      [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ] && \
+      [ "$(find "$EXPORT_DIR/dma_analytics/usage_analytics" -name "*.json" -type f 2>/dev/null | head -1)" != "" ]
       ;;
     indexes)
-      [ -f "$EXPORT_DIR/dynabridge_analytics/indexes/indexes.json" ] && \
-      [ -s "$EXPORT_DIR/dynabridge_analytics/indexes/indexes.json" ]
+      [ -f "$EXPORT_DIR/dma_analytics/indexes/indexes.json" ] && \
+      [ -s "$EXPORT_DIR/dma_analytics/indexes/indexes.json" ]
       ;;
   esac
 }

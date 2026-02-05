@@ -1,19 +1,19 @@
 <#
 .SYNOPSIS
-    DynaBridge Splunk Cloud Export Script v4.3.0 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.3.0 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
 
     This script collects configurations, dashboards, alerts, users, and usage
     analytics from your Splunk Cloud environment via REST API to enable migration
-    planning and execution using the DynaBridge for Splunk application.
+    planning and execution using the Dynatrace Migration Assistant.
 
     IMPORTANT: This script is for SPLUNK CLOUD only. For Splunk Enterprise,
-    use dynabridge-splunk-export.sh instead.
+    use dma-splunk-export.sh instead.
 
     This is a functionally identical PowerShell conversion of
-    dynabridge-splunk-cloud-export.sh v4.3.0 for Windows environments.
+    dma-splunk-cloud-export.sh v4.3.0 for Windows environments.
 
     REQUIREMENTS:
       - PowerShell 5.1+ (Windows PowerShell) or PowerShell 7+ (PowerShell Core)
@@ -94,17 +94,17 @@
     Display help information and exit
 
 .EXAMPLE
-    .\DynaBridge-SplunkCloudExport.ps1
+    .\dma-splunk-cloud-export.ps1
 
     Interactive mode - prompts for all settings.
 
 .EXAMPLE
-    .\DynaBridge-SplunkCloudExport.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
+    .\dma-splunk-cloud-export.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
 
     Non-interactive mode with token authentication.
 
 .EXAMPLE
-    .\DynaBridge-SplunkCloudExport.ps1 -Stack "acme-corp" -User "admin" -Password "pass" -Apps "search,my_app" -Rbac -Usage
+    .\dma-splunk-cloud-export.ps1 -Stack "acme-corp" -User "admin" -Password "pass" -Apps "search,my_app" -Rbac -Usage
 
     Export specific apps with RBAC and usage analytics enabled.
 
@@ -172,7 +172,7 @@ param(
 # =============================================================================
 
 $Script:SCRIPT_VERSION = "4.3.0"
-$Script:SCRIPT_NAME = "DynaBridge Splunk Cloud Export (PowerShell)"
+$Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
 $Script:IsPSCore = $PSVersionTable.PSVersion.Major -ge 7
@@ -779,7 +779,7 @@ function Initialize-DebugLog {
     $Script:DEBUG_LOG_FILE = Join-Path ($Script:EXPORT_DIR -replace '^$', $env:TEMP) "export_debug.log"
     $header = @(
         "==============================================================================="
-        "DynaBridge Cloud Export Debug Log (PowerShell)"
+        "DMA Cloud Export Debug Log (PowerShell)"
         "Started: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK')"
         "Script Version: $Script:SCRIPT_VERSION"
         "==============================================================================="
@@ -1700,7 +1700,7 @@ function Show-Introduction {
         "  - Props and Transforms configurations (via REST)"
         ""
         "${Script:BOLD}Output:${Script:NC}"
-        "  A .tar.gz archive compatible with DynaBridge for Splunk app"
+        "  A .tar.gz archive compatible with the Dynatrace Migration Assistant"
     )
 
     Write-InfoBox "IMPORTANT: THIS IS FOR SPLUNK CLOUD ONLY" @(
@@ -1708,7 +1708,7 @@ function Show-Introduction {
         "${Script:YELLOW}$([char]0x26A0)  This script works with Splunk Cloud (Classic & Victoria)${Script:NC}"
         ""
         "If you have ${Script:BOLD}Splunk Enterprise${Script:NC} (on-premises), please use:"
-        "  ${Script:GREEN}./dynabridge-splunk-export.sh${Script:NC}"
+        "  ${Script:GREEN}./dma-splunk-export.sh${Script:NC}"
         ""
         "This script uses 100% REST API - no file system access needed."
     )
@@ -2319,18 +2319,18 @@ function Select-DataCategories {
 function Initialize-ExportDirectory {
     $Script:TIMESTAMP = Get-Date -Format 'yyyyMMdd_HHmmss'
     $stackClean = ($Script:SPLUNK_STACK -replace '\.splunkcloud\.com', '') -replace '[^a-zA-Z0-9_-]', '_'
-    $Script:EXPORT_NAME = "dynabridge_cloud_export_${stackClean}_${Script:TIMESTAMP}"
+    $Script:EXPORT_NAME = "dma_cloud_export_${stackClean}_${Script:TIMESTAMP}"
     $Script:EXPORT_DIR = Join-Path (Get-Location) $Script:EXPORT_NAME
     $Script:LOG_FILE = Join-Path $Script:EXPORT_DIR "_export.log"
 
     # Create directory tree
     New-Item -ItemType Directory -Path $Script:EXPORT_DIR -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics") -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info") -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac") -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics") -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics/ingestion_infrastructure") -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dma_analytics") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/system_info") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics/ingestion_infrastructure") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/indexes") -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $Script:EXPORT_DIR "_configs") -Force | Out-Null
 
     # NOTE: Dashboards are stored in app-scoped folders (v2 structure)
@@ -2355,27 +2355,27 @@ function Export-SystemInfo {
     # Server info
     $response = Invoke-SplunkApi -Endpoint "/services/server/info" -Data "output_mode=json"
     if ($null -ne $response) {
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info/server_info.json") -Data $response
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/system_info/server_info.json") -Data $response
         Write-Success "Server info collected"
     }
 
     # Installed apps
     $response = Invoke-SplunkApi -Endpoint "/services/apps/local" -Data "output_mode=json&count=0"
     if ($null -ne $response) {
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info/installed_apps.json") -Data $response
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/system_info/installed_apps.json") -Data $response
         Write-Success "Installed apps collected"
     }
 
     # License info (may be restricted)
     $response = Invoke-SplunkApi -Endpoint "/services/licenser/licenses" -Data "output_mode=json"
     if ($null -ne $response) {
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info/license_info.json") -Data $response
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/system_info/license_info.json") -Data $response
     }
 
     # Server settings
     $response = Invoke-SplunkApi -Endpoint "/services/server/settings" -Data "output_mode=json"
     if ($null -ne $response) {
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info/server_settings.json") -Data $response
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/system_info/server_settings.json") -Data $response
     }
 }
 
@@ -2471,7 +2471,7 @@ function Export-Dashboards {
     }
 
     # Save master list
-    Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info/all_dashboards.json") -Data $response
+    Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/system_info/all_dashboards.json") -Data $response
 
     # Process each app
     foreach ($app in $Script:SELECTED_APPS) {
@@ -2699,9 +2699,9 @@ function Export-RbacData {
         $appFilter = Get-AppFilter -Field "app"
         if ($appFilter) {
             $userSearch = "search index=_audit action=search ${appFilter} earliest=-$($Script:USAGE_PERIOD) | stats count as activity, latest(_time) as last_active by user | sort -activity"
-            Invoke-AnalyticsSearch -SearchQuery $userSearch -OutputFile (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/users_active_in_apps.json") -Label "Users active in selected apps"
+            Invoke-AnalyticsSearch -SearchQuery $userSearch -OutputFile (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/users_active_in_apps.json") -Label "Users active in selected apps"
 
-            $resultFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/users_active_in_apps.json"
+            $resultFile = Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/users_active_in_apps.json"
             if (Test-Path $resultFile) {
                 $resultData = Read-JsonFile -Path $resultFile
                 if ($resultData -and $resultData.results) {
@@ -2714,12 +2714,12 @@ function Export-RbacData {
         # Create placeholder for full users.json
         $appsJson = ($Script:SELECTED_APPS | ForEach-Object { "`"$_`"" }) -join ','
         $placeholder = "{`"scoped`": true, `"reason`": `"App-scoped mode - only users with activity in selected apps collected`", `"apps`": [$appsJson]}"
-        [System.IO.File]::WriteAllText((Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/users.json"), $placeholder, $Script:UTF8NoBOM)
+        [System.IO.File]::WriteAllText((Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/users.json"), $placeholder, $Script:UTF8NoBOM)
     } else {
         # Full collection mode
         $response = Invoke-SplunkApi -Endpoint "/services/authentication/users" -Data "output_mode=json&count=0"
         if ($null -ne $response) {
-            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/users.json") -Data $response
+            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/users.json") -Data $response
             if ($response.entry) {
                 $Script:STATS_USERS = @($response.entry).Count
             }
@@ -2730,7 +2730,7 @@ function Export-RbacData {
     # Roles - always collect
     $response = Invoke-SplunkApi -Endpoint "/services/authorization/roles" -Data "output_mode=json&count=0"
     if ($null -ne $response) {
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/roles.json") -Data $response
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/roles.json") -Data $response
         Write-Log "Collected roles"
     }
 
@@ -2738,7 +2738,7 @@ function Export-RbacData {
     if (-not $Script:SCOPE_TO_APPS) {
         $response = Invoke-SplunkApi -Endpoint "/services/admin/SAML-groups" -Data "output_mode=json"
         if ($null -ne $response) {
-            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/saml_groups.json") -Data $response
+            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/saml_groups.json") -Data $response
             Write-Log "Collected SAML groups"
         }
     }
@@ -2746,7 +2746,7 @@ function Export-RbacData {
     # Current user context
     $response = Invoke-SplunkApi -Endpoint "/services/authentication/current-context" -Data "output_mode=json"
     if ($null -ne $response) {
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/current_context.json") -Data $response
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/current_context.json") -Data $response
     }
 }
 
@@ -2765,9 +2765,9 @@ function Export-IndexData {
         $appFilter = Get-AppFilter -Field "app"
         if ($appFilter) {
             $indexSearch = "search index=_audit action=search ${appFilter} earliest=-$($Script:USAGE_PERIOD) | rex field=search `"index\s*=\s*(?<idx>[\w_-]+)`" | where isnotnull(idx) | stats count as searches, dc(user) as users by idx | sort -searches"
-            Invoke-AnalyticsSearch -SearchQuery $indexSearch -OutputFile (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes/indexes_used_by_apps.json") -Label "Indexes used by selected apps"
+            Invoke-AnalyticsSearch -SearchQuery $indexSearch -OutputFile (Join-Path $Script:EXPORT_DIR "dma_analytics/indexes/indexes_used_by_apps.json") -Label "Indexes used by selected apps"
 
-            $resultFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes/indexes_used_by_apps.json"
+            $resultFile = Join-Path $Script:EXPORT_DIR "dma_analytics/indexes/indexes_used_by_apps.json"
             if (Test-Path $resultFile) {
                 $resultData = Read-JsonFile -Path $resultFile
                 if ($resultData -and $resultData.results) {
@@ -2780,12 +2780,12 @@ function Export-IndexData {
         # Placeholder
         $appsJson = ($Script:SELECTED_APPS | ForEach-Object { "`"$_`"" }) -join ','
         $placeholder = "{`"scoped`": true, `"reason`": `"App-scoped mode - only indexes used by selected apps collected`", `"apps`": [$appsJson]}"
-        [System.IO.File]::WriteAllText((Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes/indexes.json"), $placeholder, $Script:UTF8NoBOM)
+        [System.IO.File]::WriteAllText((Join-Path $Script:EXPORT_DIR "dma_analytics/indexes/indexes.json"), $placeholder, $Script:UTF8NoBOM)
     } else {
         # Full collection mode
         $response = Invoke-SplunkApi -Endpoint "/services/data/indexes" -Data "output_mode=json&count=0"
         if ($null -ne $response) {
-            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes/indexes.json") -Data $response
+            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/indexes/indexes.json") -Data $response
             if ($response.entry) {
                 $Script:STATS_INDEXES = @($response.entry).Count
             }
@@ -2795,7 +2795,7 @@ function Export-IndexData {
         # Extended stats (may be limited in cloud)
         $response = Invoke-SplunkApi -Endpoint "/services/data/indexes-extended" -Data "output_mode=json&count=0"
         if ($null -ne $response) {
-            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes/indexes_extended.json") -Data $response
+            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/indexes/indexes_extended.json") -Data $response
         }
     }
 }
@@ -3168,8 +3168,8 @@ function Get-OwnershipSummaryFromRest {
 
     Write-Info "Computing ownership summary from REST API data..."
 
-    $dashFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics/dashboard_ownership.json"
-    $alertFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics/alert_ownership.json"
+    $dashFile = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics/dashboard_ownership.json"
+    $alertFile = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics/alert_ownership.json"
 
     if (-not (Test-Path $dashFile) -or -not (Test-Path $alertFile)) {
         Write-Warning2 "Could not compute ownership summary from REST data"
@@ -3230,8 +3230,8 @@ function Get-DashboardsNeverViewedFallback {
 
     Write-Info "Computing dashboards never viewed using REST API data..."
 
-    $dashOwnerFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics/dashboard_ownership.json"
-    $dashViewsFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics/dashboard_views_top100.json"
+    $dashOwnerFile = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics/dashboard_ownership.json"
+    $dashViewsFile = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics/dashboard_views_top100.json"
 
     if (-not (Test-Path $dashOwnerFile)) {
         Write-Warning2 "Could not generate dashboards never viewed fallback"
@@ -3314,7 +3314,7 @@ function Export-UsageAnalytics {
         Write-Host ""
     }
 
-    $analyticsDir = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics"
+    $analyticsDir = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics"
 
     # =========================================================================
     # CATEGORY 1: DASHBOARD VIEW STATISTICS
@@ -3672,7 +3672,7 @@ This export includes comprehensive usage analytics to help prioritize your migra
 4. **Phase 4**: Review never-used items with stakeholders
 
 ---
-*Generated by DynaBridge Splunk Cloud Export*
+*Generated by DMA Splunk Cloud Export*
 "@
     [System.IO.File]::WriteAllText($summaryFile, $summaryContent, $Script:UTF8NoBOM)
     Write-Success "Usage intelligence summary generated"
@@ -3689,7 +3689,7 @@ This export includes comprehensive usage analytics to help prioritize your migra
 function New-ExportSummary {
     Write-Progress2 "Generating summary report..."
 
-    $summaryFile = Join-Path $Script:EXPORT_DIR "dynabridge-env-summary.md"
+    $summaryFile = Join-Path $Script:EXPORT_DIR "dma-env-summary.md"
     $now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz'
 
     $collectStatus = @{
@@ -3714,7 +3714,7 @@ function New-ExportSummary {
     }
 
     $summary = @"
-# DynaBridge Splunk Cloud Environment Summary
+# DMA Splunk Cloud Environment Summary
 
 **Export Date**: $now
 **Export Script Version**: $($Script:SCRIPT_VERSION)
@@ -3797,14 +3797,14 @@ $warnList
 
 ## Next Steps
 
-1. **Upload to DynaBridge**: Upload the ``.tar.gz`` file to DynaBridge in Dynatrace
+1. **Upload to Dynatrace**: Upload the ``.tar.gz`` file to the Dynatrace Migration Assistant
 2. **Review Dashboards**: Check the dashboard conversion preview
 3. **Review Alerts**: Check alert conversion recommendations
 4. **Plan Data Ingestion**: Use OpenPipeline templates for log ingestion
 
 ---
 
-*Generated by DynaBridge Splunk Cloud Export Script v$($Script:SCRIPT_VERSION)*
+*Generated by DMA Splunk Cloud Export Script v$($Script:SCRIPT_VERSION)*
 "@
 
     [System.IO.File]::WriteAllText($summaryFile, $summary, $Script:UTF8NoBOM)
@@ -3818,7 +3818,7 @@ $warnList
 function New-ExportManifest {
     Write-Progress2 "Generating manifest.json (standardized schema)..."
 
-    $manifestFile = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/manifest.json"
+    $manifestFile = Join-Path $Script:EXPORT_DIR "dma_analytics/manifest.json"
 
     # Calculate export duration
     $exportDuration = [int]((Get-Date) - $Script:EXPORT_START_TIME).TotalSeconds
@@ -3901,7 +3901,7 @@ function New-ExportManifest {
 
     # Build usage intelligence summary
     $usageIntel = [PSCustomObject]@{}
-    $analyticsDir = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics"
+    $analyticsDir = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics"
     if (Test-Path $analyticsDir) {
         Write-Progress2 "Extracting usage intelligence for manifest..."
 
@@ -3999,7 +3999,7 @@ function New-ExportManifest {
     $manifest = [PSCustomObject]@{
         schema_version = "4.0"
         archive_structure_version = "v2"
-        export_tool = "dynabridge-splunk-cloud-export"
+        export_tool = "dma-splunk-cloud-export"
         export_tool_version = $Script:SCRIPT_VERSION
         export_timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         export_duration_seconds = $exportDuration
@@ -4083,14 +4083,14 @@ function Get-AnonHash {
 
 function Get-AnonEmail {
     param([string]$RealEmail)
-    if (-not $RealEmail -or $RealEmail -match '@anon\.dynabridge\.local') {
+    if (-not $RealEmail -or $RealEmail -match '@anon\.dma\.local') {
         return $RealEmail
     }
     if ($Script:AnonEmailMap.ContainsKey($RealEmail)) {
         return $Script:AnonEmailMap[$RealEmail]
     }
     $anonId = Get-AnonHash -Input $RealEmail -Prefix "anon" -Length 6
-    $anonEmail = "${anonId}@anon.dynabridge.local"
+    $anonEmail = "${anonId}@anon.dma.local"
     $Script:AnonEmailMap[$RealEmail] = $anonEmail
     $Script:ANON_EMAIL_COUNTER++
     return $anonEmail
@@ -4123,7 +4123,7 @@ function Invoke-AnonymizeContent {
     $emailMatches = [regex]::Matches($result, $emailPattern)
     foreach ($match in $emailMatches) {
         $email = $match.Value
-        if ($email -notmatch '@anon\.dynabridge\.local|@example\.com|@localhost') {
+        if ($email -notmatch '@anon\.dma\.local|@example\.com|@localhost') {
             $anon = Get-AnonEmail -RealEmail $email
             if ($anon -ne $email) {
                 $result = $result.Replace($email, $anon)
@@ -4177,7 +4177,7 @@ function Invoke-ExportAnonymization {
 
     Write-Host "  ${Script:WHITE}Replacing sensitive data with anonymized values:${Script:NC}"
     Write-Host ""
-    Write-Host "    ${Script:CYAN}$([char]0x2192)${Script:NC} Email addresses $([char]0x2192) anon######@anon.dynabridge.local"
+    Write-Host "    ${Script:CYAN}$([char]0x2192)${Script:NC} Email addresses $([char]0x2192) anon######@anon.dma.local"
     Write-Host "    ${Script:CYAN}$([char]0x2192)${Script:NC} Hostnames $([char]0x2192) host-########.anon.local"
     Write-Host "    ${Script:CYAN}$([char]0x2192)${Script:NC} IP addresses $([char]0x2192) [IP-REDACTED]"
     Write-Host ""
@@ -4268,7 +4268,7 @@ function Invoke-ExportAnonymization {
             ip_addresses = "all_redacted"
         }
         transformations = [PSCustomObject]@{
-            emails = "original@domain.com -> anon######@anon.dynabridge.local"
+            emails = "original@domain.com -> anon######@anon.dma.local"
             hostnames = "server.example.com -> host-########.anon.local"
             ipv4 = "x.x.x.x -> [IP-REDACTED]"
             ipv6 = "xxxx:xxxx:... -> [IPv6-REDACTED]"
@@ -4459,7 +4459,7 @@ function New-TroubleshootingReport {
     $now = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
 
     $reportContent = @"
-# DynaBridge Splunk Cloud Export Troubleshooting Report
+# DMA Splunk Cloud Export Troubleshooting Report
 
 This report was generated because errors occurred during the export.
 Use this information to diagnose and resolve issues.
@@ -4487,7 +4487,7 @@ Use this information to diagnose and resolve issues.
 "@
 
     # Scan for error files in usage_analytics
-    $analyticsDir = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics"
+    $analyticsDir = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics"
     if (Test-Path $analyticsDir) {
         $reportContent += "## Failed Analytics Searches`n`n"
         $errorCount = 0
@@ -4602,7 +4602,7 @@ Use this information to diagnose and resolve issues.
 
 ---
 
-*Report generated by DynaBridge Splunk Cloud Export v$($Script:SCRIPT_VERSION)*
+*Report generated by DMA Splunk Cloud Export v$($Script:SCRIPT_VERSION)*
 "@
 
     [System.IO.File]::WriteAllText($reportFile, $reportContent, $Script:UTF8NoBOM)
@@ -4637,7 +4637,7 @@ function Show-ExportSummary {
 
     Write-BoxLine ""
     Write-BoxLine "${Script:BOLD}Next Steps:${Script:NC}"
-    Write-BoxLine "  1. Upload the .tar.gz file to DynaBridge in Dynatrace"
+    Write-BoxLine "  1. Upload the .tar.gz file to the Dynatrace Migration Assistant"
     Write-BoxLine "  2. Review the migration analysis"
     Write-BoxLine "  3. Begin dashboard and alert conversion"
     Write-BoxLine ""
@@ -4734,7 +4734,7 @@ function Test-HasCollectedData {
 
     switch ($CheckType) {
         "system_info" {
-            $file = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/system_info/server_info.json"
+            $file = Join-Path $Script:EXPORT_DIR "dma_analytics/system_info/server_info.json"
             return (Test-Path $file) -and ((Get-Item $file).Length -gt 0)
         }
         "configurations" {
@@ -4760,7 +4760,7 @@ function Test-HasCollectedData {
             return $false
         }
         "rbac" {
-            $file = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/rbac/users.json"
+            $file = Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/users.json"
             return (Test-Path $file) -and ((Get-Item $file).Length -gt 0)
         }
         "knowledge_objects" {
@@ -4785,12 +4785,12 @@ function Test-HasCollectedData {
             return $false
         }
         "usage_analytics" {
-            $usageDir = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/usage_analytics"
+            $usageDir = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics"
             if (-not (Test-Path $usageDir)) { return $false }
             return @(Get-ChildItem -Path $usageDir -Filter "*.json" -File -Recurse -ErrorAction SilentlyContinue).Count -gt 0
         }
         "indexes" {
-            $file = Join-Path $Script:EXPORT_DIR "dynabridge_analytics/indexes/indexes.json"
+            $file = Join-Path $Script:EXPORT_DIR "dma_analytics/indexes/indexes.json"
             return (Test-Path $file) -and ((Get-Item $file).Length -gt 0)
         }
         default { return $false }
@@ -4946,13 +4946,13 @@ function Start-Collection {
 function Invoke-Main {
     # Handle --version
     if ($Script:Version) {
-        Write-Host "DynaBridge Splunk Cloud Export v$($Script:SCRIPT_VERSION)"
+        Write-Host "DMA Splunk Cloud Export v$($Script:SCRIPT_VERSION)"
         return
     }
 
     # Handle --help
     if ($Script:ShowHelp) {
-        Write-Host "Usage: .\DynaBridge-SplunkCloudExport.ps1 [OPTIONS]"
+        Write-Host "Usage: .\dma-splunk-cloud-export.ps1 [OPTIONS]"
         Write-Host ""
         Write-Host "Options:"
         Write-Host "  -Stack URL          Splunk Cloud stack URL"
@@ -4975,7 +4975,7 @@ function Invoke-Main {
         Write-Host ""
         Write-Host "Performance Tips:"
         Write-Host "  For large environments, use -Apps with specific apps:"
-        Write-Host "    .\DynaBridge-SplunkCloudExport.ps1 -Stack acme.splunkcloud.com -Token XXX -Apps 'myapp'"
+        Write-Host "    .\dma-splunk-cloud-export.ps1 -Stack acme.splunkcloud.com -Token XXX -Apps 'myapp'"
         return
     }
 

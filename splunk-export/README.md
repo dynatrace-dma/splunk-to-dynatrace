@@ -1,4 +1,4 @@
-# DynaBridge Splunk Export Scripts
+# DMA Splunk Export Scripts
 
 **Version**: 4.3.0
 **Last Updated**: February 2026
@@ -11,18 +11,18 @@ Cloud scripts now support the `--resume-collect` flag (Bash) or `-ResumeCollect`
 
 ```bash
 # Bash: Resume a partial Cloud export
-./dynabridge-splunk-cloud-export.sh --resume-collect dynabridge_export_acme_20260115_120000.tar.gz
+./dma-splunk-cloud-export.sh --resume-collect dma_export_acme_20260115_120000.tar.gz
 
 # Bash: Add RBAC and usage to a complete export
-./dynabridge-splunk-cloud-export.sh --resume-collect dynabridge_export_acme_20260115_120000.tar.gz --rbac --usage
+./dma-splunk-cloud-export.sh --resume-collect dma_export_acme_20260115_120000.tar.gz --rbac --usage
 ```
 
 ```powershell
 # PowerShell: Resume a partial Cloud export
-.\dynabridge-splunk-cloud-export.ps1 -ResumeCollect dynabridge_export_acme_20260115_120000.tar.gz
+.\dma-splunk-cloud-export.ps1 -ResumeCollect dma_export_acme_20260115_120000.tar.gz
 
 # PowerShell: Add RBAC and usage to a complete export
-.\dynabridge-splunk-cloud-export.ps1 -ResumeCollect dynabridge_export_acme_20260115_120000.tar.gz -Rbac -Usage
+.\dma-splunk-cloud-export.ps1 -ResumeCollect dma_export_acme_20260115_120000.tar.gz -Rbac -Usage
 ```
 
 ### 12-Hour Maximum Runtime
@@ -31,7 +31,7 @@ All scripts now support `MAX_TOTAL_TIME=43200` (12 hours, up from 4 hours), allo
 
 ### PowerShell Cloud Export Script
 
-New `dynabridge-splunk-cloud-export.ps1` provides full feature parity with the Bash Cloud script for Windows environments. Zero external dependencies required — works with PowerShell 5.1+ and PowerShell 7+. Supports the same collection categories, flags, anonymization, resume collection, and automation features as the Bash Cloud script.
+New `dma-splunk-cloud-export.ps1` provides full feature parity with the Bash Cloud script for Windows environments. Zero external dependencies required — works with PowerShell 5.1+ and PowerShell 7+. Supports the same collection categories, flags, anonymization, resume collection, and automation features as the Bash Cloud script.
 
 ### Proxy Support
 
@@ -39,12 +39,12 @@ Cloud scripts (both Bash and PowerShell) now support routing all connections thr
 
 ```bash
 # Bash: Route through corporate proxy
-./dynabridge-splunk-cloud-export.sh --proxy http://proxy.company.com:8080 --stack acme.splunkcloud.com --token "$TOKEN"
+./dma-splunk-cloud-export.sh --proxy http://proxy.company.com:8080 --stack acme.splunkcloud.com --token "$TOKEN"
 ```
 
 ```powershell
 # PowerShell: Route through corporate proxy
-.\dynabridge-splunk-cloud-export.ps1 -Proxy "http://proxy.company.com:8080" -Stack "acme.splunkcloud.com" -Token $TOKEN
+.\dma-splunk-cloud-export.ps1 -Proxy "http://proxy.company.com:8080" -Stack "acme.splunkcloud.com" -Token $TOKEN
 ```
 
 Key behaviors:
@@ -84,9 +84,9 @@ This preserves the original data in case anonymization corrupts files. Users can
 
 ## Overview
 
-This directory contains the **DynaBridge Export Scripts** - comprehensive tools for extracting configuration data, dashboards, alerts, and usage analytics from Splunk environments to enable migration to Dynatrace Gen3.
+This directory contains the **DMA Export Scripts** - comprehensive tools for extracting configuration data, dashboards, alerts, and usage analytics from Splunk environments to enable migration to Dynatrace Gen3.
 
-These scripts are the first step in the DynaBridge migration workflow. The export archive they produce is uploaded to the DynaBridge app in Dynatrace, where it powers dashboard conversion, alert migration, and data pipeline planning.
+These scripts are the first step in the Dynatrace Migration Assistant migration workflow. The export archive they produce is uploaded to the DMA app in Dynatrace, where it powers dashboard conversion, alert migration, and data pipeline planning.
 
 ---
 
@@ -96,11 +96,11 @@ These scripts are the first step in the DynaBridge migration workflow. The expor
 
 ```bash
 # Copy script to your Splunk Search Head
-scp dynabridge-splunk-export.sh splunk-server:/tmp/
+scp dma-splunk-export.sh splunk-server:/tmp/
 
 # SSH to the server and run as splunk user
 ssh splunk-server
-sudo -u splunk bash /tmp/dynabridge-splunk-export.sh
+sudo -u splunk bash /tmp/dma-splunk-export.sh
 
 # Follow the interactive prompts
 # Download the .tar.gz export file when complete
@@ -112,7 +112,7 @@ sudo -u splunk bash /tmp/dynabridge-splunk-export.sh
 # Run from YOUR machine (not on Splunk Cloud)
 # You need network access to your Splunk Cloud instance
 
-./dynabridge-splunk-cloud-export.sh
+./dma-splunk-cloud-export.sh
 
 # Enter your stack URL and credentials when prompted
 ```
@@ -121,10 +121,10 @@ sudo -u splunk bash /tmp/dynabridge-splunk-export.sh
 
 ```powershell
 # Run from YOUR Windows machine (not on Splunk Cloud)
-.\dynabridge-splunk-cloud-export.ps1
+.\dma-splunk-cloud-export.ps1
 
 # Or non-interactive with token
-.\dynabridge-splunk-cloud-export.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
+.\dma-splunk-cloud-export.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
 ```
 
 ---
@@ -133,9 +133,9 @@ sudo -u splunk bash /tmp/dynabridge-splunk-export.sh
 
 | Script | Target Environment | Platform | Access Method |
 |--------|-------------------|----------|---------------|
-| `dynabridge-splunk-export.sh` | Splunk Enterprise (on-premises) | Bash (Linux/macOS) | SSH + File System + REST API |
-| `dynabridge-splunk-cloud-export.sh` | Splunk Cloud (Classic & Victoria) | Bash (Linux/macOS) | REST API only |
-| `dynabridge-splunk-cloud-export.ps1` | Splunk Cloud (Classic & Victoria) | PowerShell (Windows) | REST API only |
+| `dma-splunk-export.sh` | Splunk Enterprise (on-premises) | Bash (Linux/macOS) | SSH + File System + REST API |
+| `dma-splunk-cloud-export.sh` | Splunk Cloud (Classic & Victoria) | Bash (Linux/macOS) | REST API only |
+| `dma-splunk-cloud-export.ps1` | Splunk Cloud (Classic & Victoria) | PowerShell (Windows) | REST API only |
 
 ### Key Differences
 
@@ -223,7 +223,7 @@ Both scripts include enterprise-scale features for large environments:
 
 ```bash
 # Non-interactive mode - full export
-./dynabridge-splunk-export.sh \
+./dma-splunk-export.sh \
   -u admin \
   -p 'YourPassword' \
   --splunk-home /opt/splunk \
@@ -231,7 +231,7 @@ Both scripts include enterprise-scale features for large environments:
   -y  # Auto-confirm all prompts
 
 # App-scoped export with usage data (recommended for large environments)
-./dynabridge-splunk-export.sh \
+./dma-splunk-export.sh \
   -u admin \
   -p 'YourPassword' \
   --apps "myapp1,myapp2" \
@@ -241,7 +241,7 @@ Both scripts include enterprise-scale features for large environments:
 
 ```powershell
 # Non-interactive PowerShell export
-.\dynabridge-splunk-cloud-export.ps1 `
+.\dma-splunk-cloud-export.ps1 `
   -Stack "acme-corp.splunkcloud.com" `
   -Token $env:SPLUNK_CLOUD_TOKEN `
   -AllApps `
@@ -255,9 +255,9 @@ Both scripts include enterprise-scale features for large environments:
 Both scripts produce a `.tar.gz` archive with the **v2 app-centric structure**:
 
 ```
-dynabridge_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
+dma_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
 ├── manifest.json                    # Export metadata (schema v4.0)
-├── dynabridge-env-summary.md        # Human-readable summary
+├── dma-env-summary.md        # Human-readable summary
 ├── export.log                       # Export process log
 ├── _systeminfo/                     # System information
 ├── _rbac/                           # Users and roles (no passwords)
@@ -314,7 +314,7 @@ These documents cover:
 
 ### HTML Versions (In-App Viewing)
 
-Each markdown document has a corresponding `.dialog.html` version for viewing within the DynaBridge app. These are generated by `generate-html-docs.cjs`.
+Each markdown document has a corresponding `.dialog.html` version for viewing within the DMA app. These are generated by `generate-html-docs.cjs`.
 
 ---
 
@@ -340,10 +340,10 @@ When anonymization is enabled, the script creates **TWO separate archives**:
 
 | Data Type | Anonymization Pattern |
 |-----------|----------------------|
-| Email addresses | `user######@anon.dynabridge.local` |
+| Email addresses | `user######@anon.dma.local` |
 | Hostnames | `host-########.anon.local` |
 | IP addresses | `[IP-REDACTED]` |
-| Webhook URLs | `https://webhook.anon.dynabridge.local/hook-###` |
+| Webhook URLs | `https://webhook.anon.dma.local/hook-###` |
 | API keys/tokens | `[API-KEY-########]` |
 
 **Key Properties:**
@@ -370,7 +370,7 @@ When anonymization is enabled, the script creates **TWO separate archives**:
 ### What You Should Do
 
 1. **Transfer securely** - Use SCP, SFTP, or encrypted channels
-2. **Delete after upload** - Remove the export file after uploading to DynaBridge
+2. **Delete after upload** - Remove the export file after uploading to DMA
 3. **Enable anonymization** - When sharing with external parties
 4. **Review before sharing** - Examine export contents if needed
 
@@ -380,8 +380,8 @@ When anonymization is enabled, the script creates **TWO separate archives**:
 
 | File | Purpose |
 |------|---------|
-| `dynabridge-style.css` | Styling for HTML documentation |
-| `dynabridge-symbol.png` | DynaBridge logo for HTML docs |
+| `dma-style.css` | Styling for HTML documentation |
+| `dma-symbol.png` | DMA logo for HTML docs |
 | `generate-html-docs.cjs` | Node.js script to generate HTML from markdown |
 | `html-template.html` | Template for standalone HTML docs |
 | `html-template-dialog.html` | Template for in-app dialog HTML docs |
@@ -394,16 +394,16 @@ When anonymization is enabled, the script creates **TWO separate archives**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                     DYNABRIDGE MIGRATION WORKFLOW                        │
+│                     DMA MIGRATION WORKFLOW                               │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                          │
 │  1. EXPORT (This Directory)                                             │
-│     • Run dynabridge-splunk-export.sh on Search Head                    │
-│     • OR run dynabridge-splunk-cloud-export.sh from any machine         │
+│     • Run dma-splunk-export.sh on Search Head                    │
+│     • OR run dma-splunk-cloud-export.sh from any machine         │
 │     • Download .tar.gz export file                                      │
 │                                                                          │
-│  2. UPLOAD (DynaBridge App in Dynatrace)                               │
-│     • Open DynaBridge for Splunk app                                    │
+│  2. UPLOAD (DMA App in Dynatrace)                                      │
+│     • Open Dynatrace Migration Assistant app                            │
 │     • Navigate to: Splunk Migration → Import                            │
 │     • Drag & drop the .tar.gz file                                     │
 │                                                                          │
@@ -471,7 +471,7 @@ When anonymization is enabled, the script creates **TWO separate archives**:
 1. Check the relevant README document for your environment
 2. Review `export.log` in the export directory for detailed error messages
 3. Check `TROUBLESHOOTING.md` generated with partial exports
-4. Contact the DynaBridge team with error details
+4. Contact the DMA team with error details
 
 ---
 
@@ -494,7 +494,7 @@ When anonymization is enabled, the script creates **TWO separate archives**:
 
 ## License
 
-These scripts are part of the DynaBridge for Splunk application and are intended for use with valid Dynatrace licenses.
+These scripts are part of the Dynatrace Migration Assistant application and are intended for use with valid Dynatrace licenses.
 
 ---
 

@@ -9,7 +9,7 @@ fi
 
 ################################################################################
 #
-#  DynaBridge Splunk Export Script v4.2.4
+#  DMA Splunk Export Script v4.2.4
 #
 #  v4.2.4 Changes:
 #    - Anonymization now creates TWO archives: original (untouched) + _masked (anonymized)
@@ -26,7 +26,7 @@ fi
 #
 #  This script collects configurations, dashboards, alerts, users, and usage
 #  analytics from your Splunk environment to enable migration planning and
-#  execution using the DynaBridge for Splunk application.
+#  execution using the Dynatrace Migration Assistant application.
 #
 ################################################################################
 #
@@ -90,7 +90,7 @@ set -o pipefail  # Fail on pipe errors
 # =============================================================================
 
 SCRIPT_VERSION="4.2.4"
-SCRIPT_NAME="DynaBridge Splunk Export"
+SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
 RED='\033[0;31m'
@@ -178,7 +178,7 @@ SEARCH_POLL_INTERVAL=1     # How often to check if search is done (seconds)
 # PHASE 1: ENTERPRISE RESILIENCE CONFIGURATION
 # =============================================================================
 # These settings enable enterprise-scale exports (4000+ dashboards, 10K+ alerts)
-# Override via environment variables: BATCH_SIZE=50 ./dynabridge-splunk-export.sh
+# Override via environment variables: BATCH_SIZE=50 ./dma-splunk-export.sh
 
 # Pagination settings
 BATCH_SIZE=${BATCH_SIZE:-250}              # Items per API request (was 100, increased for speed)
@@ -252,7 +252,7 @@ init_debug_log() {
   if [ "$DEBUG_MODE" = "true" ]; then
     DEBUG_LOG_FILE="${EXPORT_DIR:-/tmp}/export_debug.log"
     echo "===============================================================================" > "$DEBUG_LOG_FILE"
-    echo "DynaBridge Export Debug Log" >> "$DEBUG_LOG_FILE"
+    echo "DMA Export Debug Log" >> "$DEBUG_LOG_FILE"
     echo "Started: $(date -Iseconds 2>/dev/null || date)" >> "$DEBUG_LOG_FILE"
     echo "Script Version: $SCRIPT_VERSION" >> "$DEBUG_LOG_FILE"
     echo "===============================================================================" >> "$DEBUG_LOG_FILE"
@@ -1305,7 +1305,7 @@ init_resilience_tracking() {
 EOF
 
   # Initialize error log
-  echo "# DynaBridge Export Error Log" > "$ERROR_LOG_FILE"
+  echo "# DMA Export Error Log" > "$ERROR_LOG_FILE"
   echo "# Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERROR_LOG_FILE"
   echo "# Server: $SPLUNK_HOST" >> "$ERROR_LOG_FILE"
   echo "# ============================================" >> "$ERROR_LOG_FILE"
@@ -2169,14 +2169,14 @@ show_welcome() {
     "  ${GREEN}•${NC} Lookup tables and KV Store collections" \
     "" \
     "${BOLD}Output:${NC}" \
-    "  A .tar.gz archive compatible with DynaBridge for Splunk app"
+    "  A .tar.gz archive compatible with Dynatrace Migration Assistant app"
 
   print_info_box "IMPORTANT: THIS IS FOR SPLUNK ENTERPRISE ONLY" \
     "" \
     "${YELLOW}⚠  This script requires SSH/shell access to your Splunk server${NC}" \
     "" \
     "If you have ${BOLD}Splunk Cloud${NC} (Classic or Victoria Experience), please use:" \
-    "  ${GREEN}./dynabridge-splunk-cloud-export.sh${NC}" \
+    "  ${GREEN}./dma-splunk-cloud-export.sh${NC}" \
     "" \
     "This script reads configuration files directly from \$SPLUNK_HOME"
 
@@ -2611,7 +2611,7 @@ detect_splunk_flavor() {
           "Splunk Cloud (Classic and Victoria Experience) does not allow" \
           "SSH access to the infrastructure, which this script requires." \
           "" \
-          "For Splunk Cloud migrations, please contact the DynaBridge" \
+          "For Splunk Cloud migrations, please contact the DMA" \
           "team for a REST API-only export solution." \
           "" \
           "If this is a hybrid environment with on-prem Search Heads" \
@@ -2620,7 +2620,7 @@ detect_splunk_flavor() {
         echo ""
         if ! prompt_yn "Continue anyway (hybrid environment)?" "N"; then
           echo ""
-          echo -e "${YELLOW}Export cancelled. Contact DynaBridge team for Cloud support.${NC}"
+          echo -e "${YELLOW}Export cancelled. Contact DMA team for Cloud support.${NC}"
           exit 0
         fi
       fi
@@ -2758,7 +2758,7 @@ select_applications() {
     "" \
     "${WHITE}RECOMMENDATION:${NC}" \
     "For a complete migration assessment, we recommend exporting" \
-    "${GREEN}ALL apps${NC}. This gives DynaBridge the full picture."
+    "${GREEN}ALL apps${NC}. This gives DMA the full picture."
 
   echo ""
 
@@ -3137,7 +3137,7 @@ authenticate_splunk() {
   auth_response=$(curl -k -s -w "%{http_code}" \
     -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/current-context?output_mode=json" \
-    -o /tmp/dynabridge_auth_test.json 2>&1)
+    -o /tmp/dma_auth_test.json 2>&1)
 
   local http_code="${auth_response: -3}"
 
@@ -3147,7 +3147,7 @@ authenticate_splunk() {
     # Check capabilities
     progress "Checking account capabilities..."
 
-    local caps=$(cat /tmp/dynabridge_auth_test.json 2>/dev/null)
+    local caps=$(cat /tmp/dma_auth_test.json 2>/dev/null)
 
     for cap in "admin_all_objects" "list_users" "list_roles"; do
       if echo "$caps" | grep -q "$cap"; then
@@ -3157,7 +3157,7 @@ authenticate_splunk() {
       fi
     done
 
-    rm -f /tmp/dynabridge_auth_test.json
+    rm -f /tmp/dma_auth_test.json
 
   elif [ "$http_code" = "401" ]; then
     error "Authentication failed (invalid credentials)"
@@ -3260,20 +3260,20 @@ create_export_directory() {
 
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
   local hostname=$(get_hostname short)
-  EXPORT_NAME="dynabridge_export_${hostname}_${TIMESTAMP}"
+  EXPORT_NAME="dma_export_${hostname}_${TIMESTAMP}"
   EXPORT_DIR="/tmp/$EXPORT_NAME"
   LOG_FILE="$EXPORT_DIR/export.log"
 
   progress "Creating directory: $EXPORT_DIR"
   rm -rf "$EXPORT_DIR"
   mkdir -p "$EXPORT_DIR"
-  # DynaBridge analytics - all migration-specific data collected by DynaBridge
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/system_info"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/rbac"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure"
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/indexes"
+  # DMA analytics - all migration-specific data collected by DMA
+  mkdir -p "$EXPORT_DIR/dma_analytics"
+  mkdir -p "$EXPORT_DIR/dma_analytics/system_info"
+  mkdir -p "$EXPORT_DIR/dma_analytics/rbac"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure"
+  mkdir -p "$EXPORT_DIR/dma_analytics/indexes"
   # Splunk configurations
   mkdir -p "$EXPORT_DIR/_system/local"
   # NOTE: Dashboards are now stored in app-scoped folders (v2 structure)
@@ -3281,7 +3281,7 @@ create_export_directory() {
   # This prevents name collisions when multiple apps have same-named dashboards
 
   touch "$LOG_FILE"
-  log "DynaBridge Export Started"
+  log "DMA Export Started"
   log "Script Version: $SCRIPT_VERSION"
   log "Export Directory: $EXPORT_DIR"
 
@@ -3317,11 +3317,11 @@ collect_system_info() {
     echo "  \"exportTimestamp\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
     echo "  \"exportVersion\": \"$SCRIPT_VERSION\""
     echo "}"
-  } > "$EXPORT_DIR/dynabridge_analytics/system_info/environment.json"
+  } > "$EXPORT_DIR/dma_analytics/system_info/environment.json"
 
   # Splunk version
   if [ -f "$SPLUNK_HOME/etc/splunk.version" ]; then
-    cp "$SPLUNK_HOME/etc/splunk.version" "$EXPORT_DIR/dynabridge_analytics/system_info/"
+    cp "$SPLUNK_HOME/etc/splunk.version" "$EXPORT_DIR/dma_analytics/system_info/"
   fi
 
   # REST API system info (use -G to force GET request with query params)
@@ -3329,22 +3329,22 @@ collect_system_info() {
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/info" \
       -d "output_mode=json" \
-      > "$EXPORT_DIR/dynabridge_analytics/system_info/server_info.json" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/system_info/server_info.json" 2>/dev/null
 
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/apps/local" \
       -d "output_mode=json" -d "count=0" \
-      > "$EXPORT_DIR/dynabridge_analytics/system_info/installed_apps.json" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/system_info/installed_apps.json" 2>/dev/null
 
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/distributed/peers" \
       -d "output_mode=json" \
-      > "$EXPORT_DIR/dynabridge_analytics/system_info/search_peers.json" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/system_info/search_peers.json" 2>/dev/null
 
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/licenser/licenses" \
       -d "output_mode=json" \
-      > "$EXPORT_DIR/dynabridge_analytics/system_info/license_info.json" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/system_info/license_info.json" 2>/dev/null
   fi
 
   success "System information collected"
@@ -3566,9 +3566,9 @@ collect_dashboard_studio() {
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/data/ui/views" \
     -H "Accept: application/json" \
     -d "output_mode=json" -d "count=0" \
-    > "$EXPORT_DIR/dynabridge_analytics/system_info/dashboards_list.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/system_info/dashboards_list.json" 2>/dev/null
 
-  if [ ! -s "$EXPORT_DIR/dynabridge_analytics/system_info/dashboards_list.json" ]; then
+  if [ ! -s "$EXPORT_DIR/dma_analytics/system_info/dashboards_list.json" ]; then
     warning "Could not retrieve dashboard list"
     return 0
   fi
@@ -3579,7 +3579,7 @@ collect_dashboard_studio() {
     if [ -n "$name" ]; then
       dashboard_names+=("$name")
     fi
-  done < <(grep -o '"name":"[^"]*"' "$EXPORT_DIR/dynabridge_analytics/system_info/dashboards_list.json" | cut -d'"' -f4)
+  done < <(grep -o '"name":"[^"]*"' "$EXPORT_DIR/dma_analytics/system_info/dashboards_list.json" | cut -d'"' -f4)
 
   local total_dashboards=${#dashboard_names[@]}
 
@@ -3601,7 +3601,7 @@ collect_dashboard_studio() {
     sleep "$API_DELAY_SECONDS"
 
     # Fetch dashboard to temp file first
-    local temp_file="$EXPORT_DIR/dynabridge_analytics/system_info/.dashboard_temp.json"
+    local temp_file="$EXPORT_DIR/dma_analytics/system_info/.dashboard_temp.json"
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/data/ui/views/$dashboard_name" \
       -H "Accept: application/json" \
@@ -3821,7 +3821,7 @@ except Exception as e:
   done
 
   # Clean up temp file
-  rm -f "$EXPORT_DIR/dynabridge_analytics/system_info/.dashboard_temp.json" 2>/dev/null
+  rm -f "$EXPORT_DIR/dma_analytics/system_info/.dashboard_temp.json" 2>/dev/null
 
   progress_complete
 
@@ -3923,9 +3923,9 @@ collect_rbac() {
           curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
             "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results" \
             -d "output_mode=json" -d "count=0" \
-            > "$EXPORT_DIR/dynabridge_analytics/rbac/users_active_in_apps.json" 2>/dev/null
+            > "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" 2>/dev/null
 
-          local active_users=$(grep -c '"user"' "$EXPORT_DIR/dynabridge_analytics/rbac/users_active_in_apps.json" 2>/dev/null | tr -d ' ')
+          local active_users=$(grep -c '"user"' "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" 2>/dev/null | tr -d ' ')
           success "Found $active_users users with activity in selected apps"
         fi
       fi
@@ -3938,27 +3938,27 @@ collect_rbac() {
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/users" \
     -d "output_mode=json" -d "count=0" \
-    > "$EXPORT_DIR/dynabridge_analytics/rbac/users.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/rbac/users.json" 2>/dev/null
 
-  local user_count=$(grep -o '"name"' "$EXPORT_DIR/dynabridge_analytics/rbac/users.json" 2>/dev/null | wc -l | tr -d ' ')
+  local user_count=$(grep -o '"name"' "$EXPORT_DIR/dma_analytics/rbac/users.json" 2>/dev/null | wc -l | tr -d ' ')
   STATS_USERS=$user_count
 
   # Roles (use -G to force GET request)
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authorization/roles" \
     -d "output_mode=json" -d "count=0" \
-    > "$EXPORT_DIR/dynabridge_analytics/rbac/roles.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/rbac/roles.json" 2>/dev/null
 
   # Auth config (with password redaction)
   if [ -f "$SPLUNK_HOME/etc/system/local/authentication.conf" ]; then
     sed 's/password\s*=.*/password = [REDACTED]/gi' \
       "$SPLUNK_HOME/etc/system/local/authentication.conf" \
-      > "$EXPORT_DIR/dynabridge_analytics/rbac/authentication.conf" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/rbac/authentication.conf" 2>/dev/null
   fi
 
   # Authorization config
   if [ -f "$SPLUNK_HOME/etc/system/local/authorize.conf" ]; then
-    cp "$SPLUNK_HOME/etc/system/local/authorize.conf" "$EXPORT_DIR/dynabridge_analytics/rbac/"
+    cp "$SPLUNK_HOME/etc/system/local/authorize.conf" "$EXPORT_DIR/dma_analytics/rbac/"
   fi
 
   success "Collected $user_count users and roles"
@@ -4416,28 +4416,28 @@ collect_usage_analytics() {
   # OPTIMIZED: Moved user filter to search-time, changed latest() to max()
   run_usage_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=splunk-system-user | stats count as search_count, dc(search) as unique_searches, max(_time) as last_active by user | sort -search_count | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_most_active.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" \
     "Most active users"
 
   # User activity by role
   # OPTIMIZED: Moved filter to search-time
   run_usage_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count as searches, dc(user) as users by roles | sort -searches" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/activity_by_role.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/activity_by_role.json" \
     "Activity by role"
 
   # Inactive users (no activity in period)
   # OPTIMIZED: Moved filter to search-time, changed latest() to max()
   run_usage_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | stats max(_time) as last_active by user | where last_active < relative_time(now(), \"-30d\") | table user, last_active" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/users_inactive.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" \
     "Inactive users"
 
   # User sessions per day
   # OPTIMIZED: Moved filter to search-time
   run_usage_search \
     "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=splunk-system-user | timechart span=1d dc(user) as active_users" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_active_users.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/daily_active_users.json" \
     "Daily active users"
 
   progress_update "$task_num"
@@ -4456,20 +4456,20 @@ collect_usage_analytics() {
   # OPTIMIZED: Added | sample 20 before expensive rex extraction
   run_usage_search \
     'index=_audit action=search earliest=-${USAGE_PERIOD} | sample 20 | rex field=search "sourcetype=(?<searched_sourcetype>[\w:_-]+)" | stats count as sample_count, dc(user) as users by searched_sourcetype | eval estimated_count=sample_count*20 | sort -estimated_count | head 50' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/sourcetypes_searched.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" \
     "Most searched sourcetypes"
 
   # Index usage (which indexes are actually queried)
   # OPTIMIZED: Added | sample 20 before expensive rex extraction
   run_usage_search \
     'index=_audit action=search earliest=-${USAGE_PERIOD} | sample 20 | rex field=search "index=(?<queried_index>[\w_-]+)" | stats count as sample_count, dc(user) as users by queried_index | eval estimated_count=sample_count*20 | sort -estimated_count' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/indexes_queried.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_queried.json" \
     "Indexes actually queried"
 
   # Data volume by index (for capacity planning)
   run_usage_search \
     '| dbinspect index=* | stats sum(sizeOnDiskMB) as size_mb, sum(eventCount) as events by index | sort - size_mb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/index_sizes.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/index_sizes.json" \
     "Index sizes and event counts"
 
   progress_update "$task_num"
@@ -4484,49 +4484,49 @@ collect_usage_analytics() {
   # Daily volume by index (GB per day)
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by idx | eval gb=round(bytes/1024/1024/1024,2) | fields _time, idx, gb" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_by_index.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_index.json" \
     "Daily volume by index (GB)"
 
   # Daily volume by sourcetype
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by st | eval gb=round(bytes/1024/1024/1024,2) | fields _time, st, gb" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_by_sourcetype.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_sourcetype.json" \
     "Daily volume by sourcetype (GB)"
 
   # Total daily volume (for licensing)
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes | eval gb=round(bytes/1024/1024/1024,2) | stats avg(gb) as avg_daily_gb, max(gb) as peak_daily_gb, sum(gb) as total_30d_gb" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_volume_summary.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" \
     "Daily volume summary"
 
   # Daily event count by index
   run_usage_search \
     "search index=_internal source=*metrics.log group=per_index_thruput earliest=-30d@d | timechart span=1d sum(ev) as events by series | rename series as index" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/daily_events_by_index.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/daily_events_by_index.json" \
     "Daily event counts by index"
 
   # Hourly pattern analysis (to identify peak hours)
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-7d | eval hour=strftime(_time, \"%H\") | stats sum(b) as bytes by hour | eval gb=round(bytes/1024/1024/1024,2) | sort hour" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/hourly_volume_pattern.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/hourly_volume_pattern.json" \
     "Hourly volume pattern (last 7 days)"
 
   # Top 20 indexes by daily average volume
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by idx | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_indexes_by_volume.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" \
     "Top 20 indexes by daily average volume"
 
   # Top 20 sourcetypes by daily average volume
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by st | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_sourcetypes_by_volume.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" \
     "Top 20 sourcetypes by daily average volume"
 
   # Volume by host (top 50)
   run_usage_search \
     "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by h | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 50" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/top_hosts_by_volume.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" \
     "Top 50 hosts by daily average volume"
 
   progress_update "$task_num"
@@ -4539,60 +4539,60 @@ collect_usage_analytics() {
   info "Collecting ingestion infrastructure information..."
 
   # Create subdirectory for ingestion infrastructure
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure"
 
   # Connection type breakdown (UF cooked vs HF raw vs other)
   run_usage_search \
     "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as unique_hosts, sum(kb) as total_kb by connectionType | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" \
     "Ingestion by connection type (UF/HF/other)"
 
   # Input method breakdown (splunktcp, http, udp, tcp, monitor, etc.)
   run_usage_search \
     'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | rex field=series "^(?<input_type>[^:]+):" | stats sum(kb) as total_kb, dc(series) as unique_sources by input_type | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2) | sort - total_kb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" \
     "Ingestion by input method"
 
   # HEC (HTTP Event Collector) usage
   run_usage_search \
     'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput series=http:* earliest=-7d | stats sum(kb) as total_kb, dc(series) as token_count | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" \
     "HTTP Event Collector usage"
 
   # Forwarding hosts inventory (unique hosts sending data)
   run_usage_search \
     "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats sum(kb) as total_kb, latest(_time) as last_seen, values(connectionType) as connection_types by sourceHost | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb | head 500" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/forwarding_hosts.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/forwarding_hosts.json" \
     "Forwarding hosts inventory (top 500)"
 
   # Sourcetype categorization (detect OTel, cloud, security, etc.)
   run_usage_search \
     'search index=_internal source=*license_usage.log type=Usage earliest=-30d | stats sum(b) as bytes, dc(h) as unique_hosts by st | eval daily_avg_gb=round((bytes/30)/1024/1024/1024,2) | eval category=case(match(st,"^otel|^otlp|opentelemetry"),"opentelemetry", match(st,"^aws:|^azure:|^gcp:|^cloud"),"cloud", match(st,"^WinEventLog|^windows|^wmi"),"windows", match(st,"^linux|^syslog|^nix"),"linux_unix", match(st,"^cisco:|^pan:|^juniper:|^fortinet:|^f5:|^checkpoint"),"network_security", match(st,"^access_combined|^nginx|^apache|^iis"),"web", match(st,"^docker|^kube|^container"),"containers", 1=1,"other") | stats sum(daily_avg_gb) as daily_avg_gb, sum(unique_hosts) as unique_hosts, values(st) as sourcetypes by category | sort - daily_avg_gb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" \
     "Ingestion by sourcetype category"
 
   # Data inputs configuration summary
   run_usage_search \
     '| rest /servicesNS/-/-/data/inputs/all | stats count by eai:acl.app, disabled | eval status=if(disabled="0","enabled","disabled") | stats count by eai:acl.app, status' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/data_inputs_by_app.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/data_inputs_by_app.json" \
     "Data inputs by app"
 
   # Syslog inputs (UDP/TCP)
   run_usage_search \
     'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | search series=udp:* OR series=tcp:* | stats sum(kb) as total_kb by series | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/syslog_inputs.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/syslog_inputs.json" \
     "Syslog inputs (UDP/TCP)"
 
   # Scripted inputs
   run_usage_search \
     '| rest /servicesNS/-/-/data/inputs/script | stats count by eai:acl.app, disabled, interval | eval status=if(disabled="0","enabled","disabled")' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/scripted_inputs.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/scripted_inputs.json" \
     "Scripted inputs inventory"
 
   # Summary: Total forwarding infrastructure
   run_usage_search \
     "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as total_forwarding_hosts, sum(kb) as total_kb | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)" \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ingestion_infrastructure/summary.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" \
     "Ingestion infrastructure summary"
 
   progress_update "$task_num"
@@ -4607,19 +4607,19 @@ collect_usage_analytics() {
   # Dashboard ownership - maps each dashboard to its owner
   run_usage_search \
     '| rest /servicesNS/-/-/data/ui/views | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing | rename title as dashboard, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/dashboard_ownership.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" \
     "Dashboard ownership mapping"
 
   # Alert/Saved search ownership - maps each alert to its owner
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track | rename title as alert_name, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_ownership.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json" \
     "Alert/saved search ownership mapping"
 
   # Ownership summary by user (how many dashboards and alerts each user owns)
   run_usage_search \
     '| rest /servicesNS/-/-/data/ui/views | stats count as dashboards by eai:acl.owner | rename eai:acl.owner as owner | append [| rest /servicesNS/-/-/saved/searches | stats count as alerts by eai:acl.owner | rename eai:acl.owner as owner] | stats sum(dashboards) as dashboards, sum(alerts) as alerts by owner | sort - dashboards' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/ownership_summary.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/ownership_summary.json" \
     "Ownership summary by user"
 
   progress_update "$task_num"
@@ -4632,86 +4632,86 @@ collect_usage_analytics() {
   info "Collecting comprehensive alert migration data..."
 
   # Create subdirectory for alert migration data
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration"
 
   # FULL ALERT DEFINITIONS - Complete alert configuration with ALL fields
   # This is THE critical file for alert migration - includes schedule, conditions, actions
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search is_scheduled=1 OR alert.track=1 | table title, search, cron_schedule, dispatch.earliest_time, dispatch.latest_time, alert.severity, alert.track, alert.digest_mode, alert.expires, alert_condition, alert_threshold, alert_comparator, alert_type, alert.suppress, alert.suppress.fields, alert.suppress.period, counttype, quantity, relation, actions, disabled, eai:acl.owner, eai:acl.app, eai:acl.sharing, description, next_scheduled_time, triggered_alert_count | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alert_definitions_full.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alert_definitions_full.json" \
     "Full alert definitions (schedules, conditions, thresholds)"
 
   # ALERT ACTION CONFIGURATIONS - Email recipients, webhook URLs, Slack channels, etc.
   # Critical for Action Dispatcher migration architecture
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search actions!="" | table title, actions, action.email, action.email.to, action.email.cc, action.email.bcc, action.email.subject, action.email.message.alert, action.email.sendresults, action.email.inline, action.email.format, action.webhook, action.webhook.param.url, action.slack, action.slack.channel, action.slack.message, action.pagerduty, action.pagerduty.integration_key, action.script, action.script.filename, action.summary_index, action.summary_index._name, action.notable, action.notable.param.severity, action.lookup, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alert_action_configs.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alert_action_configs.json" \
     "Alert action configurations (email, webhook, Slack, PagerDuty)"
 
   # ALERTS BY ACTION TYPE - Categorize alerts by their action type for migration planning
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search actions!="" | eval action_types=split(actions, ",") | mvexpand action_types | stats count, values(title) as alerts by action_types | sort - count' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_by_action_type.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_action_type.json" \
     "Alerts categorized by action type"
 
   # ALERTS WITH EMAIL ACTIONS - Detailed email configuration for migration
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search action.email=1 | table title, action.email.to, action.email.cc, action.email.subject, action.email.sendresults, action.email.format, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_with_email.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_email.json" \
     "Alerts with email action configuration"
 
   # ALERTS WITH WEBHOOK ACTIONS - Webhook URLs for Dynatrace Workflow migration
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search action.webhook=1 | table title, action.webhook.param.url, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_with_webhook.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_webhook.json" \
     "Alerts with webhook action configuration"
 
   # ALERTS WITH SLACK ACTIONS - Slack channel configuration
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search action.slack=1 | table title, action.slack.channel, action.slack.message, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_with_slack.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_slack.json" \
     "Alerts with Slack action configuration"
 
   # ALERTS WITH PAGERDUTY ACTIONS - PagerDuty integration configuration
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search action.pagerduty=1 | table title, action.pagerduty.integration_key, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_with_pagerduty.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_pagerduty.json" \
     "Alerts with PagerDuty action configuration"
 
   # ALERT SUPPRESSION SETTINGS - For deduplication migration
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search alert.suppress=1 | table title, alert.suppress, alert.suppress.fields, alert.suppress.period, cron_schedule, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_with_suppression.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_suppression.json" \
     "Alerts with suppression/throttling configuration"
 
   # ALERT SCHEDULE ANALYSIS - Group alerts by schedule frequency for capacity planning
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search is_scheduled=1 | stats count by cron_schedule | sort - count' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_by_schedule.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_schedule.json" \
     "Alerts grouped by schedule frequency"
 
   # ALERT SEVERITY DISTRIBUTION - For priority classification
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search alert.track=1 | stats count by alert.severity | sort - alert.severity' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_by_severity.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_severity.json" \
     "Alerts grouped by severity level"
 
   # HIGH FREQUENCY ALERTS - Alerts that run every minute (need special handling)
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search cron_schedule="* * * * *" OR cron_schedule="*/1 * * * *" | table title, search, cron_schedule, actions, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_high_frequency.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_high_frequency.json" \
     "High frequency alerts (1-minute interval)"
 
   # ALERTS WITH COMPLEX SPL - Alerts using advanced SPL commands
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search alert.track=1 | eval has_join=if(match(search,"\\|\\s*join"),"yes","no"), has_transaction=if(match(search,"\\|\\s*transaction"),"yes","no"), has_eventstats=if(match(search,"\\|\\s*eventstats"),"yes","no"), has_streamstats=if(match(search,"\\|\\s*streamstats"),"yes","no"), has_append=if(match(search,"\\|\\s*append"),"yes","no") | where has_join="yes" OR has_transaction="yes" OR has_eventstats="yes" OR has_streamstats="yes" OR has_append="yes" | table title, has_join, has_transaction, has_eventstats, has_streamstats, has_append, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_complex_spl.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_complex_spl.json" \
     "Alerts using complex SPL commands"
 
   # ALERTS DATA SOURCE ANALYSIS - Which indexes/sourcetypes each alert queries
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | search alert.track=1 | rex field=search "index=(?<queried_index>[\\w_-]+)" | rex field=search "sourcetype=(?<queried_sourcetype>[\\w:_-]+)" | table title, queried_index, queried_sourcetype, eai:acl.owner, eai:acl.app | rename title as alert_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/alert_migration/alerts_data_sources.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_data_sources.json" \
     "Alert data source mapping (index/sourcetype)"
 
   progress_update "$task_num"
@@ -4724,53 +4724,53 @@ collect_usage_analytics() {
   info "Collecting user and role mapping data..."
 
   # Create subdirectory for RBAC data
-  mkdir -p "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/rbac"
 
   # ALL USERS - Complete user list with roles
   run_usage_search \
     '| rest /services/authentication/users | table title, realname, email, roles, defaultApp, type, last_successful_login | rename title as username' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/users_all.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/users_all.json" \
     "All users with roles"
 
   # USER ROLE SUMMARY - Which roles are assigned to which users
   run_usage_search \
     '| rest /services/authentication/users | eval role_list=split(roles, ";") | mvexpand role_list | stats count, values(title) as users by role_list | sort - count | rename role_list as role' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/users_by_role.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/users_by_role.json" \
     "Users grouped by role"
 
   # ALL ROLES - Complete role definitions with capabilities
   run_usage_search \
     '| rest /services/authorization/roles | table title, imported_roles, capabilities, srchIndexesAllowed, srchIndexesDefault | rename title as role_name' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/roles_all.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/roles_all.json" \
     "All roles with capabilities"
 
   # ROLE CAPABILITIES - Which capabilities each role has
   run_usage_search \
     '| rest /services/authorization/roles | eval cap_list=split(capabilities, ";") | mvexpand cap_list | stats values(title) as roles by cap_list | sort cap_list | rename cap_list as capability' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/capabilities_by_role.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/capabilities_by_role.json" \
     "Capabilities grouped by role"
 
   # USERS WITH ADMIN CAPABILITIES - Important for ownership transfer
   run_usage_search \
     '| rest /services/authentication/users | search roles="*admin*" | table title, realname, email, roles | rename title as username' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/users_admin.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/users_admin.json" \
     "Users with admin roles"
 
   # EXTERNAL AUTHENTICATION CONFIGURATION (LDAP/SAML if configured)
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/providers/LDAP" \
     -d "output_mode=json" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/ldap_config.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/ldap_config.json" 2>/dev/null
 
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/providers/SAML" \
     -d "output_mode=json" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/saml_config.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/saml_config.json" 2>/dev/null
 
   # TEAM MAPPING SUGGESTION - Group assets by app to suggest team ownership
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | stats dc(title) as alerts, values(eai:acl.owner) as owners by eai:acl.app | append [| rest /servicesNS/-/-/data/ui/views | stats dc(title) as dashboards, values(eai:acl.owner) as owners by eai:acl.app] | stats sum(alerts) as alerts, sum(dashboards) as dashboards, values(owners) as owners by eai:acl.app | rename eai:acl.app as app' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/rbac/team_mapping_by_app.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/team_mapping_by_app.json" \
     "Team mapping suggestion (by app)"
 
   progress_update "$task_num"
@@ -4785,12 +4785,12 @@ collect_usage_analytics() {
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/saved/searches" \
     -d "output_mode=json" -d "count=0" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
 
   # Saved searches by owner
   run_usage_search \
     '| rest /servicesNS/-/-/saved/searches | stats count by eai:acl.owner | sort - count | head 30' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/saved_searches_by_owner.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_by_owner.json" \
     "Saved searches by owner"
 
   progress_update "$task_num"
@@ -4805,18 +4805,18 @@ collect_usage_analytics() {
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
     -d "output_mode=json" -d "count=1000" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/recent_searches.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/recent_searches.json" 2>/dev/null
 
   curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
     "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/introspection/kvstore" \
     -d "output_mode=json" \
-    > "$EXPORT_DIR/dynabridge_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
 
   # Scheduler load over time
   # OPTIMIZED: Added | fields early to reduce memory usage
   run_usage_search \
     'index=_internal sourcetype=scheduler earliest=-${USAGE_PERIOD} | fields _time, run_time | timechart span=1h count as scheduled_searches, avg(run_time) as avg_runtime' \
-    "$EXPORT_DIR/dynabridge_analytics/usage_analytics/scheduler_load.json" \
+    "$EXPORT_DIR/dma_analytics/usage_analytics/scheduler_load.json" \
     "Scheduler load over time"
 
   progress_update "$task_num"
@@ -4830,7 +4830,7 @@ collect_usage_analytics() {
 
   info "Generating usage intelligence summary..."
 
-  local summary_file="$EXPORT_DIR/dynabridge_analytics/usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md"
+  local summary_file="$EXPORT_DIR/dma_analytics/usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md"
 
   cat > "$summary_file" << 'USAGE_EOF'
 # Usage Intelligence Summary
@@ -4971,7 +4971,7 @@ collect_index_stats() {
   # 1. System indexes.conf
   ((task_num++))
   if [ -f "$SPLUNK_HOME/etc/system/local/indexes.conf" ]; then
-    cp "$SPLUNK_HOME/etc/system/local/indexes.conf" "$EXPORT_DIR/dynabridge_analytics/indexes/"
+    cp "$SPLUNK_HOME/etc/system/local/indexes.conf" "$EXPORT_DIR/dma_analytics/indexes/"
   fi
   progress_update "$task_num"
   task_complete "System indexes.conf"
@@ -4982,9 +4982,9 @@ collect_index_stats() {
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/data/indexes" \
       -d "output_mode=json" -d "count=0" \
-      > "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_detailed.json" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" 2>/dev/null
 
-    local index_count=$(grep -o '"title"' "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_detailed.json" 2>/dev/null | wc -l | tr -d ' ')
+    local index_count=$(grep -o '"title"' "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" 2>/dev/null | wc -l | tr -d ' ')
     STATS_INDEXES=$index_count
   fi
   progress_update "$task_num"
@@ -4996,7 +4996,7 @@ collect_index_stats() {
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/data/inputs/all" \
       -d "output_mode=json" -d "count=0" \
-      > "$EXPORT_DIR/dynabridge_analytics/indexes/data_inputs.json" 2>/dev/null
+      > "$EXPORT_DIR/dma_analytics/indexes/data_inputs.json" 2>/dev/null
   fi
   progress_update "$task_num"
   task_complete "Data inputs"
@@ -5014,7 +5014,7 @@ collect_index_stats() {
   progress_complete
 
   # Show index histogram if we have data
-  if [ -f "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_detailed.json" ] && [ -n "$SPLUNK_USER" ]; then
+  if [ -f "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" ] && [ -n "$SPLUNK_USER" ]; then
     # Try to extract index sizes for histogram using Python (no jq dependency)
     local index_sizes=()
     while IFS= read -r line; do
@@ -5034,7 +5034,7 @@ except:
       if [ -n "$parsed" ]; then
         index_sizes+=("$parsed")
       fi
-    done < <(json_iterate "$EXPORT_DIR/dynabridge_analytics/indexes/indexes_detailed.json" ".entry" 2>/dev/null | head -20)
+    done < <(json_iterate "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" ".entry" 2>/dev/null | head -20)
 
     if [ ${#index_sizes[@]} -gt 0 ]; then
       show_histogram "Index Sizes (MB) - Top 20" "${index_sizes[@]}"
@@ -5069,10 +5069,10 @@ collect_audit_sample() {
 generate_summary() {
   progress "Generating environment summary..."
 
-  local summary_file="$EXPORT_DIR/dynabridge-env-summary.md"
+  local summary_file="$EXPORT_DIR/dma-env-summary.md"
 
   cat > "$summary_file" << EOF
-# DynaBridge Environment Summary
+# DMA Environment Summary
 
 **Export Date**: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 **Hostname**: $(get_hostname)
@@ -5134,10 +5134,10 @@ EOF
 ## Next Steps
 
 1. Download the export file from this server
-2. Open DynaBridge for Splunk in Dynatrace
+2. Open Dynatrace Migration Assistant in Dynatrace
 3. Navigate to: Migration Workspace → Project Initialization
 4. Upload the .tar.gz file
-5. DynaBridge will analyze your environment and show:
+5. DMA will analyze your environment and show:
    - Migration readiness assessment
    - Dashboard conversion preview
    - Alert conversion checklist
@@ -5145,20 +5145,20 @@ EOF
 
 ---
 
-*Generated by DynaBridge Splunk Export Tool v$SCRIPT_VERSION*
+*Generated by DMA Splunk Export Tool v$SCRIPT_VERSION*
 EOF
 
-  success "Summary generated: dynabridge-env-summary.md"
+  success "Summary generated: dma-env-summary.md"
 }
 
 # =============================================================================
-# MANIFEST GENERATION (Guaranteed Schema for DynaBridge)
+# MANIFEST GENERATION (Guaranteed Schema for DMA)
 # =============================================================================
 
 generate_manifest() {
   progress "Generating manifest.json (standardized schema)..."
 
-  local manifest_file="$EXPORT_DIR/dynabridge_analytics/manifest.json"
+  local manifest_file="$EXPORT_DIR/dma_analytics/manifest.json"
 
   # Get Splunk version
   local splunk_version="unknown"
@@ -5264,7 +5264,7 @@ generate_manifest() {
 
   # Build usage intelligence summary using Python helper (replaces jq)
   local usage_intel_json="{}"
-  if [ -d "$EXPORT_DIR/dynabridge_analytics/usage_analytics" ]; then
+  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
     progress "Extracting usage intelligence for manifest..."
     usage_intel_json=$(build_usage_intel_json "$EXPORT_DIR")
     # Ensure we have valid JSON (fallback to empty object if empty or invalid)
@@ -5278,7 +5278,7 @@ generate_manifest() {
 {
   "schema_version": "4.0",
   "archive_structure_version": "v2",
-  "export_tool": "dynabridge-splunk-export",
+  "export_tool": "dma-splunk-export",
   "export_tool_version": "$SCRIPT_VERSION",
   "export_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "export_duration_seconds": $export_duration,
@@ -5393,7 +5393,7 @@ get_anon_email() {
   local real_email="$1"
 
   # Skip if empty or already anonymized
-  if [ -z "$real_email" ] || [[ "$real_email" == *"@anon.dynabridge.local"* ]]; then
+  if [ -z "$real_email" ] || [[ "$real_email" == *"@anon.dma.local"* ]]; then
     echo "$real_email"
     return
   fi
@@ -5406,7 +5406,7 @@ get_anon_email() {
 
   # Generate new anonymized email
   local anon_id=$(generate_anon_id "$real_email" "user" 6)
-  local anon_email="${anon_id}@anon.dynabridge.local"
+  local anon_email="${anon_id}@anon.dma.local"
 
   # Store mapping
   EMAIL_MAP["$real_email"]="$anon_email"
@@ -5453,7 +5453,7 @@ get_anon_webhook_url() {
   local real_url="$1"
 
   # Skip if empty or already anonymized
-  if [ -z "$real_url" ] || [[ "$real_url" == *"webhook.anon.dynabridge.local"* ]]; then
+  if [ -z "$real_url" ] || [[ "$real_url" == *"webhook.anon.dma.local"* ]]; then
     echo "$real_url"
     return
   fi
@@ -5466,7 +5466,7 @@ get_anon_webhook_url() {
 
   # Generate new anonymized webhook URL
   local anon_id=$(generate_anon_id "$real_url" "" 12)
-  local anon_url="https://webhook.anon.dynabridge.local/hook-${anon_id}"
+  local anon_url="https://webhook.anon.dma.local/hook-${anon_id}"
 
   # Store mapping
   WEBHOOK_MAP["$real_url"]="$anon_url"
@@ -5597,7 +5597,7 @@ generate_python_anonymizer() {
   cat > "$script_file" << 'PYTHON_SCRIPT'
 #!/usr/bin/env python3
 """
-DynaBridge Anonymizer - Streaming file anonymization
+DMA Anonymizer - Streaming file anonymization
 Handles large files without memory issues or regex backtracking
 
 v2.0 - Fixed JSON corruption issues:
@@ -5630,11 +5630,11 @@ def anonymize_email(email):
     if email in email_map:
         return email_map[email]
     # Skip already anonymized or safe emails
-    if '@anon.dynabridge.local' in email or '@example.com' in email or '@localhost' in email:
+    if '@anon.dma.local' in email or '@example.com' in email or '@localhost' in email:
         return email
     # Use 'anon' prefix instead of 'user' to avoid creating \u sequences
     # (e.g., \user becomes invalid JSON unicode escape)
-    anon = f"anon{get_hash_id(email)}@anon.dynabridge.local"
+    anon = f"anon{get_hash_id(email)}@anon.dma.local"
     email_map[email] = anon
     return anon
 
@@ -5655,9 +5655,9 @@ def anonymize_webhook(url):
     """Anonymize webhook URL consistently"""
     if url in webhook_map:
         return webhook_map[url]
-    if 'webhook.anon.dynabridge.local' in url:
+    if 'webhook.anon.dma.local' in url:
         return url
-    anon = f"https://webhook.anon.dynabridge.local/hook-{get_hash_id(url)}"
+    anon = f"https://webhook.anon.dma.local/hook-{get_hash_id(url)}"
     webhook_map[url] = anon
     return anon
 
@@ -5972,10 +5972,10 @@ anonymize_export() {
     "" \
     "${WHITE}Replacing sensitive data with anonymized values:${NC}" \
     "" \
-    "  ${CYAN}→${NC} Email addresses → user######@anon.dynabridge.local" \
+    "  ${CYAN}→${NC} Email addresses → user######@anon.dma.local" \
     "  ${CYAN}→${NC} Hostnames → host-########.anon.local" \
     "  ${CYAN}→${NC} IP addresses → [IP-REDACTED]" \
-    "  ${CYAN}→${NC} Webhook URLs → https://webhook.anon.dynabridge.local/hook-###" \
+    "  ${CYAN}→${NC} Webhook URLs → https://webhook.anon.dma.local/hook-###" \
     "  ${CYAN}→${NC} API keys/tokens → [API-KEY-########]" \
     "  ${CYAN}→${NC} PagerDuty keys → [PAGERDUTY-KEY-########]" \
     "  ${CYAN}→${NC} Slack channels → #anon-channel-######" \
@@ -6046,11 +6046,11 @@ anonymize_export() {
     "ip_addresses": "all_redacted"
   },
   "transformations": {
-    "emails": "original@domain.com → user######@anon.dynabridge.local",
+    "emails": "original@domain.com → user######@anon.dma.local",
     "hostnames": "server.example.com → host-########.anon.local",
     "ipv4": "x.x.x.x → [IP-REDACTED]",
     "ipv6": "xxxx:xxxx:... → [IPv6-REDACTED]",
-    "webhook_urls": "https://hooks.slack.com/... → https://webhook.anon.dynabridge.local/hook-############",
+    "webhook_urls": "https://hooks.slack.com/... → https://webhook.anon.dma.local/hook-############",
     "pagerduty_keys": "abc123def456... → [PAGERDUTY-KEY-########]",
     "api_keys": "token_xyz... → [API-KEY-########]",
     "slack_channels": "#alerts-prod → #anon-channel-######",
@@ -6248,7 +6248,7 @@ generate_troubleshooting_report() {
   local report_file="$EXPORT_DIR/TROUBLESHOOTING.md"
 
   cat > "$report_file" << 'TROUBLESHOOT_HEADER'
-# DynaBridge Export Troubleshooting Report
+# DMA Export Troubleshooting Report
 
 This report was generated because errors occurred during the export.
 Use this information to diagnose and resolve issues.
@@ -6294,12 +6294,12 @@ TROUBLESHOOT_HEADER
 EOF
 
   # Scan for error files in _usage_analytics
-  if [ -d "$EXPORT_DIR/dynabridge_analytics/usage_analytics" ]; then
+  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
     echo "## Failed Searches" >> "$report_file"
     echo "" >> "$report_file"
 
     local error_count=0
-    for json_file in "$EXPORT_DIR/dynabridge_analytics/usage_analytics"/*.json; do
+    for json_file in "$EXPORT_DIR/dma_analytics/usage_analytics"/*.json; do
       if [ -f "$json_file" ] && grep -q '"error":' "$json_file" 2>/dev/null; then
         ((error_count++))
         local filename=$(basename "$json_file")
@@ -6398,7 +6398,7 @@ curl -k -u YOUR_USER:YOUR_PASSWORD https://localhost:8089/services/authenticatio
 
 **Causes & Solutions:**
 - **Splunk Cloud restriction:** The `| rest` command may be disabled
-- Use the **Cloud export script** instead: `dynabridge-splunk-cloud-export.sh`
+- Use the **Cloud export script** instead: `dma-splunk-cloud-export.sh`
 - Contact Splunk Cloud support to enable REST API access
 
 ---
@@ -6429,7 +6429,7 @@ If you continue to have issues:
    - export.log
    - $SPLUNK_HOME/var/log/splunk/splunkd.log (last 500 lines)
 
-2. **Contact DynaBridge support** with the above files
+2. **Contact DMA support** with the above files
 
 3. **Useful commands to run:**
    ```bash
@@ -6446,7 +6446,7 @@ If you continue to have issues:
 
 ---
 
-*Report generated by DynaBridge Splunk Export v${SCRIPT_VERSION}*
+*Report generated by DMA Splunk Export v${SCRIPT_VERSION}*
 TROUBLESHOOT_GUIDES
 
   log "Generated troubleshooting report: $report_file"
@@ -6552,13 +6552,13 @@ EOF
   echo "  1. Download the export file from this server:"
   echo -e "     ${CYAN}$tarball${NC}"
   echo ""
-  echo "  2. Open DynaBridge for Splunk in Dynatrace"
+  echo "  2. Open Dynatrace Migration Assistant in Dynatrace"
   echo ""
   echo "  3. Navigate to: Migration Workspace → Project Initialization"
   echo ""
   echo "  4. Drag and drop the .tar.gz file into the upload area"
   echo ""
-  echo "  5. DynaBridge will analyze your environment and show:"
+  echo "  5. DMA will analyze your environment and show:"
   echo "     • Migration readiness assessment"
   echo "     • Dashboard conversion preview"
   echo "     • Alert conversion checklist"
@@ -6568,7 +6568,7 @@ EOF
   print_line "─" 75
 
   echo ""
-  echo -e "${GREEN}Thank you for using DynaBridge!${NC}"
+  echo -e "${GREEN}Thank you for using DMA!${NC}"
   echo ""
 }
 
@@ -6771,7 +6771,7 @@ main() {
     show_shc_captain_warning
 
     # Phase 2: Check for resume from previous export
-    if [ -d "/tmp/dynabridge_export_"* ] 2>/dev/null; then
+    if [ -d "/tmp/dma_export_"* ] 2>/dev/null; then
       check_resume_export
     fi
 

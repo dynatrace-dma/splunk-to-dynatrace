@@ -1,4 +1,4 @@
-# DynaBridge Splunk Enterprise Export Script
+# DMA Splunk Enterprise Export Script
 ## READ THIS FIRST - Complete Prerequisites Guide
 
 **Version**: 4.2.4
@@ -24,7 +24,7 @@ This preserves the original data in case anonymization corrupts files. Users can
 ### Previous v4.2.0 Changes
 
 - **App-Centric Dashboard Structure (v2)**: Dashboards now saved to `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/` to prevent name collisions
-- **Manifest Schema v4.0**: Added `archive_structure_version: "v2"` for DynaBridge to detect the new structure
+- **Manifest Schema v4.0**: Added `archive_structure_version: "v2"` for DMA to detect the new structure
 - **No More Flat Folders**: Removed `dashboards_classic/` and `dashboards_studio/` at root level
 
 ---
@@ -108,8 +108,8 @@ Supported architectures:
 **Splunk Cloud does NOT allow SSH access** to the underlying infrastructure.
 
 For Splunk Cloud migrations, use the dedicated Cloud export scripts:
-- **`dynabridge-splunk-cloud-export.sh`** -- Bash script for Linux/macOS
-- **`dynabridge-splunk-cloud-export.ps1`** -- PowerShell script for Windows
+- **`dma-splunk-cloud-export.sh`** -- Bash script for Linux/macOS
+- **`dma-splunk-cloud-export.ps1`** -- PowerShell script for Windows
 
 These scripts operate 100% via REST API and require:
 1. **Splunk Cloud admin credentials** or API token with appropriate permissions
@@ -121,7 +121,7 @@ See **[README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md)** for full prerequisites,
 
 ## What This Document Covers
 
-This document explains **everything you need to know** before running the DynaBridge Splunk Export Script, including:
+This document explains **everything you need to know** before running the DMA Splunk Export Script, including:
 
 1. [What This Script Does](#1-what-this-script-does)
 2. [Server Access Requirements](#2-server-access-requirements)
@@ -137,7 +137,7 @@ This document explains **everything you need to know** before running the DynaBr
 
 ## 1. What This Script Does
 
-The DynaBridge Export Script collects configuration data, dashboards, alerts, and usage analytics from your Splunk environment to enable migration to Dynatrace.
+The DMA Export Script collects configuration data, dashboards, alerts, and usage analytics from your Splunk environment to enable migration to Dynatrace.
 
 ### The Script Collects:
 
@@ -191,7 +191,7 @@ The `splunk` user (or whatever user runs your Splunk installation) has guarantee
 sudo su - splunk
 
 # Or run script as splunk user
-sudo -u splunk bash dynabridge-splunk-export.sh
+sudo -u splunk bash dma-splunk-export.sh
 ```
 
 ### 2.3 File System Access Required
@@ -277,7 +277,7 @@ For security best practices, create a dedicated user for the export:
 
 ```bash
 # Create a new role with required capabilities
-$SPLUNK_HOME/bin/splunk add role dynabridge_export \
+$SPLUNK_HOME/bin/splunk add role dma_export \
   -capability admin_all_objects \
   -capability list_users \
   -capability list_roles \
@@ -289,9 +289,9 @@ $SPLUNK_HOME/bin/splunk add role dynabridge_export \
   -auth admin:your_password
 
 # Create the export user with this role
-$SPLUNK_HOME/bin/splunk add user dynabridge_user \
+$SPLUNK_HOME/bin/splunk add user dma_user \
   -password 'SecurePassword123!' \
-  -role dynabridge_export \
+  -role dma_export \
   -auth admin:your_password
 ```
 
@@ -561,8 +561,8 @@ $SPLUNK_HOME/bin/splunk show shcluster-status -auth admin:password
 │                                                              │
 │  FOR SPLUNK CLOUD MIGRATIONS, USE:                          │
 │                                                              │
-│  • dynabridge-splunk-cloud-export.sh (Bash - Linux/macOS)  │
-│  • dynabridge-splunk-cloud-export.ps1  (PowerShell - Windows)│
+│  • dma-splunk-cloud-export.sh (Bash - Linux/macOS)  │
+│  • dma-splunk-cloud-export.ps1  (PowerShell - Windows)│
 │                                                              │
 │  Both scripts operate 100% via REST API.                    │
 │  See README-SPLUNK-CLOUD.md for full documentation.         │
@@ -574,8 +574,8 @@ $SPLUNK_HOME/bin/splunk show shcluster-status -auth admin:password
 |-------------|---------|
 | **Server Access** | ❌ Not possible - No SSH to Splunk Cloud |
 | **This Script** | ❌ Not supported |
-| **Alternative (Bash)** | `dynabridge-splunk-cloud-export.sh` -- see [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) |
-| **Alternative (PowerShell)** | `dynabridge-splunk-cloud-export.ps1` -- see [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) |
+| **Alternative (Bash)** | `dma-splunk-cloud-export.sh` -- see [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) |
+| **Alternative (PowerShell)** | `dma-splunk-cloud-export.ps1` -- see [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) |
 
 ---
 
@@ -724,7 +724,7 @@ When sharing exports with third parties (e.g., migration consultants, Dynatrace 
 
 | Data Type | Original | Anonymized |
 |-----------|----------|------------|
-| **Email Addresses** | `user1@example-corp.com` | `user3f8a2c@anon.dynabridge.local` |
+| **Email Addresses** | `user1@example-corp.com` | `user3f8a2c@anon.dma.local` |
 | **Hostnames** | `splunk-idx01.acme.internal` | `host-7b4c9e12.anon.local` |
 | **IP Addresses** | `192.168.1.100` | `[IP-REDACTED]` |
 | **IPv6 Addresses** | `2001:db8::1` | `[IPv6-REDACTED]` |
@@ -794,7 +794,7 @@ Non-interactive mode is automatically enabled when username AND password are pro
 
 ```bash
 # Fully automated export
-./dynabridge-splunk-export.sh \
+./dma-splunk-export.sh \
   -u admin \
   -p 'YourPassword' \
   --splunk-home /opt/splunk \
@@ -807,13 +807,13 @@ For large environments with many apps, you can dramatically reduce export time b
 
 ```bash
 # Export only specific apps (fastest option)
-./dynabridge-splunk-export.sh \
+./dma-splunk-export.sh \
   -u admin -p 'YourPassword' \
   --apps "search,myapp,security_essentials" \
   --quick
 
 # Scoped mode - exports app configs + only users/searches related to those apps
-./dynabridge-splunk-export.sh \
+./dma-splunk-export.sh \
   -u admin -p 'YourPassword' \
   --apps "myapp,otherapp" \
   --scoped
@@ -856,7 +856,7 @@ For large environments with many apps, you can dramatically reduce export time b
 When troubleshooting issues, enable debug mode to capture detailed logs:
 
 ```bash
-./dynabridge-splunk-export.sh \
+./dma-splunk-export.sh \
   -u admin -p 'YourPassword' \
   --apps myapp \
   --debug
@@ -894,7 +894,7 @@ Example:
 ```bash
 export SPLUNK_ADMIN_USER="admin"
 export SPLUNK_ADMIN_PASSWORD="MySecurePassword"
-./dynabridge-splunk-export.sh -y --splunk-home /opt/splunk
+./dma-splunk-export.sh -y --splunk-home /opt/splunk
 ```
 
 ### 8.6 CI/CD Pipeline Integration
@@ -906,8 +906,8 @@ Example for Jenkins/GitLab CI:
 splunk_export:
   stage: export
   script:
-    - chmod +x dynabridge-splunk-export.sh
-    - ./dynabridge-splunk-export.sh \
+    - chmod +x dma-splunk-export.sh
+    - ./dma-splunk-export.sh \
         -u $SPLUNK_USER \
         -p $SPLUNK_PASSWORD \
         --splunk-home /opt/splunk \
@@ -915,7 +915,7 @@ splunk_export:
         -y
   artifacts:
     paths:
-      - dynabridge-export-*.tar.gz
+      - dma-export-*.tar.gz
 ```
 
 ### 8.7 Enhanced Anonymization
@@ -924,10 +924,10 @@ The v4.0 script now anonymizes additional sensitive data types:
 
 | Data Type | Anonymization Pattern |
 |-----------|----------------------|
-| Email addresses | `user######@anon.dynabridge.local` |
+| Email addresses | `user######@anon.dma.local` |
 | Hostnames | `host-########.anon.local` |
 | IP addresses | `[IP-REDACTED]` |
-| **Webhook URLs** | `https://webhook.anon.dynabridge.local/hook-###` |
+| **Webhook URLs** | `https://webhook.anon.dma.local/hook-###` |
 | **API keys/tokens** | `[API-KEY-########]` |
 | **PagerDuty keys** | `[PAGERDUTY-KEY-########]` |
 | **Slack channels** | `#anon-channel-######` |
@@ -978,7 +978,7 @@ If the export is interrupted (timeout, network error, Ctrl+C), you can resume:
 
 ```bash
 # Script detects previous incomplete export
-./dynabridge-splunk-export.sh
+./dma-splunk-export.sh
 
 # Output:
 # Found incomplete export from 2025-01-06 14:30:00
@@ -1010,10 +1010,10 @@ For very large environments, tune via environment variables:
 # Large environment (5000+ dashboards)
 export BATCH_SIZE=50
 export API_TIMEOUT=180
-./dynabridge-splunk-export.sh
+./dma-splunk-export.sh
 
 # Or inline
-BATCH_SIZE=50 API_TIMEOUT=180 ./dynabridge-splunk-export.sh
+BATCH_SIZE=50 API_TIMEOUT=180 ./dma-splunk-export.sh
 ```
 
 ---
@@ -1033,7 +1033,7 @@ whoami
 sudo su - splunk
 
 # Or run as root
-sudo bash dynabridge-splunk-export.sh
+sudo bash dma-splunk-export.sh
 ```
 
 ### 9.2 "Connection Refused" on REST API
@@ -1107,7 +1107,7 @@ $SPLUNK_HOME/bin/splunk show shcluster-status -auth admin:password | grep -i cap
 
 # SSH to captain and run script there
 ssh splunk@shc-captain.company.com
-bash dynabridge-splunk-export.sh
+bash dma-splunk-export.sh
 ```
 
 ---
@@ -1152,12 +1152,12 @@ If this returns your username and roles, you're ready to run the export script!
 
 Once you've verified all requirements:
 
-1. **Download the script**: `dynabridge-splunk-export.sh`
-2. **Copy to Splunk server**: `scp dynabridge-splunk-export.sh splunk-server:/tmp/`
-3. **Run the script**: `sudo -u splunk bash /tmp/dynabridge-splunk-export.sh`
+1. **Download the script**: `dma-splunk-export.sh`
+2. **Copy to Splunk server**: `scp dma-splunk-export.sh splunk-server:/tmp/`
+3. **Run the script**: `sudo -u splunk bash /tmp/dma-splunk-export.sh`
 4. **Follow the prompts**: The script will guide you through each step
 5. **Download the export**: Copy the `.tar.gz` file to your workstation
-6. **Upload to DynaBridge**: Open DynaBridge in Dynatrace and upload
+6. **Upload to DMA**: Open Dynatrace Migration Assistant in Dynatrace and upload
 
 ---
 
@@ -1167,7 +1167,7 @@ This section shows exactly what you'll see when running the script successfully.
 
 ### Step 1: Launch and Welcome Screen
 
-When you run `./dynabridge-splunk-export.sh`, you'll see:
+When you run `./dma-splunk-export.sh`, you'll see:
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
@@ -1407,7 +1407,7 @@ Splunk admin password: ••••••••••••
 
   [8/8] Generating manifest and summary...
 ✓ manifest.json created
-✓ dynabridge-env-summary.md created
+✓ dma-env-summary.md created
 ```
 
 ### Step 8: Export Complete
@@ -1418,7 +1418,7 @@ Splunk admin password: ••••••••••••
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                              ║
 ║  Export Archive:                                                             ║
-║    📦 dynabridge_export_splunk-sh01_20241203_152347.tar.gz                   ║
+║    📦 dma_export_splunk-sh01_20241203_152347.tar.gz                   ║
 ║                                                                              ║
 ║  Summary:                                                                    ║
 ║  ┌──────────────────────────────────────────────────────────────────────┐   ║
@@ -1440,14 +1440,14 @@ Splunk admin password: ••••••••••••
 ║  NEXT STEPS:                                                                 ║
 ║                                                                              ║
 ║  1. Copy the export to your workstation:                                     ║
-║     scp splunk-sh01:/tmp/dynabridge_export_*.tar.gz ./                       ║
+║     scp splunk-sh01:/tmp/dma_export_*.tar.gz ./                       ║
 ║                                                                              ║
-║  2. Upload to DynaBridge:                                                    ║
-║     Open DynaBridge for Splunk app → Data Sources → Upload Export            ║
+║  2. Upload to DMA:                                                           ║
+║     Open Dynatrace Migration Assistant app → Data Sources → Upload Export    ║
 ║                                                                              ║
 ║  3. Review the summary report:                                               ║
-║     cat dynabridge_export_splunk-sh01_20241203_152347/                       ║
-║         dynabridge-env-summary.md                                            ║
+║     cat dma_export_splunk-sh01_20241203_152347/                       ║
+║         dma-env-summary.md                                            ║
 ║                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -1457,34 +1457,34 @@ Splunk admin password: ••••••••••••
 After a successful export, you'll have a `.tar.gz` file. Extract it to see the v2 app-centric structure:
 
 ```bash
-$ tar -tzf dynabridge_export_splunk-sh01_20241203_152347.tar.gz | head -30
+$ tar -tzf dma_export_splunk-sh01_20241203_152347.tar.gz | head -30
 
-dynabridge_export_splunk-sh01_20241203_152347/
-dynabridge_export_splunk-sh01_20241203_152347/manifest.json
-dynabridge_export_splunk-sh01_20241203_152347/dynabridge-env-summary.md
-dynabridge_export_splunk-sh01_20241203_152347/_export.log
-dynabridge_export_splunk-sh01_20241203_152347/_systeminfo/
-dynabridge_export_splunk-sh01_20241203_152347/_systeminfo/environment.json
-dynabridge_export_splunk-sh01_20241203_152347/_systeminfo/server_info.json
-dynabridge_export_splunk-sh01_20241203_152347/_systeminfo/license_info.json
-dynabridge_export_splunk-sh01_20241203_152347/_rbac/
-dynabridge_export_splunk-sh01_20241203_152347/_rbac/users.json
-dynabridge_export_splunk-sh01_20241203_152347/_rbac/roles.json
-dynabridge_export_splunk-sh01_20241203_152347/_usage_analytics/
-dynabridge_export_splunk-sh01_20241203_152347/_usage_analytics/dashboard_views.json
-dynabridge_export_splunk-sh01_20241203_152347/_usage_analytics/users_most_active.json
-dynabridge_export_splunk-sh01_20241203_152347/_usage_analytics/alert_execution_history.json
-dynabridge_export_splunk-sh01_20241203_152347/_indexes/
-dynabridge_export_splunk-sh01_20241203_152347/_indexes/index_stats.json
-dynabridge_export_splunk-sh01_20241203_152347/search/
-dynabridge_export_splunk-sh01_20241203_152347/search/dashboards/classic/          # v2 app-scoped
-dynabridge_export_splunk-sh01_20241203_152347/search/dashboards/studio/           # v2 app-scoped
-dynabridge_export_splunk-sh01_20241203_152347/search/local/props.conf
-dynabridge_export_splunk-sh01_20241203_152347/search/local/transforms.conf
-dynabridge_export_splunk-sh01_20241203_152347/search/local/savedsearches.conf
-dynabridge_export_splunk-sh01_20241203_152347/security_essentials/
-dynabridge_export_splunk-sh01_20241203_152347/security_essentials/dashboards/classic/
-dynabridge_export_splunk-sh01_20241203_152347/security_essentials/dashboards/studio/
+dma_export_splunk-sh01_20241203_152347/
+dma_export_splunk-sh01_20241203_152347/manifest.json
+dma_export_splunk-sh01_20241203_152347/dma-env-summary.md
+dma_export_splunk-sh01_20241203_152347/_export.log
+dma_export_splunk-sh01_20241203_152347/_systeminfo/
+dma_export_splunk-sh01_20241203_152347/_systeminfo/environment.json
+dma_export_splunk-sh01_20241203_152347/_systeminfo/server_info.json
+dma_export_splunk-sh01_20241203_152347/_systeminfo/license_info.json
+dma_export_splunk-sh01_20241203_152347/_rbac/
+dma_export_splunk-sh01_20241203_152347/_rbac/users.json
+dma_export_splunk-sh01_20241203_152347/_rbac/roles.json
+dma_export_splunk-sh01_20241203_152347/_usage_analytics/
+dma_export_splunk-sh01_20241203_152347/_usage_analytics/dashboard_views.json
+dma_export_splunk-sh01_20241203_152347/_usage_analytics/users_most_active.json
+dma_export_splunk-sh01_20241203_152347/_usage_analytics/alert_execution_history.json
+dma_export_splunk-sh01_20241203_152347/_indexes/
+dma_export_splunk-sh01_20241203_152347/_indexes/index_stats.json
+dma_export_splunk-sh01_20241203_152347/search/
+dma_export_splunk-sh01_20241203_152347/search/dashboards/classic/          # v2 app-scoped
+dma_export_splunk-sh01_20241203_152347/search/dashboards/studio/           # v2 app-scoped
+dma_export_splunk-sh01_20241203_152347/search/local/props.conf
+dma_export_splunk-sh01_20241203_152347/search/local/transforms.conf
+dma_export_splunk-sh01_20241203_152347/search/local/savedsearches.conf
+dma_export_splunk-sh01_20241203_152347/security_essentials/
+dma_export_splunk-sh01_20241203_152347/security_essentials/dashboards/classic/
+dma_export_splunk-sh01_20241203_152347/security_essentials/dashboards/studio/
 ```
 
 ### If Something Goes Wrong
@@ -1518,7 +1518,7 @@ After the export completes, verify it's valid:
 
 ```bash
 # Check the manifest
-$ cat dynabridge_export_*/manifest.json | jq '.statistics'
+$ cat dma_export_*/manifest.json | jq '.statistics'
 {
   "apps": 24,
   "dashboards": 55,
@@ -1530,11 +1530,11 @@ $ cat dynabridge_export_*/manifest.json | jq '.statistics'
 }
 
 # Check for errors in the log
-$ grep -i error dynabridge_export_*/_export.log
+$ grep -i error dma_export_*/_export.log
 (no output = no errors)
 
 # Verify archive integrity
-$ tar -tzf dynabridge_export_*.tar.gz > /dev/null && echo "Archive OK"
+$ tar -tzf dma_export_*.tar.gz > /dev/null && echo "Archive OK"
 Archive OK
 ```
 
@@ -1542,7 +1542,7 @@ Archive OK
 
 ## Sample Output Files
 
-### Example: dynabridge-env-summary.md
+### Example: dma-env-summary.md
 
 This human-readable summary report is generated in the export directory:
 
@@ -1627,10 +1627,10 @@ This human-readable summary report is generated in the export directory:
 ## Next Steps
 
 1. Download the export file from this server
-2. Open DynaBridge for Splunk in Dynatrace
+2. Open Dynatrace Migration Assistant in Dynatrace
 3. Navigate to: Migration Workspace → Project Initialization
 4. Upload the .tar.gz file
-5. DynaBridge will analyze your environment and show:
+5. DMA will analyze your environment and show:
    - Migration readiness assessment
    - Dashboard conversion preview
    - Alert conversion checklist
@@ -1638,17 +1638,17 @@ This human-readable summary report is generated in the export directory:
 
 ---
 
-*Generated by DynaBridge Splunk Export Tool v4.1.0*
+*Generated by DMA Splunk Export Tool v4.1.0*
 ```
 
 ### Example: manifest.json (Schema)
 
-This machine-readable manifest is used by DynaBridge to process your export:
+This machine-readable manifest is used by DMA to process your export:
 
 ```json
 {
   "schema_version": "3.3",
-  "export_tool": "dynabridge-splunk-export",
+  "export_tool": "dma-splunk-export",
   "export_tool_version": "4.0.0",
   "export_timestamp": "2025-12-03T20:23:47Z",
   "export_duration_seconds": 187,
@@ -1820,7 +1820,7 @@ This machine-readable manifest is used by DynaBridge to process your export:
 }
 ```
 
-This manifest enables DynaBridge to:
+This manifest enables DMA to:
 - **Prioritize migration** based on actual usage data (most-viewed dashboards first)
 - **Identify elimination candidates** (unused dashboards/alerts - don't migrate waste)
 - **Estimate data volume** for Dynatrace ingestion planning and licensing
@@ -1829,4 +1829,4 @@ This manifest enables DynaBridge to:
 
 ---
 
-*For support, contact your DynaBridge administrator or visit the documentation portal.*
+*For support, contact your DMA administrator or visit the documentation portal.*
