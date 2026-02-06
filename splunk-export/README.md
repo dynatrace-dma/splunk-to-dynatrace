@@ -345,8 +345,8 @@ This directory contains comprehensive documentation:
 
 | Document | Description |
 |----------|-------------|
-| [README-SPLUNK-ENTERPRISE.md](README-SPLUNK-ENTERPRISE.md) | Complete prerequisites guide for Splunk Enterprise exports |
-| [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) | Complete prerequisites guide for Splunk Cloud exports |
+| [README-SPLUNK-ENTERPRISE.md](docs_markdown/README-SPLUNK-ENTERPRISE.md) | Complete prerequisites guide for Splunk Enterprise exports |
+| [README-SPLUNK-CLOUD.md](docs_markdown/README-SPLUNK-CLOUD.md) | Complete prerequisites guide for Splunk Cloud exports |
 
 These documents cover:
 - Where to run the script (Search Head, SHC Captain, etc.)
@@ -359,10 +359,10 @@ These documents cover:
 
 | Document | Description |
 |----------|-------------|
-| [EXPORT-SCHEMA.md](EXPORT-SCHEMA.md) | Guaranteed output schema (v3.4) for all exports |
-| [SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | Detailed specification for Enterprise script |
-| [SPLUNK-CLOUD-EXPORT-SPECIFICATION.md](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | Detailed specification for Cloud script |
-| [SCRIPT-GENERATED-ANALYTICS-REFERENCE.md](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | Reference for all SPL queries used to generate usage analytics |
+| [EXPORT-SCHEMA.md](docs_markdown/EXPORT-SCHEMA.md) | Guaranteed output schema (v3.4) for all exports |
+| [SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md](docs_markdown/SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | Detailed specification for Enterprise script |
+| [SPLUNK-CLOUD-EXPORT-SPECIFICATION.md](docs_markdown/SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | Detailed specification for Cloud script |
+| [SCRIPT-GENERATED-ANALYTICS-REFERENCE.md](docs_markdown/SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | Reference for all SPL queries used to generate usage analytics |
 
 ### HTML Versions (In-App Viewing)
 
