@@ -3035,11 +3035,13 @@ select_data_categories() {
   echo -e "  ${GREEN}[✓]${NC} 3. ${WHITE}Alerts & Saved Searches${NC} (savedsearches.conf)"
   echo -e "      → ${GRAY}Critical for operational continuity${NC}"
   echo ""
-  echo -e "  ${GREEN}[✓]${NC} 4. ${WHITE}Users, Roles & Groups${NC} (RBAC data - NO passwords)"
+  echo -e "  ${YELLOW}[ ]${NC} 4. ${WHITE}Users, Roles & Groups${NC} (RBAC data - NO passwords)"
   echo -e "      → ${GRAY}Usernames and roles only - passwords are NEVER collected${NC}"
+  echo -e "      → ${YELLOW}OFF by default - enable with toggle or --rbac flag${NC}"
   echo ""
-  echo -e "  ${GREEN}[✓]${NC} 5. ${WHITE}Usage Analytics${NC} (search frequency, dashboard views)"
+  echo -e "  ${YELLOW}[ ]${NC} 5. ${WHITE}Usage Analytics${NC} (search frequency, dashboard views)"
   echo -e "      → ${GRAY}Identifies high-value assets worth migrating${NC}"
+  echo -e "      → ${YELLOW}OFF by default - enable with toggle or --usage flag${NC}"
   echo ""
   echo -e "  ${GREEN}[✓]${NC} 6. ${WHITE}Index & Data Statistics${NC}"
   echo -e "      → ${GRAY}Volume metrics for capacity planning${NC}"
@@ -3060,7 +3062,7 @@ select_data_categories() {
   echo -e "  ${DIM}🔒 Privacy: Passwords are NEVER collected. Secrets in .conf files are auto-redacted.${NC}"
   echo ""
   echo -e "${WHITE}Enter numbers to toggle (e.g., 7,8 to add lookups and audit)${NC}"
-  echo -e "${GRAY}Or press Enter to accept defaults [1-6,9]:${NC}"
+  echo -e "${GRAY}Or press Enter to accept defaults [1-3,6,9] (RBAC/Usage OFF):${NC}"
   echo ""
 
   local toggle_input
@@ -3076,8 +3078,8 @@ select_data_categories() {
         1) COLLECT_CONFIGS=false; info "Configurations: OFF" ;;
         2) COLLECT_DASHBOARDS=false; info "Dashboards: OFF" ;;
         3) COLLECT_ALERTS=false; info "Alerts: OFF" ;;
-        4) COLLECT_RBAC=false; info "Users/RBAC: OFF" ;;
-        5) COLLECT_USAGE=false; info "Usage Analytics: OFF" ;;
+        4) COLLECT_RBAC=true; info "Users/RBAC: ON" ;;
+        5) COLLECT_USAGE=true; info "Usage Analytics: ON" ;;
         6) COLLECT_INDEXES=false; info "Index Stats: OFF" ;;
         7) COLLECT_LOOKUPS=true; info "Lookup Tables: ON" ;;
         8) COLLECT_AUDIT=true; info "Audit Sample: ON" ;;
@@ -3614,6 +3616,22 @@ collect_dashboard_studio() {
       dashboard_app=$(grep -oP '"app"\s*:\s*"\K[^"]+' "$temp_file" 2>/dev/null | head -1)
       if [ -z "$dashboard_app" ]; then
         dashboard_app="unknown_app"
+      fi
+
+      # Skip dashboards from apps not in SELECTED_APPS (if app filtering is active)
+      if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+        local app_match=false
+        for selected_app in "${SELECTED_APPS[@]}"; do
+          if [ "$dashboard_app" = "$selected_app" ]; then
+            app_match=true
+            break
+          fi
+        done
+        if [ "$app_match" = false ]; then
+          # Skip this dashboard - not in selected apps
+          progress_update 1
+          continue
+        fi
       fi
 
       # Create app-scoped dashboard folders (v2 structure)
