@@ -3620,6 +3620,8 @@ collect_dashboard_studio() {
   local classic_count=0
   local studio_count=0
   local failed_count=0
+  local batch_count=0
+  local batch_size=10
 
   for entry in "${dashboard_data[@]}"; do
     local query_app="${entry%%|*}"
