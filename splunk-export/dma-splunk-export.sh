@@ -3563,27 +3563,52 @@ collect_dashboard_studio() {
 
   progress "Collecting dashboards via REST API..."
 
-  # Get list of all dashboards (use -G to force GET request)
-  curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
-    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/data/ui/views" \
-    -H "Accept: application/json" \
-    -d "output_mode=json" -d "count=0" \
-    > "$EXPORT_DIR/dma_analytics/system_info/dashboards_list.json" 2>/dev/null
-
-  if [ ! -s "$EXPORT_DIR/dma_analytics/system_info/dashboards_list.json" ]; then
-    warning "Could not retrieve dashboard list"
-    return 0
+  # Determine which apps to collect dashboards from
+  local apps_to_query=()
+  if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    # Use selected apps - query per-app for efficiency
+    apps_to_query=("${SELECTED_APPS[@]}")
+    info "Collecting dashboards from ${#apps_to_query[@]} selected app(s): ${apps_to_query[*]}"
+  else
+    # No app filter - query all dashboards globally
+    apps_to_query=("-")  # "-" means all apps in Splunk REST API
   fi
 
-  # Count total dashboards for progress tracking
-  local dashboard_names=()
-  while IFS= read -r name; do
-    if [ -n "$name" ]; then
-      dashboard_names+=("$name")
-    fi
-  done < <(grep -o '"name":"[^"]*"' "$EXPORT_DIR/dma_analytics/system_info/dashboards_list.json" | cut -d'"' -f4)
+  # First pass: count total dashboards across selected apps for progress bar
+  local total_dashboards=0
+  local dashboard_data=()  # Array of "app|name" pairs
 
-  local total_dashboards=${#dashboard_names[@]}
+  for app in "${apps_to_query[@]}"; do
+    local api_path
+    if [ "$app" = "-" ]; then
+      api_path="/servicesNS/-/-/data/ui/views"
+    else
+      api_path="/servicesNS/-/${app}/data/ui/views"
+    fi
+
+    local temp_list="$EXPORT_DIR/dma_analytics/system_info/.dashboards_${app//\//_}.json"
+    curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}${api_path}" \
+      -H "Accept: application/json" \
+      -d "output_mode=json" -d "count=0" \
+      > "$temp_list" 2>/dev/null
+
+    if [ -s "$temp_list" ]; then
+      # Extract dashboard names and their owning apps
+      while IFS= read -r line; do
+        if [ -n "$line" ]; then
+          dashboard_data+=("${app}|${line}")
+          ((total_dashboards++))
+        fi
+      done < <(grep -o '"name":"[^"]*"' "$temp_list" | cut -d'"' -f4)
+    fi
+    rm -f "$temp_list" 2>/dev/null
+  done
+
+  if [ $total_dashboards -eq 0 ]; then
+    warning "No dashboards found in selected apps"
+    return 0
+  fi
 
   # Show scale warning for large environments
   show_scale_warning "dashboards" "$total_dashboards" 200
@@ -3595,17 +3620,25 @@ collect_dashboard_studio() {
   local classic_count=0
   local studio_count=0
   local failed_count=0
-  local batch_size=10
-  local batch_count=0
 
-  for dashboard_name in "${dashboard_names[@]}"; do
+  for entry in "${dashboard_data[@]}"; do
+    local query_app="${entry%%|*}"
+    local dashboard_name="${entry#*|}"
+
     # Rate limit API calls
     sleep "$API_DELAY_SECONDS"
 
-    # Fetch dashboard to temp file first
+    # Fetch dashboard to temp file - use app-specific endpoint for accuracy
     local temp_file="$EXPORT_DIR/dma_analytics/system_info/.dashboard_temp.json"
+    local fetch_path
+    if [ "$query_app" = "-" ]; then
+      fetch_path="/servicesNS/-/-/data/ui/views/$dashboard_name"
+    else
+      fetch_path="/servicesNS/-/${query_app}/data/ui/views/$dashboard_name"
+    fi
+
     curl -k -s -G -u "${SPLUNK_USER}:${SPLUNK_PASSWORD}" \
-      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/data/ui/views/$dashboard_name" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}${fetch_path}" \
       -H "Accept: application/json" \
       -d "output_mode=json" \
       > "$temp_file" 2>/dev/null
@@ -3615,23 +3648,8 @@ collect_dashboard_studio() {
       local dashboard_app=""
       dashboard_app=$(grep -oP '"app"\s*:\s*"\K[^"]+' "$temp_file" 2>/dev/null | head -1)
       if [ -z "$dashboard_app" ]; then
-        dashboard_app="unknown_app"
-      fi
-
-      # Skip dashboards from apps not in SELECTED_APPS (if app filtering is active)
-      if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
-        local app_match=false
-        for selected_app in "${SELECTED_APPS[@]}"; do
-          if [ "$dashboard_app" = "$selected_app" ]; then
-            app_match=true
-            break
-          fi
-        done
-        if [ "$app_match" = false ]; then
-          # Skip this dashboard - not in selected apps
-          progress_update 1
-          continue
-        fi
+        dashboard_app="${query_app}"
+        [ "$dashboard_app" = "-" ] && dashboard_app="unknown_app"
       fi
 
       # Create app-scoped dashboard folders (v2 structure)
