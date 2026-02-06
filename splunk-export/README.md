@@ -129,6 +129,58 @@ sudo -u splunk bash /tmp/dma-splunk-export.sh
 
 ---
 
+## ⚠️ REQUIRED PERMISSIONS (READ THIS FIRST)
+
+> **Insufficient permissions are the #1 cause of export failures.** Before running the export, ensure your user/token has the correct access.
+
+### Splunk Cloud - Quick Setup
+
+**Option 1: Use the `sc_admin` Role (Recommended)**
+
+1. Create a user with the `sc_admin` role in Splunk Cloud
+2. Create an API token for that user (Settings → Tokens)
+3. Use that token with the export script
+
+**Option 2: Minimum Required Capabilities**
+
+If you cannot use `sc_admin`, your user/token needs these capabilities:
+
+| Capability | What It Enables |
+|------------|-----------------|
+| `admin_all_objects` | Access dashboards/alerts in ALL apps |
+| `list_settings` | Read server configuration |
+| `rest_properties_get` | Make REST API calls |
+| `search` | Run usage analytics queries |
+| `list_users` | Collect user data (for `--rbac`) |
+| `list_roles` | Collect role data (for `--rbac`) |
+| `list_indexes` | Collect index metadata |
+
+**Plus, for `--usage` analytics**, the user needs access to search these indexes:
+- `_internal`
+- `_audit`
+
+### Splunk Enterprise - Quick Setup
+
+Run the script as the `splunk` user (or a user with admin privileges):
+
+```bash
+sudo -u splunk bash /tmp/dma-splunk-export.sh
+```
+
+### Verify Before Running
+
+**Splunk Cloud** - Test your token can list apps:
+```bash
+curl -s -k -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-stack.splunkcloud.com:8089/services/apps/local?output_mode=json&count=0" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Apps found: {len(d.get(\"entry\",[]))}')"
+```
+If this returns `Apps found: 0`, your token lacks `admin_all_objects`.
+
+**Full documentation**: See [README-SPLUNK-CLOUD.md](docs_markdown/README-SPLUNK-CLOUD.md#3-required-permissions-critical---read-this-carefully) for detailed setup instructions.
+
+---
+
 ## Available Scripts
 
 | Script | Target Environment | Platform | Access Method |

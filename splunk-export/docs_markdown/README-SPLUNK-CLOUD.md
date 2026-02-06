@@ -155,26 +155,236 @@ You need ONE of the following:
 - Your Splunk Cloud admin username and password
 - If MFA is required, you may need to create an API token instead
 
-### 3. Required Permissions
+### 3. Required Permissions (CRITICAL - READ THIS CAREFULLY)
 
-The user or token must have these Splunk capabilities:
+> **WARNING**: Insufficient permissions are the #1 cause of export failures. Follow this section exactly to avoid partial exports and repeated runs.
 
-| Capability | Required? | What It's Used For |
-|------------|-----------|-------------------|
-| `admin_all_objects` | **Required** | Access all apps and knowledge objects |
-| `list_users` | **Required** | Collect user information |
-| `list_roles` | **Required** | Collect role definitions |
-| `search` | **Required** | Run usage analytics queries |
-| `rest_access` | **Required** | Make REST API calls |
-| `list_indexes` | Recommended | Get index metadata |
+The export script needs access to REST API endpoints across ALL apps in your Splunk Cloud environment. This requires a user or token with **elevated privileges** — a standard user account will NOT work.
 
-#### Checking Your Permissions
+---
 
-Run this in Splunk Cloud search:
+#### Complete Capabilities Reference
+
+| Capability | Required For | What Fails Without It |
+|------------|--------------|----------------------|
+| `admin_all_objects` | **CRITICAL** | Cannot list apps, dashboards, saved searches in other apps |
+| `list_settings` | Core export | Cannot read server settings, configurations |
+| `rest_properties_get` | REST API access | API calls return 403 Forbidden |
+| `search` | Usage analytics | All `--usage` SPL queries fail |
+| `list_users` | RBAC collection | `--rbac` flag returns empty user list |
+| `list_roles` | RBAC collection | `--rbac` flag returns empty role list |
+| `list_indexes` | Index metadata | Cannot collect index information |
+| `schedule_search` | Usage analytics | Some scheduled search queries fail |
+| `list_inputs` | Data inputs | Cannot collect input configurations |
+| `list_forwarders` | Ingestion data | Cannot collect forwarder information |
+| `indexes_edit` | Index details | Cannot read index properties (some environments) |
+| `read_internal_indexes` | Usage analytics | Cannot query `_internal`, `_audit` indexes |
+
+---
+
+#### Option 1: Use the `sc_admin` Role (Recommended for Splunk Cloud)
+
+Splunk Cloud provides a built-in role called `sc_admin` that has all the capabilities needed for a complete export. This is the **easiest and most reliable** approach.
+
+**Step-by-step Setup:**
+
+1. **Log into Splunk Cloud** as an admin user
+   ```
+   https://your-stack.splunkcloud.com
+   ```
+
+2. **Go to Settings → Access Controls → Users**
+
+3. **Create a new user** (or modify an existing one):
+   - Click "New User" or select an existing user
+   - Username: `dma_export_user` (or any name)
+   - Set a strong password
+   - **Assign Roles**: Select `sc_admin`
+   - Click "Save"
+
+4. **Create an API Token** for this user:
+   - Log in as the `dma_export_user`
+   - Go to Settings → Tokens
+   - Click "New Token"
+   - Name: `DMA Export Token`
+   - Expiration: 7 days (or as needed)
+   - Click "Create"
+   - **COPY THE TOKEN NOW** (it's only shown once)
+
+5. **Run the export** with this token:
+   ```bash
+   ./dma-splunk-cloud-export.sh --stack your-stack.splunkcloud.com --token "YOUR_TOKEN"
+   ```
+
+---
+
+#### Option 2: Create a Custom Role with Minimum Required Capabilities
+
+If you cannot use `sc_admin` (e.g., due to security policies), create a custom role with exactly the capabilities needed.
+
+**Step-by-step Setup:**
+
+1. **Go to Settings → Access Controls → Roles**
+
+2. **Click "New Role"**
+
+3. **Configure the role:**
+   - Name: `dma_export_role`
+   - Default app: `search`
+
+4. **Under "Capabilities", enable ALL of the following:**
+
+   **Core Capabilities (REQUIRED):**
+   ```
+   admin_all_objects
+   list_settings
+   rest_properties_get
+   rest_properties_set
+   ```
+
+   **Search Capabilities (REQUIRED for --usage):**
+   ```
+   search
+   schedule_search
+   rtsearch
+   ```
+
+   **RBAC Capabilities (REQUIRED for --rbac):**
+   ```
+   list_users
+   edit_user
+   list_roles
+   ```
+
+   **Index Capabilities (REQUIRED for index collection):**
+   ```
+   list_indexes
+   indexes_edit
+   ```
+
+   **Internal Index Access (REQUIRED for usage analytics):**
+   ```
+   list_introspection
+   ```
+
+5. **Under "Indexes searched by default", add:**
+   ```
+   _internal
+   _audit
+   _introspection
+   ```
+
+6. **Under "Indexes", set:**
+   - "Indexes searched by default": Select all indexes OR `*`
+   - "Indexes": Select all indexes OR `*`
+
+7. **Inherit from**: Select `user` as the base role
+
+8. **Click "Save"**
+
+9. **Assign this role to your export user** (Settings → Users → select user → add `dma_export_role`)
+
+---
+
+#### Option 3: Using an Existing Admin User
+
+If your organization has an existing admin user with appropriate access, you can use those credentials directly. However, verify the user has all required capabilities first.
+
+---
+
+#### Verifying Your Permissions BEFORE Running the Export
+
+Run these searches in Splunk Cloud to verify your token/user has the correct access:
+
+**1. Check your capabilities:**
 ```spl
 | rest /services/authentication/current-context
-| table username, roles, capabilities
+| table username, roles
+| append [| rest /services/authentication/current-context
+| mvexpand capabilities
+| stats values(capabilities) as capabilities]
 ```
+
+**2. Verify you can list all apps:**
+```spl
+| rest /services/apps/local
+| stats count
+```
+Expected: Returns a count > 0 (should show all apps you have access to)
+
+**3. Verify you can access saved searches across apps:**
+```spl
+| rest /servicesNS/-/-/saved/searches
+| stats count by eai:acl.app
+```
+Expected: Returns saved searches from multiple apps
+
+**4. Verify you can query internal indexes (needed for --usage):**
+```spl
+index=_internal sourcetype=splunkd | head 1
+```
+Expected: Returns at least 1 result (not "no results found")
+
+**5. Verify you can query audit index (needed for --usage):**
+```spl
+index=_audit action=search | head 1
+```
+Expected: Returns at least 1 result
+
+---
+
+#### Common Permission Errors and Solutions
+
+| Error Message | Cause | Solution |
+|---------------|-------|----------|
+| `No applications found! Cannot proceed` | User lacks `admin_all_objects` or `list_settings` | Assign `sc_admin` role or add missing capabilities |
+| `Access forbidden (403)` | User lacks `rest_properties_get` | Add capability to role |
+| `Failed to retrieve user capabilities` | Token expired or invalid | Generate a new token |
+| `0 users collected` with `--rbac` | User lacks `list_users` capability | Add `list_users` to role |
+| `0 results` from usage queries | User lacks access to `_internal`/`_audit` indexes | Add indexes to role's searchable indexes |
+| `403 on /services/authentication/users` | User cannot list other users | Add `list_users` and `edit_user` capabilities |
+| `Skipping endpoint (blocked in Cloud)` | Normal - some endpoints don't exist in Cloud | Not an error, script handles this automatically |
+
+---
+
+#### Minimum Permissions Summary Table
+
+| Collection Type | Flag | Required Capabilities | Required Index Access |
+|----------------|------|----------------------|----------------------|
+| **Basic Export** (apps, dashboards, alerts) | (default) | `admin_all_objects`, `list_settings`, `rest_properties_get` | None |
+| **RBAC/Users** | `--rbac` | Above + `list_users`, `list_roles`, `edit_user` | None |
+| **Usage Analytics** | `--usage` | Above + `search`, `schedule_search` | `_internal`, `_audit` |
+| **Index Metadata** | (default) | Above + `list_indexes` | None |
+| **Full Export** | `--rbac --usage` | All of the above | `_internal`, `_audit` |
+
+---
+
+#### Why Can't I Just Use My Regular User Account?
+
+Regular Splunk users typically:
+- Can only see their own apps and objects (not `admin_all_objects`)
+- Cannot list other users (`list_users` not granted)
+- Cannot query `_internal` or `_audit` indexes
+- Cannot access REST endpoints for system configuration
+
+The export script needs to see **everything** in your Splunk environment to provide a complete migration assessment. This requires admin-level access.
+
+---
+
+#### Checking Your Permissions (Quick Test)
+
+Before running the full export, test your credentials:
+
+```bash
+# Test if you can reach the API and list apps
+curl -s -k -H "Authorization: Bearer YOUR_TOKEN" \
+  "https://your-stack.splunkcloud.com:8089/services/apps/local?output_mode=json&count=0" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Apps found: {len(d.get(\"entry\",[]))}')"
+```
+
+Expected output: `Apps found: 42` (some number > 0)
+
+If you see `Apps found: 0` or an error, your token lacks the required permissions.
 
 ### 4. Local Machine Requirements
 
