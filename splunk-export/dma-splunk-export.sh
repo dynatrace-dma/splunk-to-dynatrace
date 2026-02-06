@@ -2791,7 +2791,8 @@ select_applications() {
         fi
 
         # Skip framework/system/default apps that have no user content
-        if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|search|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
+        # NOTE: "search" app is NOT excluded - users commonly create content there
+        if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
           continue
         fi
 
