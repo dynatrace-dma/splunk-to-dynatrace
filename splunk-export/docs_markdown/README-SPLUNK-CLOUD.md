@@ -544,7 +544,7 @@ export SPLUNK_CLOUD_TOKEN="your-api-token"
 
 ---
 
-## Command-Line Arguments (Updated in v4.1.0)
+## Command-Line Arguments (Updated in v4.3.0)
 
 | Argument | Description | Example |
 |----------|-------------|---------|
@@ -552,33 +552,27 @@ export SPLUNK_CLOUD_TOKEN="your-api-token"
 | `--token` | API token for authentication | `--token "xxxxx"` |
 | `--user` | Username (if not using token) | `--user admin` |
 | `--password` | Password (if not using token) | `--password "xxx"` |
-| `--apps` | Comma-separated list of apps **(NEW v4.1.0)** | `--apps "search,myapp"` |
+| `--apps` | Comma-separated list of apps | `--apps "search,myapp"` |
 | `--all-apps` | Export all applications (default) | `--all-apps` |
-| `--quick` | Quick mode - skip analytics **(TESTING ONLY - see warning)** | `--quick` |
-| `--scoped` | Scope collections to selected apps only **(NEW v4.1.0)** | `--scoped` |
-| `--no-usage` | Skip usage analytics collection | `--no-usage` |
-| `--skip-internal` | Skip searches requiring _internal index | `--skip-internal` |
-| `--output` | Output directory | `--output /path/to/output` |
+| `--scoped` | Scope collections to selected apps only | `--scoped` |
 | `--rbac` | Enable RBAC/user collection (OFF by default) | `--rbac` |
-| `--resume-collect FILE` | Resume from previous .tar.gz archive **(NEW v4.3.0)** | `--resume-collect ./previous.tar.gz` |
-| `--proxy URL` | Route all connections through a proxy server **(NEW v4.3.0)** | `--proxy http://proxy:8080` |
-| `-d, --debug` | Enable verbose debug logging **(NEW v4.1.0)** | `--debug` |
+| `--usage` | Enable usage analytics collection (OFF by default) | `--usage` |
+| `--no-usage` | Skip usage analytics (legacy — usage is OFF by default) | `--no-usage` |
+| `--no-rbac` | Skip RBAC collection (legacy — RBAC is OFF by default) | `--no-rbac` |
+| `--skip-internal` | Skip searches requiring `_internal` index | `--skip-internal` |
+| `--output` | Output directory | `--output /path/to/output` |
+| `--resume-collect FILE` | Resume from previous .tar.gz archive | `--resume-collect ./previous.tar.gz` |
+| `--proxy URL` | Route all connections through a proxy server | `--proxy http://proxy:8080` |
+| `-d, --debug` | Enable verbose debug logging | `--debug` |
 | `--help` | Show help message | `--help` |
 
 > **Note**: PowerShell equivalents use `-` prefix (e.g., `-Stack`, `-Token`, `-Rbac`, `-Usage`, `-ResumeCollect`, `-Proxy`)
 
-### App-Scoped Export Mode (NEW in v4.1.0)
+### App-Scoped Export Mode
 
 For large Splunk Cloud environments, dramatically reduce export time by targeting specific apps:
 
 ```bash
-# Export only specific apps (fastest option)
-./dma-splunk-cloud-export.sh \
-  --stack acme.splunkcloud.com \
-  --token "$TOKEN" \
-  --apps "search,myapp,security_essentials" \
-  --quick
-
 # Scoped mode - exports app configs + only users/searches related to those apps
 ./dma-splunk-cloud-export.sh \
   --stack acme.splunkcloud.com \
@@ -589,26 +583,8 @@ For large Splunk Cloud environments, dramatically reduce export time by targetin
 
 | Mode | What It Does | Use When |
 |------|-------------|----------|
-| `--quick` | App configs only, no global analytics | **Testing/validation only** - NOT for migration analysis |
 | `--scoped` | App configs + app-filtered users/usage | You want usage data but only for selected apps |
 | (default) | Full export of all apps + global analytics | **Recommended** - Full migration analysis |
-
-> **⚠️ CRITICAL WARNING: Do NOT use `--quick` for Migration Analysis**
->
-> The `--quick` flag is intended **ONLY for testing and script validation**, not for actual migration planning. Using `--quick` eliminates critical data needed for migration analysis:
->
-> - **Usage Analytics**: Who uses which dashboards/alerts, how often, and when last accessed
-> - **User & RBAC Data**: Migration audience identification, role mappings, permission structures
-> - **Search Activity**: Which saved searches are actively used vs. abandoned
-> - **Priority Assessment**: Data needed to determine migration priority and phasing
->
-> **Without this data, you cannot:**
-> - Identify which assets are actually being used vs. unused/abandoned
-> - Understand who your migration audiences are
-> - Prioritize which dashboards/alerts to migrate first
-> - Make informed decisions about what may or may not be needed
->
-> **Always use the default (full) export or `--scoped` for any export intended for migration analysis.**
 
 ### Resume Collection Mode (NEW in v4.3.0)
 

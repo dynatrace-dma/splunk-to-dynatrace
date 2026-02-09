@@ -98,11 +98,8 @@ This specification defines the complete requirements for a **Splunk Cloud-specif
 
 ### App-Scoped Export Mode
 - **`--apps` flag**: Export specific apps only (e.g., `--apps "search,myapp,security"`)
-- **`--quick` mode**: Skip global analytics for fastest possible export (**TESTING ONLY**)
 - **`--scoped` mode**: Scope RBAC/usage collection to selected apps only
 - **Auto-scoped**: When `--apps` is specified, collections automatically scope to those apps
-
-> **⚠️ WARNING**: `--quick` is for **testing/validation only**. It eliminates usage analytics, user data, and RBAC information critical for migration analysis. Always use full or `--scoped` export for actual migration planning.
 
 ### Debug Mode
 - **`--debug` flag**: Enable verbose logging for troubleshooting
