@@ -1,6 +1,6 @@
 # DMA Splunk Cloud Export - Beta
 
-**Version**: 1.4.0 (Beta)
+**Version**: 4.4.0 (Beta)
 **Script**: `dma-splunk-cloud-export_beta.sh`
 **Last Updated**: February 2026
 
@@ -8,7 +8,7 @@
 
 ---
 
-## What's New in Beta v1.4.0
+## What's New in Beta v4.4.0
 
 ### Pre-Flight Access Verification (`--test-access`)
 
@@ -258,7 +258,7 @@ If this returns `Apps found: 0`, your token lacks `admin_all_objects`.
 
 | Aspect | Stable (`dma-splunk-cloud-export.sh`) | Beta (`dma-splunk-cloud-export_beta.sh`) |
 |--------|---------------------------------------|------------------------------------------|
-| **Version** | 4.3.0 | 1.4.0 |
+| **Version** | 4.3.0 | 4.4.0 |
 | **`--test-access`** | Not available | 9-check pre-flight verification |
 | **`--skip-internal`** | Not available | Skip `_internal` index queries |
 | **Usage collection** | May fail silently on restricted indexes | Improved error handling and diagnostics |

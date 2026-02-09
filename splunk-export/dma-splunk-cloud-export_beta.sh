@@ -109,7 +109,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="4.4.0"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
