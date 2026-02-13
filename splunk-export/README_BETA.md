@@ -1,296 +1,274 @@
-# DMA Splunk Cloud Export - Beta
+# DMA Splunk Cloud Export — Beta Script
 
-**Version**: 4.4.0 (Beta)
-**Script**: `dma-splunk-cloud-export_beta.sh`
-**Last Updated**: February 2026
+## Version 4.5.0 — Analytics & RBAC Collection Overhaul
 
-> **BETA NOTICE**: This is a beta release for real-world testing. It introduces new features and fixes that are not yet in the stable `dma-splunk-cloud-export.sh` script. Use this script when you need the latest capabilities or have been directed here by the DMA team. Report issues to the DMA team with your export log.
+### What's New
+
+Version 4.5.0 is a major overhaul of the analytics and RBAC collection subsystems. The core issue: **usage analytics collection was 100% broken in the field** — every dashboard view query silently returned zero results. This release fixes the root cause, dramatically improves performance, and adds new RBAC collection capabilities.
 
 ---
 
-## What's New in Beta v4.4.0
+## Breaking Changes
 
-### Pre-Flight Access Verification (`--test-access`)
+| Change | Before (v4.4.0) | After (v4.5.0) |
+|--------|-----------------|-----------------|
+| Default analytics period | 30 days | **7 days** (use `--analytics-period 30d` for old behavior) |
+| Analytics output location | Per-app `splunk-analysis/` folders | Global `dma_analytics/usage_analytics/` folder |
+| Search dispatch mode | `exec_mode=blocking` (300s limit) | `exec_mode=normal` + async polling (1 hour default) |
+| Dashboard view queries | `search_type=dashboard` (BROKEN) | `provenance` field (CORRECT) |
+| Resume with `--usage` | Skips if old data exists | **Always re-collects** analytics |
 
-A brand-new mode that verifies your API token has the correct permissions **before** running a full export. It runs 9 read-only checks against every data collection category and produces a pass/fail report with actionable resolution steps for any failures.
+---
 
-This eliminates the #1 support issue: running a multi-hour export only to discover halfway through that your token lacks the required permissions.
+## Root Cause: Why Analytics Were Broken
+
+### The `search_type=dashboard` Bug
+
+All dashboard view queries in v4.4.0 and earlier used this pattern:
+
+```spl
+index=_audit action=search search_type=dashboard ...
+```
+
+**Problem**: `search_type` is **NOT a native `_audit` field**. It's a derived field created by Splunk's Monitoring Console via `eval case(...)`. When you search `_audit` directly, `search_type` doesn't exist — every query matches zero events and returns empty results.
+
+### The Fix: `provenance` Field
+
+Dashboard views in `_audit` are identified by the `provenance` field:
+
+```
+provenance="UI:Dashboard:my_dashboard"    (Classic XML dashboards)
+provenance="UI:dashboard:my_dashboard"    (Dashboard Studio)
+```
+
+The `provenance` field only exists in `info=granted` events. All v4.5.0 queries use:
+
+```spl
+index=_audit sourcetype=audittrail info=granted
+  (provenance="UI:Dashboard:*" OR provenance="UI:dashboard:*")
+```
+
+### View Session De-duplication
+
+A single dashboard page load triggers multiple `_audit` events (one per panel search). To count actual *views* rather than panel executions:
+
+```spl
+eval view_session=user."_".floor(_time/30)
+| stats dc(view_session) as views ...
+```
+
+This groups events within 30-second windows per user into a single "view session."
+
+---
+
+## Analytics Collection Overhaul
+
+### Before: Per-App Loop (v4.4.0)
+
+- Ran 7 search queries **per app** (N apps × 7 queries = 2,100+ jobs for 300 apps)
+- All queries used broken `search_type=dashboard`
+- `exec_mode=blocking` with 300-second hard limit
+- Sequential execution — hours of wall time
+
+### After: Global Aggregate Queries (v4.5.0)
+
+- Runs **6 global queries total** regardless of app count
+- All queries use verified field names (`provenance`, `sourcetype=audittrail`)
+- `exec_mode=normal` with async polling (up to 1 hour per query)
+- Progressive checkpointing — resume without re-running completed queries
+
+### Global Queries
+
+| # | Query | Description | Max Wait |
+|---|-------|-------------|----------|
+| 1 | Dashboard Views | Views by dashboard and app using `provenance` field | 1 hour |
+| 2 | User Activity | Active users by app with search counts | 1 hour |
+| 3 | Search Patterns | Search type breakdown (ad-hoc, scheduled, dashboard) | 30 min |
+| 4 | Daily Ingestion | Volume per index from `license_usage.log` + `tstats` fallback | 10 min |
+| 5 | Alert Firing | Alert execution stats from scheduler logs | 1 hour |
+| 6 | Alerts Inventory | Per-app alert list via `| rest` (blocking, fast) | 5 min |
+
+### Output Files
+
+All analytics output goes to `dma_analytics/usage_analytics/`:
+
+```
+dma_analytics/
+  usage_analytics/
+    dashboard_views_global.json      # Dashboard view counts by app
+    user_activity_global.json        # User activity by app
+    search_patterns_global.json      # Search type breakdown
+    index_volume_summary.json        # Daily ingestion volume
+    index_event_counts_daily.json    # Event count fallback (tstats)
+    alert_firing_global.json         # Alert firing statistics
+    usage_intelligence.md            # Human-readable summary
+    saved_searches_meta.json         # REST: saved search metadata
+    kvstore_status.json              # REST: KV store status
+    recent_jobs.json                 # REST: recent search jobs
+```
+
+---
+
+## Async Search Dispatch
+
+### Before: Blocking (v4.4.0)
+
+```
+exec_mode=blocking → 300s hard limit → search killed → empty results
+```
+
+### After: Async Polling (v4.5.0)
+
+```
+exec_mode=normal → SID returned immediately → poll every 5-30s → fetch results when DONE
+```
+
+Key improvements:
+- **No 300s limit** — queries can run up to 1 hour (configurable per query)
+- **Gradual backoff** — polling starts at 5s, increases by 5s up to 30s
+- **Progress logging** — status updates every ~60 seconds
+- **Graceful timeout** — cancels the search job on timeout to free quota
+- **Standardized error JSON** — all failures write structured error files with troubleshooting info
+
+---
+
+## RBAC Collection Enhancements
+
+### Fixed: App-Scoped User Search
+
+**Before** (broken):
+```spl
+search index=_audit action=search ${app_filter} earliest=-${USAGE_PERIOD}
+| stats count as activity, latest(_time) as last_active by user
+| sort -activity
+```
+
+**After** (fixed):
+```spl
+search index=_audit sourcetype=audittrail action=search info=granted
+  ${app_filter} user!="splunk-system-user" user!="nobody"
+  earliest=-${USAGE_PERIOD}
+| stats count as activity, dc(search_id) as unique_searches, max(_time) as last_active by user
+| sort -activity
+```
+
+Changes:
+- Added `sourcetype=audittrail` for performance
+- Added `info=granted` (required for `action=search` events)
+- Excluded system users (`splunk-system-user`, `nobody`)
+- Added `dc(search_id) as unique_searches` for better activity metrics
+- Changed `latest(_time)` to `max(_time)` (equivalent but more explicit)
+
+### Fixed: SAML Groups Error Handling
+
+SAML groups endpoint now handles errors gracefully instead of writing broken JSON:
+- Checks entry count in response
+- Writes meaningful note if SAML is not configured or endpoint returns 404
+- No longer causes downstream parsing errors
+
+### New RBAC Endpoints
+
+Four new REST API calls collect additional identity and access data:
+
+| Endpoint | Output File | Description |
+|----------|-------------|-------------|
+| `/services/authorization/capabilities` | `rbac/capabilities.json` | All system capabilities |
+| `/services/authentication/providers/SAML` | `rbac/saml_config.json` | SAML provider configuration |
+| `/services/admin/LDAP-groups` | `rbac/ldap_groups.json` | LDAP group mappings |
+| `/services/authentication/providers/LDAP` | `rbac/ldap_config.json` | LDAP provider configuration |
+
+Each endpoint has graceful error handling — if SAML/LDAP is not configured, a note is written instead of an error.
+
+---
+
+## New CLI Flags
+
+### `--analytics-period <window>`
+
+Override the analytics time window. Default is `7d`.
 
 ```bash
-# Quick access check (required categories only)
-./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token "$TOKEN"
+# Use 30-day window (old default)
+./dma-splunk-cloud-export_beta.sh --usage --analytics-period 30d ...
 
-# Full access check including RBAC and usage analytics
-./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token "$TOKEN" --rbac --usage
-
-# Full check but skip _internal index (common restriction in Splunk Cloud)
-./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token "$TOKEN" --usage --skip-internal
+# Use 90-day window for comprehensive analysis
+./dma-splunk-cloud-export_beta.sh --usage --analytics-period 90d ...
 ```
 
-**No data is exported.** This is a read-only check that makes minimal API calls (count=1 on each endpoint) and exits with a summary report.
-
-### Usage Collection Fixes
-
-- Improved handling when `_internal` or `_audit` indexes are restricted (common in Splunk Cloud)
-- New `--skip-internal` flag to bypass `_internal` index queries entirely
-- Better error messages when usage analytics searches fail due to permission restrictions
+Valid formats: `7d`, `30d`, `90d`, `365d` (any Splunk relative time specifier).
 
 ---
 
-## Quick Start
+## Changed Defaults
 
-```bash
-# Run from YOUR machine (not on Splunk Cloud)
-# You need network access to your Splunk Cloud instance on port 8089
+### Analytics Period: 7 Days (was 30 Days)
 
-# Step 1: Verify access first (recommended)
-./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token "$TOKEN" --rbac --usage
+The default analytics window changed from 30 days to 7 days. Rationale:
 
-# Step 2: If all checks pass, run the full export
-./dma-splunk-cloud-export_beta.sh --stack acme.splunkcloud.com --token "$TOKEN" --rbac --usage
-```
+1. **4x less data to scan** — faster queries, lower resource impact
+2. **Sufficient for migration planning** — 7 days captures active dashboards, users, and alerts
+3. **Lower risk of search quota exhaustion** on production Splunk instances
+4. **More reliable results** — shorter scans are less likely to timeout
 
----
+Use `--analytics-period 30d` to restore the previous behavior, or select the period in the interactive menu.
 
-## `--test-access` Mode
+### Interactive Menu Default
 
-### How It Works
-
-When you pass `--test-access`, the script:
-
-1. Connects to your Splunk Cloud instance
-2. Determines a test app (uses `--apps` if provided, otherwise picks the first user app)
-3. Runs 9 access checks against the REST API endpoints used during export
-4. Prints a real-time status line for each check (PASS/FAIL/WARN/SKIP)
-5. Prints a summary table with a final verdict
-6. Exits with a status code (no export is performed)
-
-### The 9 Access Checks
-
-| # | Check | Level | What It Tests | Endpoint |
-|---|-------|-------|---------------|----------|
-| 1 | **System Info** | CRITICAL | Can reach Splunk REST API and authenticate | `/services/server/info` |
-| 2 | **Configurations** | REQUIRED | Can read Splunk configuration objects | `/servicesNS/-/-/configs/conf-indexes` |
-| 3 | **Dashboards** | REQUIRED | Can read dashboard definitions per app | `/servicesNS/-/{app}/data/ui/views` |
-| 4 | **Saved Searches / Alerts** | REQUIRED | Can read saved searches and alert definitions | `/servicesNS/-/{app}/saved/searches` |
-| 5 | **RBAC (users/roles)** | OPTIONAL | Can read users and roles (requires `--rbac`) | `/services/authentication/users`, `/services/authorization/roles` |
-| 6 | **Knowledge Objects** | REQUIRED | Can read macros, props.conf, and lookups | `/servicesNS/-/{app}/admin/macros`, `conf-props`, `lookup-table-files` |
-| 7 | **App Analytics (_audit)** | OPTIONAL | Can search `_audit` index (requires `--usage`) | `search index=_audit action=search` |
-| 8 | **Usage Analytics (_internal)** | OPTIONAL | Can search `_internal` index (requires `--usage`) | `search index=_internal sourcetype=scheduler` |
-| 9 | **Indexes** | REQUIRED | Can read index definitions and metadata | `/services/data/indexes` |
-
-### Check Levels
-
-| Level | Meaning |
-|-------|---------|
-| **CRITICAL** | Export cannot run at all if this fails (connectivity / auth) |
-| **REQUIRED** | Core data collection will be missing if this fails |
-| **OPTIONAL** | Can be skipped with flags (`--no-rbac`, `--no-usage`, `--skip-internal`) |
-
-### Status Values
-
-| Status | Meaning |
-|--------|---------|
-| **PASS** | Endpoint accessible, data returned |
-| **FAIL** | Endpoint denied or returned an error — includes cause and resolution |
-| **WARN** | Partial access (e.g., users OK but roles denied) |
-| **SKIP** | Check not applicable (e.g., RBAC skipped because `--rbac` not passed) |
-
-### Verdict Logic
-
-The summary report ends with one of four verdicts:
-
-| Verdict | Condition |
-|---------|-----------|
-| **All access checks passed. You are ready to run a full export.** | 0 failures, 0 warnings |
-| **All required checks passed (some warnings).** | 0 failures, 1+ warnings |
-| **Some checks failed. Export will run but some data will be missing.** | 1+ non-critical failures |
-| **Critical failures detected. Cannot run export until resolved.** | System Info (check #1) failed |
-
-### Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| `0` | All checks passed (or only warnings) |
-| `1` | Critical failure — cannot run export |
-| `2` | Non-critical failures — export will run with missing data |
-
-### Example Output
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  ACCESS VERIFICATION TEST                                                │
-│                                                                          │
-│  Testing API access for each data collection category.                   │
-│  This verifies your permissions before running a full export.            │
-│                                                                          │
-│  No data will be exported. This is a read-only check.                    │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-
-  Running 9 access checks...
-
-  [OK  ]  System Info                       Splunk v9.1.2312.200
-  [OK  ]  Configurations (indexes)          1 entries
-  [OK  ]  Dashboards (myapp)                1 found
-  [OK  ]  Saved Searches / Alerts (myapp)   1 found
-  [SKIP]  RBAC (users/roles)                Not requested (add --rbac)
-  [OK  ]  Knowledge Objects (myapp)         macros, props, lookups
-  [SKIP]  App Analytics (_audit)            Not requested (add --usage)
-  [SKIP]  Usage Analytics (_internal)       Not requested (add --usage)
-  [OK  ]  Indexes                           1 found
-
-  Passed: 6  Failed: 0  Warnings: 0  Skipped: 3  Total: 9
-
-  VERDICT: All access checks passed. You are ready to run a full export.
-```
-
-### Failure Example
-
-When a check fails, the script prints diagnostic details inline:
-
-```
-  [FAIL]  Configurations (indexes)          Access denied
-         Endpoint:   /servicesNS/-/-/configs/conf-indexes
-         Cause:      Cannot read Splunk configuration objects
-         Resolution: User needs list_settings or admin_all_objects capability
-```
+The interactive period selection menu now defaults to option 1 (7 days) instead of option 2 (30 days).
 
 ---
 
-## `--skip-internal` Flag
+## Resume Behavior
 
-Many Splunk Cloud environments restrict access to the `_internal` index. When this is the case, usage analytics searches that query `_internal` will fail.
+### `--resume-collect --usage`
 
-Use `--skip-internal` to skip all searches that require the `_internal` index:
+When `--usage` is explicitly passed with `--resume-collect`, the script **always re-collects analytics** even if prior analytics data exists. This is because:
 
-```bash
-# Export with usage analytics but skip _internal searches
-./dma-splunk-cloud-export_beta.sh --stack acme.splunkcloud.com --token "$TOKEN" --usage --skip-internal
+1. Prior data may be from v4.4.0 or earlier with broken `search_type=dashboard` queries
+2. All old analytics files contain zero results (the bug produced empty data)
+3. Re-collection uses the new corrected queries with verified field names
 
-# Test access with the same configuration
-./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token "$TOKEN" --usage --skip-internal
-```
+Without `--usage`, the resume behavior is unchanged — existing analytics data is preserved.
 
-The script will still collect usage data from `_audit` (dashboard views, search activity). Only the scheduler-based analytics from `_internal` are skipped.
+### Progressive Checkpointing
 
----
+Within `collect_app_analytics()`, each global query is checkpointed after completion. If the script is interrupted mid-collection, re-running with `--resume-collect --usage` will skip already-completed queries and continue from where it left off.
 
-## Required Permissions
-
-> **Insufficient permissions are the #1 cause of export failures.** Run `--test-access` first to verify.
-
-### Option 1: Use the `sc_admin` Role (Recommended)
-
-1. Create a user with the `sc_admin` role in Splunk Cloud
-2. Create an API token for that user (Settings > Tokens)
-3. Use that token with the export script
-
-### Option 2: Minimum Required Capabilities
-
-If you cannot use `sc_admin`, your user/token needs these capabilities:
-
-| Capability | What It Enables |
-|------------|-----------------|
-| `admin_all_objects` | Access dashboards/alerts in ALL apps |
-| `list_settings` | Read server configuration |
-| `rest_properties_get` | Make REST API calls |
-| `search` | Run usage analytics queries |
-| `list_users` | Collect user data (for `--rbac`) |
-| `list_roles` | Collect role data (for `--rbac`) |
-| `list_indexes` | Collect index metadata |
-
-**Plus, for `--usage` analytics**, the user needs access to search these indexes:
-- `_internal` (or use `--skip-internal` to bypass)
-- `_audit`
-
-### Verify Before Running
-
-Use `--test-access` to verify all permissions in one step:
-
-```bash
-./dma-splunk-cloud-export_beta.sh --test-access \
-  --stack acme.splunkcloud.com \
-  --token "$TOKEN" \
-  --rbac --usage
-```
-
-Or manually test your token can list apps:
-
-```bash
-curl -s -k -H "Authorization: Bearer YOUR_TOKEN" \
-  "https://your-stack.splunkcloud.com:8089/services/apps/local?output_mode=json&count=0" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Apps found: {len(d.get(\"entry\",[]))}')"
-```
-
-If this returns `Apps found: 0`, your token lacks `admin_all_objects`.
-
-**Full permissions documentation**: See [README-SPLUNK-CLOUD.md](docs_markdown/README-SPLUNK-CLOUD.md#3-required-permissions-critical---read-this-carefully)
+Checkpoint file: `$EXPORT_DIR/.analytics_checkpoint`
 
 ---
 
-## All CLI Flags
+## Troubleshooting
 
-| Flag | Description |
-|------|-------------|
-| `--stack URL` | Splunk Cloud stack URL (e.g., `acme.splunkcloud.com`) |
-| `--token TOKEN` | API token for authentication |
-| `--user USER` | Username (if not using token) |
-| `--password PASS` | Password (if not using token) |
-| `--all-apps` | Export all applications |
-| `--apps LIST` | Comma-separated list of apps to export |
-| `--output DIR` | Output directory |
-| `--rbac` | Collect RBAC/users data (OFF by default) |
-| `--usage` | Collect usage analytics (OFF by default) |
-| `--skip-internal` | Skip searches requiring `_internal` index |
-| `--scoped` | Scope all collections to selected apps only |
-| `--proxy URL` | Route all connections through a proxy server |
-| `--resume-collect FILE` | Resume a previous interrupted export from a `.tar.gz` archive |
-| `--test-access` | **NEW** - Pre-flight access verification (no export) |
-| `-d`, `--debug` | Enable verbose debug logging |
-| `--anonymize` | Enable data anonymization (two-archive output) |
-| `-y` | Auto-confirm all prompts (non-interactive mode) |
-| `--help` | Show help text |
+### Empty Dashboard Views
 
----
+If `dashboard_views_global.json` still shows zero results after upgrading:
 
-## Differences from Stable Script
+1. **Check `_audit` access**: Run `index=_audit | head 10` in Splunk search. If no results, your role lacks `_audit` access.
+2. **Check `provenance` field exists**: Run `index=_audit sourcetype=audittrail info=granted provenance="UI:*" | head 10`. If no results, dashboard views may not be logged (check `audit.conf`).
+3. **Extend the period**: Try `--analytics-period 30d` — dashboards may not have been viewed in the last 7 days.
 
-| Aspect | Stable (`dma-splunk-cloud-export.sh`) | Beta (`dma-splunk-cloud-export_beta.sh`) |
-|--------|---------------------------------------|------------------------------------------|
-| **Version** | 4.3.0 | 4.4.0 |
-| **`--test-access`** | Not available | 9-check pre-flight verification |
-| **`--skip-internal`** | Not available | Skip `_internal` index queries |
-| **Usage collection** | May fail silently on restricted indexes | Improved error handling and diagnostics |
-| **Stability** | Production-tested | Beta — for real-world validation |
+### Search Timeouts
+
+If queries timeout (error JSON shows `"error": "search_timeout"`):
+
+1. **Reduce the period**: Use `--analytics-period 7d` (default)
+2. **Check search quota**: Splunk Cloud has concurrent search limits. Run during off-peak hours.
+3. **Check `_audit` size**: Large `_audit` indexes (100GB+) slow all queries. The 7d default helps.
+
+### SAML/LDAP "Not Configured" Notes
+
+If `saml_config.json` or `ldap_config.json` contains a "not configured" note, this is expected — your Splunk instance doesn't use that authentication provider. The data is still collected for environments that do.
+
+### `_internal` Skipped
+
+If you see `--skip-internal` was used, daily volume and alert firing queries are skipped. These queries require `_internal` index access which is often restricted in Splunk Cloud. Index size data is still available from REST metadata.
 
 ---
 
-## Recommended Workflow
+## Version History
 
-```
-1. RUN --test-access          Verify permissions (30 seconds)
-   ↓
-2. FIX any failures           Follow resolution steps in the report
-   ↓
-3. RE-RUN --test-access       Confirm all checks pass
-   ↓
-4. RUN full export            Confident that permissions are correct
-```
-
-```bash
-# Step 1: Verify
-./dma-splunk-cloud-export_beta.sh --test-access \
-  --stack acme.splunkcloud.com --token "$TOKEN" --rbac --usage
-
-# Step 2-3: Fix and re-verify (repeat until all pass)
-
-# Step 4: Export
-./dma-splunk-cloud-export_beta.sh \
-  --stack acme.splunkcloud.com --token "$TOKEN" --rbac --usage
-```
-
----
-
-> **Developed for Dynatrace One by Enterprise Solutions & Architecture**
-> *An ACE Services Division of Dynatrace*
+| Version | Date | Changes |
+|---------|------|---------|
+| 4.5.0 | 2026-02 | Analytics overhaul: fix `search_type=dashboard` bug, global queries, async dispatch, RBAC enhancements |
+| 4.4.0 | 2026-01 | Prior beta (per-app analytics, blocking dispatch, search_type=dashboard) |
