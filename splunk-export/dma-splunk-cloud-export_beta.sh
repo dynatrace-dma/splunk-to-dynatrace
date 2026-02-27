@@ -3182,6 +3182,13 @@ collect_app_analytics() {
   local analytics_dir="$EXPORT_DIR/dma_analytics/usage_analytics"
   mkdir -p "$analytics_dir"
 
+  # Build app filter for scoped mode (empty string when not scoped)
+  local app_filter=""
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    app_filter=$(get_app_filter "app")
+    log "  App-scoped analytics: filtering to ${#SELECTED_APPS[@]} apps"
+  fi
+
   local analytics_start=$(date +%s)
   progress "Running global analytics queries (v4.5.0 — async dispatch)..."
   echo ""
@@ -3199,7 +3206,7 @@ collect_app_analytics() {
   else
     local q1_file="$analytics_dir/dashboard_views_global.json"
     run_analytics_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count" \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count" \
       "$q1_file" \
       "Dashboard views (global, provenance-based)" \
       3600
@@ -3215,7 +3222,7 @@ collect_app_analytics() {
   else
     local q2_file="$analytics_dir/user_activity_global.json"
     run_analytics_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted user!=\"splunk-system-user\" user!=\"nobody\" earliest=-${USAGE_PERIOD} | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user | sort -searches" \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" user!=\"nobody\" earliest=-${USAGE_PERIOD} | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user | sort -searches" \
       "$q2_file" \
       "User activity (global)" \
       3600
@@ -3232,7 +3239,7 @@ collect_app_analytics() {
   else
     local q3_file="$analytics_dir/search_patterns_global.json"
     run_analytics_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | eval search_type=case(match(provenance, \"^UI:[Dd]ashboard:\"), \"dashboard\", match(search_id, \"^(rt_)?scheduler__\"), \"scheduled\", match(savedsearch_name, \"^_ACCELERATE_\"), \"acceleration\", match(search_id, \"^SummaryDirector_\"), \"summarization\", isnotnull(provenance) AND match(provenance, \"^UI:\"), \"interactive\", 1=1, \"other\") | stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type | sort -total_searches" \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | eval search_type=case(match(provenance, \"^UI:[Dd]ashboard:\"), \"dashboard\", match(search_id, \"^(rt_)?scheduler__\"), \"scheduled\", match(savedsearch_name, \"^_ACCELERATE_\"), \"acceleration\", match(search_id, \"^SummaryDirector_\"), \"summarization\", isnotnull(provenance) AND match(provenance, \"^UI:\"), \"interactive\", 1=1, \"other\") | stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type | sort -total_searches" \
       "$q3_file" \
       "Search type breakdown (global)" \
       1800
@@ -3278,7 +3285,7 @@ collect_app_analytics() {
     local q5_file="$analytics_dir/alert_firing_global.json"
     if [ "$SKIP_INTERNAL" != "true" ]; then
       run_analytics_search \
-        "search index=_internal sourcetype=scheduler status=* earliest=-${USAGE_PERIOD} | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
+        "search index=_internal sourcetype=scheduler status=* ${app_filter} earliest=-${USAGE_PERIOD} | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
         "$q5_file" \
         "Alert firing stats (global)" \
         3600
@@ -3351,9 +3358,19 @@ collect_usage_analytics() {
 
   # -------------------------------------------------------------------------
   # Saved search metadata (REST API — no search job needed)
+  # Filtered to selected apps when in scoped mode.
   # -------------------------------------------------------------------------
   api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0" \
     > "$analytics_dir/saved_searches_all.json" 2>/dev/null
+
+  # Post-filter saved searches to selected apps in scoped mode
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ] && $HAS_JQ && [ -f "$analytics_dir/saved_searches_all.json" ]; then
+    local apps_json=$(printf '"%s",' "${SELECTED_APPS[@]}" | sed 's/,$//')
+    jq --argjson scoped_apps "[${apps_json}]" '{
+      entry: [.entry[] | select(.acl.app as $a | $scoped_apps | index($a))]
+    }' "$analytics_dir/saved_searches_all.json" > "$analytics_dir/saved_searches_all.json.tmp" 2>/dev/null \
+      && mv "$analytics_dir/saved_searches_all.json.tmp" "$analytics_dir/saved_searches_all.json"
+  fi
 
   # Recent search jobs (REST API)
   api_call "/services/search/jobs" "GET" "output_mode=json&count=100" \
@@ -3662,8 +3679,17 @@ collect_dashboard_ownership_rest() {
   if [ $? -eq 0 ] && [ -n "$response" ]; then
     # Transform REST API response to match expected format
     if $HAS_JQ; then
-      echo "$response" | jq '{
-        results: [.entry[] | {
+      # Build jq app filter for scoped mode (null = no filtering)
+      local jq_scoped_apps="null"
+      if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+        local apps_json=$(printf '"%s",' "${SELECTED_APPS[@]}" | sed 's/,$//')
+        jq_scoped_apps="[${apps_json}]"
+      fi
+
+      echo "$response" | jq --argjson scoped_apps "$jq_scoped_apps" '{
+        results: [.entry[]
+          | select($scoped_apps == null or (.acl.app as $a | $scoped_apps | index($a)))
+          | {
           dashboard: .name,
           app: .acl.app,
           owner: .acl.owner,
@@ -3700,8 +3726,17 @@ collect_alert_ownership_rest() {
   if [ $? -eq 0 ] && [ -n "$response" ]; then
     # Transform REST API response to match expected format
     if $HAS_JQ; then
-      echo "$response" | jq '{
-        results: [.entry[] | {
+      # Build jq app filter for scoped mode (null = no filtering)
+      local jq_scoped_apps="null"
+      if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+        local apps_json=$(printf '"%s",' "${SELECTED_APPS[@]}" | sed 's/,$//')
+        jq_scoped_apps="[${apps_json}]"
+      fi
+
+      echo "$response" | jq --argjson scoped_apps "$jq_scoped_apps" '{
+        results: [.entry[]
+          | select($scoped_apps == null or (.acl.app as $a | $scoped_apps | index($a)))
+          | {
           alert_name: .name,
           app: .acl.app,
           owner: .acl.owner,
