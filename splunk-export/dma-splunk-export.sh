@@ -4445,6 +4445,12 @@ collect_usage_analytics() {
     app_search_filter="$app_filter "
   fi
 
+  # Build REST app filter for | rest queries (filters by eai:acl.app)
+  local app_rest_filter=""
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    app_rest_filter=$(get_app_where_clause "eai:acl.app")
+  fi
+
   # ==========================================================================
   # 1. USER ACTIVITY METRICS (Org-level)
   # ==========================================================================
@@ -4494,14 +4500,14 @@ collect_usage_analytics() {
   # Sourcetypes actually searched (vs configured)
   # OPTIMIZED: Added | sample 20 before expensive rex extraction
   run_usage_search \
-    'index=_audit action=search earliest=-${USAGE_PERIOD} | sample 20 | rex field=search "sourcetype=(?<searched_sourcetype>[\w:_-]+)" | stats count as sample_count, dc(user) as users by searched_sourcetype | eval estimated_count=sample_count*20 | sort -estimated_count | head 50' \
+    "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"sourcetype=(?<searched_sourcetype>[\\w:_-]+)\" | stats count as sample_count, dc(user) as users by searched_sourcetype | eval estimated_count=sample_count*20 | sort -estimated_count | head 50" \
     "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" \
     "Most searched sourcetypes"
 
   # Index usage (which indexes are actually queried)
   # OPTIMIZED: Added | sample 20 before expensive rex extraction
   run_usage_search \
-    'index=_audit action=search earliest=-${USAGE_PERIOD} | sample 20 | rex field=search "index=(?<queried_index>[\w_-]+)" | stats count as sample_count, dc(user) as users by queried_index | eval estimated_count=sample_count*20 | sort -estimated_count' \
+    "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"index=(?<queried_index>[\\w_-]+)\" | stats count as sample_count, dc(user) as users by queried_index | eval estimated_count=sample_count*20 | sort -estimated_count" \
     "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_queried.json" \
     "Indexes actually queried"
 
@@ -4645,19 +4651,19 @@ collect_usage_analytics() {
 
   # Dashboard ownership - maps each dashboard to its owner
   run_usage_search \
-    '| rest /servicesNS/-/-/data/ui/views | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing | rename title as dashboard, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
+    '| rest /servicesNS/-/-/data/ui/views '"${app_rest_filter}"' | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing | rename title as dashboard, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" \
     "Dashboard ownership mapping"
 
   # Alert/Saved search ownership - maps each alert to its owner
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track | rename title as alert_name, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track | rename title as alert_name, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json" \
     "Alert/saved search ownership mapping"
 
   # Ownership summary by user (how many dashboards and alerts each user owns)
   run_usage_search \
-    '| rest /servicesNS/-/-/data/ui/views | stats count as dashboards by eai:acl.owner | rename eai:acl.owner as owner | append [| rest /servicesNS/-/-/saved/searches | stats count as alerts by eai:acl.owner | rename eai:acl.owner as owner] | stats sum(dashboards) as dashboards, sum(alerts) as alerts by owner | sort - dashboards' \
+    '| rest /servicesNS/-/-/data/ui/views '"${app_rest_filter}"' | stats count as dashboards by eai:acl.owner | rename eai:acl.owner as owner | append [| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | stats count as alerts by eai:acl.owner | rename eai:acl.owner as owner] | stats sum(dashboards) as dashboards, sum(alerts) as alerts by owner | sort - dashboards' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/ownership_summary.json" \
     "Ownership summary by user"
 
@@ -4676,80 +4682,80 @@ collect_usage_analytics() {
   # FULL ALERT DEFINITIONS - Complete alert configuration with ALL fields
   # This is THE critical file for alert migration - includes schedule, conditions, actions
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search is_scheduled=1 OR alert.track=1 | table title, search, cron_schedule, dispatch.earliest_time, dispatch.latest_time, alert.severity, alert.track, alert.digest_mode, alert.expires, alert_condition, alert_threshold, alert_comparator, alert_type, alert.suppress, alert.suppress.fields, alert.suppress.period, counttype, quantity, relation, actions, disabled, eai:acl.owner, eai:acl.app, eai:acl.sharing, description, next_scheduled_time, triggered_alert_count | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search is_scheduled=1 OR alert.track=1 | table title, search, cron_schedule, dispatch.earliest_time, dispatch.latest_time, alert.severity, alert.track, alert.digest_mode, alert.expires, alert_condition, alert_threshold, alert_comparator, alert_type, alert.suppress, alert.suppress.fields, alert.suppress.period, counttype, quantity, relation, actions, disabled, eai:acl.owner, eai:acl.app, eai:acl.sharing, description, next_scheduled_time, triggered_alert_count | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alert_definitions_full.json" \
     "Full alert definitions (schedules, conditions, thresholds)"
 
   # ALERT ACTION CONFIGURATIONS - Email recipients, webhook URLs, Slack channels, etc.
   # Critical for Action Dispatcher migration architecture
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search actions!="" | table title, actions, action.email, action.email.to, action.email.cc, action.email.bcc, action.email.subject, action.email.message.alert, action.email.sendresults, action.email.inline, action.email.format, action.webhook, action.webhook.param.url, action.slack, action.slack.channel, action.slack.message, action.pagerduty, action.pagerduty.integration_key, action.script, action.script.filename, action.summary_index, action.summary_index._name, action.notable, action.notable.param.severity, action.lookup, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search actions!="" | table title, actions, action.email, action.email.to, action.email.cc, action.email.bcc, action.email.subject, action.email.message.alert, action.email.sendresults, action.email.inline, action.email.format, action.webhook, action.webhook.param.url, action.slack, action.slack.channel, action.slack.message, action.pagerduty, action.pagerduty.integration_key, action.script, action.script.filename, action.summary_index, action.summary_index._name, action.notable, action.notable.param.severity, action.lookup, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alert_action_configs.json" \
     "Alert action configurations (email, webhook, Slack, PagerDuty)"
 
   # ALERTS BY ACTION TYPE - Categorize alerts by their action type for migration planning
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search actions!="" | eval action_types=split(actions, ",") | mvexpand action_types | stats count, values(title) as alerts by action_types | sort - count' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search actions!="" | eval action_types=split(actions, ",") | mvexpand action_types | stats count, values(title) as alerts by action_types | sort - count' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_action_type.json" \
     "Alerts categorized by action type"
 
   # ALERTS WITH EMAIL ACTIONS - Detailed email configuration for migration
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search action.email=1 | table title, action.email.to, action.email.cc, action.email.subject, action.email.sendresults, action.email.format, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.email=1 | table title, action.email.to, action.email.cc, action.email.subject, action.email.sendresults, action.email.format, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_email.json" \
     "Alerts with email action configuration"
 
   # ALERTS WITH WEBHOOK ACTIONS - Webhook URLs for Dynatrace Workflow migration
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search action.webhook=1 | table title, action.webhook.param.url, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.webhook=1 | table title, action.webhook.param.url, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_webhook.json" \
     "Alerts with webhook action configuration"
 
   # ALERTS WITH SLACK ACTIONS - Slack channel configuration
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search action.slack=1 | table title, action.slack.channel, action.slack.message, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.slack=1 | table title, action.slack.channel, action.slack.message, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_slack.json" \
     "Alerts with Slack action configuration"
 
   # ALERTS WITH PAGERDUTY ACTIONS - PagerDuty integration configuration
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search action.pagerduty=1 | table title, action.pagerduty.integration_key, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.pagerduty=1 | table title, action.pagerduty.integration_key, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_pagerduty.json" \
     "Alerts with PagerDuty action configuration"
 
   # ALERT SUPPRESSION SETTINGS - For deduplication migration
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search alert.suppress=1 | table title, alert.suppress, alert.suppress.fields, alert.suppress.period, cron_schedule, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.suppress=1 | table title, alert.suppress, alert.suppress.fields, alert.suppress.period, cron_schedule, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_suppression.json" \
     "Alerts with suppression/throttling configuration"
 
   # ALERT SCHEDULE ANALYSIS - Group alerts by schedule frequency for capacity planning
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search is_scheduled=1 | stats count by cron_schedule | sort - count' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search is_scheduled=1 | stats count by cron_schedule | sort - count' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_schedule.json" \
     "Alerts grouped by schedule frequency"
 
   # ALERT SEVERITY DISTRIBUTION - For priority classification
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search alert.track=1 | stats count by alert.severity | sort - alert.severity' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.track=1 | stats count by alert.severity | sort - alert.severity' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_severity.json" \
     "Alerts grouped by severity level"
 
   # HIGH FREQUENCY ALERTS - Alerts that run every minute (need special handling)
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search cron_schedule="* * * * *" OR cron_schedule="*/1 * * * *" | table title, search, cron_schedule, actions, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search cron_schedule="* * * * *" OR cron_schedule="*/1 * * * *" | table title, search, cron_schedule, actions, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_high_frequency.json" \
     "High frequency alerts (1-minute interval)"
 
   # ALERTS WITH COMPLEX SPL - Alerts using advanced SPL commands
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search alert.track=1 | eval has_join=if(match(search,"\\|\\s*join"),"yes","no"), has_transaction=if(match(search,"\\|\\s*transaction"),"yes","no"), has_eventstats=if(match(search,"\\|\\s*eventstats"),"yes","no"), has_streamstats=if(match(search,"\\|\\s*streamstats"),"yes","no"), has_append=if(match(search,"\\|\\s*append"),"yes","no") | where has_join="yes" OR has_transaction="yes" OR has_eventstats="yes" OR has_streamstats="yes" OR has_append="yes" | table title, has_join, has_transaction, has_eventstats, has_streamstats, has_append, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.track=1 | eval has_join=if(match(search,"\\|\\s*join"),"yes","no"), has_transaction=if(match(search,"\\|\\s*transaction"),"yes","no"), has_eventstats=if(match(search,"\\|\\s*eventstats"),"yes","no"), has_streamstats=if(match(search,"\\|\\s*streamstats"),"yes","no"), has_append=if(match(search,"\\|\\s*append"),"yes","no") | where has_join="yes" OR has_transaction="yes" OR has_eventstats="yes" OR has_streamstats="yes" OR has_append="yes" | table title, has_join, has_transaction, has_eventstats, has_streamstats, has_append, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_complex_spl.json" \
     "Alerts using complex SPL commands"
 
   # ALERTS DATA SOURCE ANALYSIS - Which indexes/sourcetypes each alert queries
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | search alert.track=1 | rex field=search "index=(?<queried_index>[\\w_-]+)" | rex field=search "sourcetype=(?<queried_sourcetype>[\\w:_-]+)" | table title, queried_index, queried_sourcetype, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.track=1 | rex field=search "index=(?<queried_index>[\\w_-]+)" | rex field=search "sourcetype=(?<queried_sourcetype>[\\w:_-]+)" | table title, queried_index, queried_sourcetype, eai:acl.owner, eai:acl.app | rename title as alert_name' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_data_sources.json" \
     "Alert data source mapping (index/sourcetype)"
 
@@ -4808,7 +4814,7 @@ collect_usage_analytics() {
 
   # TEAM MAPPING SUGGESTION - Group assets by app to suggest team ownership
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | stats dc(title) as alerts, values(eai:acl.owner) as owners by eai:acl.app | append [| rest /servicesNS/-/-/data/ui/views | stats dc(title) as dashboards, values(eai:acl.owner) as owners by eai:acl.app] | stats sum(alerts) as alerts, sum(dashboards) as dashboards, values(owners) as owners by eai:acl.app | rename eai:acl.app as app' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | stats dc(title) as alerts, values(eai:acl.owner) as owners by eai:acl.app | append [| rest /servicesNS/-/-/data/ui/views '"${app_rest_filter}"' | stats dc(title) as dashboards, values(eai:acl.owner) as owners by eai:acl.app] | stats sum(alerts) as alerts, sum(dashboards) as dashboards, values(owners) as owners by eai:acl.app | rename eai:acl.app as app' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/team_mapping_by_app.json" \
     "Team mapping suggestion (by app)"
 
@@ -4828,7 +4834,7 @@ collect_usage_analytics() {
 
   # Saved searches by owner
   run_usage_search \
-    '| rest /servicesNS/-/-/saved/searches | stats count by eai:acl.owner | sort - count | head 30' \
+    '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | stats count by eai:acl.owner | sort - count | head 30' \
     "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_by_owner.json" \
     "Saved searches by owner"
 
@@ -4854,7 +4860,7 @@ collect_usage_analytics() {
   # Scheduler load over time
   # OPTIMIZED: Added | fields early to reduce memory usage
   run_usage_search \
-    'index=_internal sourcetype=scheduler earliest=-${USAGE_PERIOD} | fields _time, run_time | timechart span=1h count as scheduled_searches, avg(run_time) as avg_runtime' \
+    "index=_internal sourcetype=scheduler ${app_search_filter}earliest=-${USAGE_PERIOD} | fields _time, run_time | timechart span=1h count as scheduled_searches, avg(run_time) as avg_runtime" \
     "$EXPORT_DIR/dma_analytics/usage_analytics/scheduler_load.json" \
     "Scheduler load over time"
 
