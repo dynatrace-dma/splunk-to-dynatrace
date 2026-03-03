@@ -1159,7 +1159,14 @@ api_call() {
       401)
         debug_log "ERROR" "Auth failed (401) on $endpoint"
         ((STATS_API_FAILURES++))
-        error "Authentication failed (401). Please check your credentials."
+        if [ -n "$SESSION_KEY" ]; then
+          error "Session key rejected (401) on: $endpoint"
+          error "This can occur on Splunk Cloud search head clusters where session keys"
+          error "are node-specific and may not be recognized by other cluster members."
+          error "Recommendation: Use token-based authentication instead (--token flag)."
+        else
+          error "Authentication failed (401). Please check your credentials."
+        fi
         return 1
         ;;
       403)
@@ -1641,24 +1648,36 @@ authenticate() {
 
   else
     # Username/password - get session key
+    # URL-encode username and password via stdin to safely handle special characters
+    # (avoids shell interpretation of $, `, ", \ in password values)
+    local encoded_user encoded_pass
+    encoded_user=$(printf '%s' "$SPLUNK_USER" | $PYTHON_CMD -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read(), safe=''))" 2>/dev/null || printf '%s' "$SPLUNK_USER")
+    encoded_pass=$(printf '%s' "$SPLUNK_PASSWORD" | $PYTHON_CMD -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read(), safe=''))" 2>/dev/null || printf '%s' "$SPLUNK_PASSWORD")
     response=$(curl -s -k $CURL_PROXY_ARGS \
-      -d "username=$SPLUNK_USER&password=$SPLUNK_PASSWORD" \
+      -d "username=${encoded_user}&password=${encoded_pass}" \
       "${SPLUNK_URL}/services/auth/login?output_mode=json")
 
     if echo "$response" | grep -q "sessionKey"; then
       SESSION_KEY=$(json_value "$response" '.sessionKey')
       if [ -z "$SESSION_KEY" ]; then
-        # Try alternate parsing
+        # Try alternate parsing (XML fallback)
         SESSION_KEY=$(echo "$response" | sed -n 's/.*<sessionKey>\([^<]*\)<.*/\1/p')
       fi
 
       if [ -n "$SESSION_KEY" ]; then
-        success "Password authentication successful"
+        local key_len=${#SESSION_KEY}
+        local masked_key="${SESSION_KEY:0:8}...${SESSION_KEY: -4}"
+        success "Password authentication successful (session: ${masked_key}, ${key_len} chars)"
         return 0
       fi
     fi
 
+    # Auth failed - show response for debugging
+    debug_log "ERROR" "Auth response: $response"
     error "Password authentication failed. Check username and password."
+    if echo "$response" | grep -qi "unauthorized\|Invalid\|locked"; then
+      error "Server response indicates invalid credentials or locked account."
+    fi
     return 1
   fi
 }
