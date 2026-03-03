@@ -187,7 +187,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="7d"
-SCRIPT_VERSION="4.5.0"
+SCRIPT_VERSION="4.5.5"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
