@@ -663,9 +663,9 @@ prompt_password() {
   local prompt="$1"
   local result=""
 
-  echo -ne "${YELLOW}$prompt: ${NC}"
+  echo -ne "${YELLOW}$prompt: ${NC}" >&2
   read -rs result
-  echo ""
+  echo "" >&2
 
   echo "$result"
 }
