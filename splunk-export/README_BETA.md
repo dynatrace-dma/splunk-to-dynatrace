@@ -1,14 +1,156 @@
 # DMA Splunk Cloud Export — Beta Script
 
-## Version 4.5.0 — Analytics & RBAC Collection Overhaul
+## Version 4.5.5
 
-### What's New
+### What's New in Beta
 
-Version 4.5.0 is a major overhaul of the analytics and RBAC collection subsystems. The core issue: **usage analytics collection was 100% broken in the field** — every dashboard view query silently returned zero results. This release fixes the root cause, dramatically improves performance, and adds new RBAC collection capabilities.
+The beta script includes several features not yet in the stable release:
+
+- **`--test-access` mode** — Pre-flight API access verification (9 checks, read-only, no export)
+- **`--skip-internal` flag** — Skip `_internal` index queries when restricted in Splunk Cloud
+- **`--analytics-period` flag** — Override the analytics time window (default: `7d`)
+- **`--scoped` flag** — Scope all collections to selected apps only
+- **Analytics overhaul** — Fixed broken `search_type=dashboard` queries, async search dispatch, global aggregate queries
+- **RBAC enhancements** — New LDAP/SAML collection endpoints, fixed SAML error handling
+- **Password auth improvements** — URL-encoded credentials, session key diagnostics, Splunk Cloud cluster guidance
 
 ---
 
-## Breaking Changes
+## Quick Start
+
+```bash
+# Token auth (recommended)
+./dma-splunk-cloud-export_beta.sh --stack acme.splunkcloud.com --token YOUR_TOKEN --all-apps
+
+# With RBAC and usage analytics
+./dma-splunk-cloud-export_beta.sh --stack acme.splunkcloud.com --token YOUR_TOKEN --all-apps --rbac --usage
+
+# Test access first (no data exported)
+./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token YOUR_TOKEN --rbac --usage
+
+# Username/password auth
+./dma-splunk-cloud-export_beta.sh --stack acme.splunkcloud.com --user admin --password 'P@ssw0rd' --all-apps
+```
+
+---
+
+## All CLI Flags
+
+| Flag | Argument | Description |
+|------|----------|-------------|
+| `--stack` | `URL` | Splunk Cloud stack URL (e.g., `acme.splunkcloud.com`) |
+| `--token` | `TOKEN` | API token for authentication (recommended) |
+| `--user` | `USER` | Username for password-based authentication |
+| `--password` | `PASS` | Password for password-based authentication |
+| `--all-apps` | | Export all applications |
+| `--apps` | `LIST` | Comma-separated list of specific apps to export |
+| `--output` | `DIR` | Output directory for the export archive |
+| `--usage` | | Collect usage analytics (OFF by default — requires `_audit`/`_internal` access) |
+| `--no-usage` | | Explicitly disable usage analytics (legacy, usage is off by default) |
+| `--rbac` | | Collect RBAC/users data (OFF by default — global user/role data) |
+| `--no-rbac` | | Explicitly disable RBAC collection (legacy, RBAC is off by default) |
+| `--analytics-period` | `WINDOW` | Analytics time window (default: `7d`, e.g., `30d`, `90d`) |
+| `--skip-internal` | | Skip queries requiring `_internal` index (use when restricted in Splunk Cloud) |
+| `--scoped` | | Scope all collections to selected apps only (auto-enabled with `--apps`) |
+| `--proxy` | `URL` | Route all connections through a proxy server (e.g., `http://proxy:8080`) |
+| `--resume-collect` | `FILE` | Resume a previous interrupted export from a `.tar.gz` archive |
+| `--test-access` | | Pre-flight API access verification — runs 9 read-only checks, no data exported |
+| `-d`, `--debug` | | Enable verbose debug logging (writes to `export_debug.log`) |
+| `--help` | | Show usage information |
+
+---
+
+## `--test-access` Mode
+
+Pre-flight verification that tests API access for every data collection category **without exporting any data**. Use this before a full export to confirm the service account has all required permissions.
+
+### Usage
+
+```bash
+# Test core access only
+./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token YOUR_TOKEN
+
+# Test core + RBAC + usage analytics access
+./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token YOUR_TOKEN --rbac --usage
+
+# Test with _internal skipped (Splunk Cloud restricted)
+./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token YOUR_TOKEN --rbac --usage --skip-internal
+
+# Test against specific apps
+./dma-splunk-cloud-export_beta.sh --test-access --stack acme.splunkcloud.com --token YOUR_TOKEN --apps myapp1,myapp2 --rbac --usage
+```
+
+### The 9 Access Checks
+
+| # | Check | Level | What It Tests |
+|---|-------|-------|---------------|
+| 1 | System Info | **CRITICAL** | Basic connectivity and Splunk version (`/services/server/info`) |
+| 2 | Configurations | REQUIRED | Index configuration access (`/servicesNS/-/-/configs/conf-indexes`) |
+| 3 | Dashboards | REQUIRED | Dashboard definitions for a test app (`/servicesNS/-/{APP}/data/ui/views`) |
+| 4 | Saved Searches / Alerts | REQUIRED | Saved search/alert access for a test app (`/servicesNS/-/{APP}/saved/searches`) |
+| 5 | RBAC (users/roles) | OPTIONAL | User list + role definitions — only tested if `--rbac` is passed |
+| 6 | Knowledge Objects | REQUIRED | Macros, props.conf, lookups for a test app |
+| 7 | App Analytics (`_audit`) | OPTIONAL | Search access to `_audit` index — only tested if `--usage` is passed |
+| 8 | Usage Analytics (`_internal`) | OPTIONAL | Search access to `_internal` index — only tested if `--usage` is passed, skipped if `--skip-internal` |
+| 9 | Indexes | REQUIRED | Index list and metadata (`/services/data/indexes`) |
+
+### Result Statuses
+
+| Status | Meaning |
+|--------|---------|
+| **PASS** | Access verified — endpoint returned data |
+| **FAIL** | Access denied — endpoint returned 401/403 or search was rejected |
+| **WARN** | Partial access — some sub-checks passed, others failed |
+| **SKIP** | Not tested — feature not requested (e.g., RBAC without `--rbac` flag) |
+
+### Verdict Logic
+
+- **All pass** → "You are ready to run a full export"
+- **Critical failure** (System Info fails) → "Cannot run export until resolved" (exit code 1)
+- **Non-critical failures** → "Export will run but some data will be missing" (exit code 2)
+- **Warnings only** → "All required checks passed (some warnings)" (exit code 0)
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All checks passed (or warnings only) |
+| `1` | Critical failure — cannot reach Splunk API |
+| `2` | Non-critical failures — export will be incomplete |
+
+---
+
+## Required Permissions
+
+### Core Capabilities (must have all)
+
+| Capability | Required For |
+|---|---|
+| `search` | Execute all SPL queries |
+| `admin_all_objects` | Access configs, dashboards, saved searches across all apps |
+| `list_settings` | Read server settings and index configurations |
+| `rest_properties_get` | Read all REST API endpoints |
+| `list_indexes` | List index definitions and metadata |
+
+### Additional for RBAC (`--rbac`)
+
+| Capability | Required For |
+|---|---|
+| `list_users` | Export user list |
+| `list_users_roles` | Export role definitions and mappings |
+
+### Index Access for Usage Analytics (`--usage`)
+
+| Index | Required For | Can Skip? |
+|---|---|---|
+| `_audit` | Dashboard views, user activity, search patterns | Use `--no-usage` |
+| `_internal` | Daily ingestion volume, alert firing stats | Use `--skip-internal` |
+
+The recommended Splunk Cloud role is **`sc_admin`**, which includes all required capabilities. Use `--test-access` to verify before running a full export.
+
+---
+
+## Breaking Changes (v4.5.0)
 
 | Change | Before (v4.4.0) | After (v4.5.0) |
 |--------|-----------------|-----------------|
@@ -270,5 +412,6 @@ If you see `--skip-internal` was used, daily volume and alert firing queries are
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.5.5 | 2026-03 | Password auth: safer URL encoding, session key diagnostics, Splunk Cloud cluster 401 guidance |
 | 4.5.0 | 2026-02 | Analytics overhaul: fix `search_type=dashboard` bug, global queries, async dispatch, RBAC enhancements |
 | 4.4.0 | 2026-01 | Prior beta (per-app analytics, blocking dispatch, search_type=dashboard) |
