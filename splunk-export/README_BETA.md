@@ -1,15 +1,17 @@
 # DMA Splunk Cloud Export — Beta Script
 
-## Version 4.5.5
+## Version 4.5.6
 
 ### What's New in Beta
 
 The beta script includes several features not yet in the stable release:
 
+- **`--remask` flag** — Re-anonymize an existing unmasked archive without reconnecting to Splunk
 - **`--test-access` mode** — Pre-flight API access verification (9 checks, read-only, no export)
 - **`--skip-internal` flag** — Skip `_internal` index queries when restricted in Splunk Cloud
 - **`--analytics-period` flag** — Override the analytics time window (default: `7d`)
 - **`--scoped` flag** — Scope all collections to selected apps only
+- **Masking integrity checks** — Disk space verification, file count validation before/after copy and anonymization
 - **Analytics overhaul** — Fixed broken `search_type=dashboard` queries, async search dispatch, global aggregate queries
 - **RBAC enhancements** — New LDAP/SAML collection endpoints, fixed SAML error handling
 - **Password auth improvements** — URL-encoded credentials, session key diagnostics, Splunk Cloud cluster guidance
@@ -30,6 +32,9 @@ The beta script includes several features not yet in the stable release:
 
 # Username/password auth
 ./dma-splunk-cloud-export_beta.sh --stack acme.splunkcloud.com --user admin --password 'P@ssw0rd' --all-apps
+
+# Re-anonymize an existing unmasked archive (no Splunk connection needed)
+./dma-splunk-cloud-export_beta.sh --remask /path/to/dma_cloud_export_original.tar.gz
 ```
 
 ---
@@ -55,6 +60,7 @@ The beta script includes several features not yet in the stable release:
 | `--proxy` | `URL` | Route all connections through a proxy server (e.g., `http://proxy:8080`) |
 | `--resume-collect` | `FILE` | Resume a previous interrupted export from a `.tar.gz` archive |
 | `--test-access` | | Pre-flight API access verification — runs 9 read-only checks, no data exported |
+| `--remask` | `FILE` | Re-anonymize an existing unmasked `.tar.gz` archive (no Splunk connection needed) |
 | `-d`, `--debug` | | Enable verbose debug logging (writes to `export_debug.log`) |
 | `--help` | | Show usage information |
 
@@ -412,6 +418,7 @@ If you see `--skip-internal` was used, daily volume and alert firing queries are
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.5.6 | 2026-03 | Fix masked archive dropping files: disk space check, file count validation, `--remask` flag |
 | 4.5.5 | 2026-03 | Password auth: safer URL encoding, session key diagnostics, Splunk Cloud cluster 401 guidance |
 | 4.5.0 | 2026-02 | Analytics overhaul: fix `search_type=dashboard` bug, global queries, async dispatch, RBAC enhancements |
 | 4.4.0 | 2026-01 | Prior beta (per-app analytics, blocking dispatch, search_type=dashboard) |

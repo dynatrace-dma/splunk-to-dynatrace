@@ -5090,14 +5090,50 @@ create_masked_archive() {
   echo -e "  ${DIM}Now creating a separate anonymized copy...${NC}"
   echo ""
 
+  # Count original files for validation
+  local original_file_count
+  original_file_count=$(find "$EXPORT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+  info "Original export contains $original_file_count files"
+
+  # Check available disk space before copying
+  local export_size_kb
+  export_size_kb=$(du -sk "$EXPORT_DIR" 2>/dev/null | cut -f1)
+  local available_kb
+  if command -v df &>/dev/null; then
+    available_kb=$(df -k "$(dirname "$EXPORT_DIR")" 2>/dev/null | tail -1 | awk '{print $4}')
+  fi
+  if [ -n "$available_kb" ] && [ -n "$export_size_kb" ] && [ "$available_kb" -lt "$((export_size_kb * 2))" ]; then
+    local need_mb=$((export_size_kb / 1024))
+    local avail_mb=$((available_kb / 1024))
+    error "Insufficient disk space for masked copy. Need ~${need_mb}MB, only ${avail_mb}MB available."
+    error "Free up disk space or use the original (non-masked) archive."
+    return 1
+  fi
+
   # Copy export directory to masked version
   progress "Copying export directory for anonymization..."
-  cp -r "$EXPORT_DIR" "$masked_dir"
+  if ! cp -r "$EXPORT_DIR" "$masked_dir" 2>&1; then
+    error "Failed to copy export directory for masking (disk full or permissions issue)"
+    rm -rf "$masked_dir" 2>/dev/null
+    return 1
+  fi
 
   if [ ! -d "$masked_dir" ]; then
     error "Failed to create masked directory copy"
     return 1
   fi
+
+  # Validate file count after copy — catch silent cp failures (disk full, inode exhaustion)
+  local copied_file_count
+  copied_file_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$copied_file_count" -ne "$original_file_count" ]; then
+    error "File count mismatch after copy: original=$original_file_count, copied=$copied_file_count"
+    error "Likely cause: insufficient disk space or inode exhaustion during copy."
+    error "Cannot create masked archive — $((original_file_count - copied_file_count)) files were lost."
+    rm -rf "$masked_dir"
+    return 1
+  fi
+  success "Verified: $copied_file_count files copied successfully"
 
   # Temporarily switch EXPORT_DIR for anonymization
   local original_export_dir="$EXPORT_DIR"
@@ -5105,6 +5141,13 @@ create_masked_archive() {
 
   # Run anonymization on the masked copy
   anonymize_export
+
+  # Validate file count after anonymization — ensure anonymizer didn't delete anything
+  local post_anon_count
+  post_anon_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$post_anon_count" -lt "$copied_file_count" ]; then
+    warning "File count decreased after anonymization: before=$copied_file_count, after=$post_anon_count ($((copied_file_count - post_anon_count)) files lost)"
+  fi
 
   # Create the masked archive (this will clean up the masked dir)
   local masked_archive="${EXPORT_NAME}_masked.tar.gz"
@@ -5125,6 +5168,7 @@ create_masked_archive() {
     echo ""
     echo -e "  ${BOLD}Masked Archive:${NC} $(pwd)/$masked_archive"
     echo -e "  ${BOLD}Size:${NC}           $size"
+    echo -e "  ${BOLD}Files:${NC}          $post_anon_count"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} Share the ${BOLD}_masked${NC} archive with third parties."
     echo -e "        Keep the original archive for your records."

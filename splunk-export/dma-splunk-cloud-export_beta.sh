@@ -187,7 +187,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="7d"
-SCRIPT_VERSION="4.5.5"
+SCRIPT_VERSION="4.5.6"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -201,6 +201,8 @@ NON_INTERACTIVE=false
 
 # Test-access mode - pre-flight check of API access for all categories (no export)
 TEST_ACCESS_MODE=false
+REMASK_MODE=false
+REMASK_ARCHIVE=""
 
 # Debug mode - enables verbose logging for troubleshooting
 DEBUG_MODE=false
@@ -5042,6 +5044,140 @@ create_archive() {
 }
 
 # =============================================================================
+# REMASK MODE (v4.5.5)
+# Re-anonymize an existing unmasked archive without connecting to Splunk
+# Usage: ./script.sh --remask /path/to/original_export.tar.gz
+# =============================================================================
+
+remask_archive() {
+  local archive="$1"
+
+  if [ ! -f "$archive" ]; then
+    echo -e "${RED}[ERROR] Archive not found: $archive${NC}" >&2
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${CYAN}  REMASK MODE — Re-Anonymize Existing Archive${NC}"
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${DIM}No Splunk connection needed. This only re-runs anonymization.${NC}"
+  echo -e "  ${DIM}Original archive will NOT be modified.${NC}"
+  echo ""
+  echo -e "  ${BOLD}Source:${NC} $archive"
+  echo ""
+
+  # Extract the archive to a temp directory
+  local work_dir
+  work_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'dma_remask')
+
+  echo -e "  Extracting archive..."
+  if ! tar -xzf "$archive" -C "$work_dir" 2>&1; then
+    echo -e "${RED}[ERROR] Failed to extract archive${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  # Find the top-level export directory inside the extracted archive
+  local extracted_dir
+  extracted_dir=$(find "$work_dir" -maxdepth 1 -mindepth 1 -type d | head -1)
+
+  if [ -z "$extracted_dir" ] || [ ! -d "$extracted_dir" ]; then
+    echo -e "${RED}[ERROR] Could not find export directory in archive${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  local original_file_count
+  original_file_count=$(find "$extracted_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  echo -e "  ${GREEN}✓${NC} Extracted: $original_file_count files"
+  echo ""
+
+  # Check disk space for the masked copy
+  local extract_size_kb
+  extract_size_kb=$(du -sk "$extracted_dir" 2>/dev/null | cut -f1)
+  local available_kb
+  if command -v df &>/dev/null; then
+    available_kb=$(df -k "$work_dir" 2>/dev/null | tail -1 | awk '{print $4}')
+  fi
+  if [ -n "$available_kb" ] && [ -n "$extract_size_kb" ] && [ "$available_kb" -lt "$((extract_size_kb * 2))" ]; then
+    local need_mb=$((extract_size_kb / 1024))
+    local avail_mb=$((available_kb / 1024))
+    echo -e "${RED}[ERROR] Insufficient disk space. Need ~${need_mb}MB, only ${avail_mb}MB available.${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  # Copy to masked directory
+  local masked_dir="${extracted_dir}_masked"
+  echo -e "  Copying for anonymization..."
+  if ! cp -r "$extracted_dir" "$masked_dir" 2>&1; then
+    echo -e "${RED}[ERROR] Failed to copy directory for masking${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  # Validate file count after copy
+  local copied_file_count
+  copied_file_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$copied_file_count" -ne "$original_file_count" ]; then
+    echo -e "${RED}[ERROR] File count mismatch: original=$original_file_count, copied=$copied_file_count${NC}" >&2
+    echo -e "${RED}  $((original_file_count - copied_file_count)) files were lost during copy (disk full?)${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+  echo -e "  ${GREEN}✓${NC} Copied: $copied_file_count files verified"
+
+  # Set EXPORT_DIR for the anonymizer and run it
+  EXPORT_DIR="$masked_dir"
+  ANONYMIZE_DATA=true
+  anonymize_export
+
+  # Validate file count after anonymization
+  local post_anon_count
+  post_anon_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$post_anon_count" -lt "$copied_file_count" ]; then
+    echo -e "  ${YELLOW}[WARN] $((copied_file_count - post_anon_count)) files lost during anonymization${NC}"
+  fi
+
+  # Build output archive name: replace .tar.gz with _masked.tar.gz
+  local archive_basename
+  archive_basename=$(basename "$archive")
+  local masked_name="${archive_basename%.tar.gz}_masked.tar.gz"
+  local output_dir
+  output_dir=$(dirname "$archive")
+
+  echo -e "  Creating masked archive..."
+  if ! tar -czf "${output_dir}/${masked_name}" -C "$work_dir" "$(basename "$masked_dir")" 2>&1; then
+    echo -e "${RED}[ERROR] Failed to create masked archive${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  local size
+  size=$(du -h "${output_dir}/${masked_name}" | cut -f1)
+
+  # Clean up
+  rm -rf "$work_dir"
+
+  echo ""
+  echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${GREEN}  REMASK COMPLETE${NC}"
+  echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${BOLD}Original:${NC}  $archive (unchanged)"
+  echo -e "  ${BOLD}Masked:${NC}    ${output_dir}/${masked_name}"
+  echo -e "  ${BOLD}Size:${NC}      $size"
+  echo -e "  ${BOLD}Files:${NC}     $post_anon_count"
+  echo ""
+  echo -e "  ${YELLOW}Share the _masked archive. The original was NOT modified.${NC}"
+  echo ""
+
+  return 0
+}
+
+# =============================================================================
 # MASKED ARCHIVE CREATION (v4.2.5)
 # Creates an anonymized copy while preserving the original
 # =============================================================================
@@ -5058,14 +5194,50 @@ create_masked_archive() {
   echo -e "  ${DIM}Now creating a separate anonymized copy...${NC}"
   echo ""
 
+  # Count original files for validation
+  local original_file_count
+  original_file_count=$(find "$EXPORT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+  info "Original export contains $original_file_count files"
+
+  # Check available disk space before copying
+  local export_size_kb
+  export_size_kb=$(du -sk "$EXPORT_DIR" 2>/dev/null | cut -f1)
+  local available_kb
+  if command -v df &>/dev/null; then
+    available_kb=$(df -k "$(dirname "$EXPORT_DIR")" 2>/dev/null | tail -1 | awk '{print $4}')
+  fi
+  if [ -n "$available_kb" ] && [ -n "$export_size_kb" ] && [ "$available_kb" -lt "$((export_size_kb * 2))" ]; then
+    local need_mb=$((export_size_kb / 1024))
+    local avail_mb=$((available_kb / 1024))
+    error "Insufficient disk space for masked copy. Need ~${need_mb}MB, only ${avail_mb}MB available."
+    error "Free up disk space or use the original (non-masked) archive."
+    return 1
+  fi
+
   # Copy export directory to masked version
   progress "Copying export directory for anonymization..."
-  cp -r "$EXPORT_DIR" "$masked_dir"
+  if ! cp -r "$EXPORT_DIR" "$masked_dir" 2>&1; then
+    error "Failed to copy export directory for masking (disk full or permissions issue)"
+    rm -rf "$masked_dir" 2>/dev/null
+    return 1
+  fi
 
   if [ ! -d "$masked_dir" ]; then
     error "Failed to create masked directory copy"
     return 1
   fi
+
+  # Validate file count after copy — catch silent cp failures (disk full, inode exhaustion)
+  local copied_file_count
+  copied_file_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$copied_file_count" -ne "$original_file_count" ]; then
+    error "File count mismatch after copy: original=$original_file_count, copied=$copied_file_count"
+    error "Likely cause: insufficient disk space or inode exhaustion during copy."
+    error "Cannot create masked archive — $((original_file_count - copied_file_count)) files were lost."
+    rm -rf "$masked_dir"
+    return 1
+  fi
+  success "Verified: $copied_file_count files copied successfully"
 
   # Temporarily switch EXPORT_DIR for anonymization
   local original_export_dir="$EXPORT_DIR"
@@ -5073,6 +5245,13 @@ create_masked_archive() {
 
   # Run anonymization on the masked copy
   anonymize_export
+
+  # Validate file count after anonymization — ensure anonymizer didn't delete anything
+  local post_anon_count
+  post_anon_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$post_anon_count" -lt "$copied_file_count" ]; then
+    warning "File count decreased after anonymization: before=$copied_file_count, after=$post_anon_count ($((copied_file_count - post_anon_count)) files lost)"
+  fi
 
   # Create the masked archive (this will clean up the masked dir)
   local masked_archive="${EXPORT_NAME}_masked.tar.gz"
@@ -5093,6 +5272,7 @@ create_masked_archive() {
     echo ""
     echo -e "  ${BOLD}Masked Archive:${NC} $(pwd)/$masked_archive"
     echo -e "  ${BOLD}Size:${NC}           $size"
+    echo -e "  ${BOLD}Files:${NC}          $post_anon_count"
     echo ""
     echo -e "  ${YELLOW}Note:${NC} Share the ${BOLD}_masked${NC} archive with third parties."
     echo -e "        Keep the original archive for your records."
@@ -6305,6 +6485,16 @@ main() {
         TEST_ACCESS_MODE=true
         shift
         ;;
+      --remask)
+        # Re-anonymize an existing unmasked archive (no Splunk connection needed)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --remask requires a path to an unmasked .tar.gz archive" >&2
+          exit 1
+        fi
+        REMASK_ARCHIVE="$2"
+        REMASK_MODE=true
+        shift 2
+        ;;
       --debug|-d)
         # Enable verbose debug logging for troubleshooting
         DEBUG_MODE=true
@@ -6329,6 +6519,7 @@ main() {
         echo "  --proxy URL       Route all connections through a proxy server (e.g., http://proxy:8080)"
         echo "  --resume-collect FILE  Resume a previous interrupted export from a .tar.gz archive"
         echo "  --test-access     Pre-flight check: test API access for all categories (no export)"
+        echo "  --remask FILE     Re-anonymize an existing unmasked archive (no Splunk connection needed)"
         echo "  -d, --debug       Enable verbose debug logging (writes to export_debug.log)"
         echo "  --help            Show this help"
         echo ""
@@ -6352,6 +6543,15 @@ main() {
   # =========================================================================
   if [ "$RESUME_MODE" = "true" ]; then
     resume_from_archive "$RESUME_ARCHIVE"
+  fi
+
+  # =========================================================================
+  # HANDLE REMASK MODE
+  # Re-anonymize an existing unmasked archive without connecting to Splunk
+  # =========================================================================
+  if [ "$REMASK_MODE" = "true" ]; then
+    remask_archive "$REMASK_ARCHIVE"
+    exit $?
   fi
 
   # =========================================================================
