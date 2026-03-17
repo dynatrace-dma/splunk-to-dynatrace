@@ -190,8 +190,8 @@ EXPORT_ALL_APPS=true
 COLLECT_CONFIGS=true
 COLLECT_DASHBOARDS=true
 COLLECT_ALERTS=true
-COLLECT_RBAC=false          # OFF by default - use --rbac to enable (slow, often not needed)
-COLLECT_USAGE=false         # OFF by default - use --usage to enable (slow analytics queries)
+COLLECT_RBAC=true           # ON by default - use --no-rbac to disable
+COLLECT_USAGE=true          # ON by default - use --no-usage to disable
 COLLECT_INDEXES=true
 COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
@@ -7108,8 +7108,10 @@ main() {
         echo "  --splunk-home PATH      Splunk installation path"
         echo "  --apps LIST             Comma-separated list of apps to export"
         echo "  --all-apps              Export all applications"
-        echo "  --rbac                  Collect RBAC/users data (off by default)"
-        echo "  --usage                 Collect usage analytics (off by default)"
+        echo "  --rbac                  Collect RBAC/users data (on by default)"
+        echo "  --no-rbac               Disable RBAC/users data collection"
+        echo "  --usage                 Collect usage analytics (on by default)"
+        echo "  --no-usage              Disable usage analytics collection"
         echo "  --analytics-period N    Analytics time window (default: 7d; e.g. 30d, 90d)"
         echo "  --skip-internal         Skip index=_audit/_internal searches (restricted accounts)"
         echo "  --test-access           Pre-flight check: test API access and exit (no export)"
@@ -7117,7 +7119,7 @@ main() {
         echo "  --resume-collect FILE   Resume a previously interrupted export from archive"
         echo "  --quick                 Quick mode - TESTING ONLY (skips critical migration data)"
         echo "  --scoped                Scope all collections to selected apps only"
-        echo "  --anonymize             Enable data anonymization (default)"
+        echo "  --anonymize             Enable data anonymization (on by default)"
         echo "  --no-anonymize          Disable data anonymization"
         echo "  -y, --yes               Auto-confirm all prompts"
         echo "  -d, --debug             Enable verbose debug logging (writes to export_debug.log)"
