@@ -604,7 +604,7 @@ function Write-WhyBox {
 function Write-Recommendation {
     param([string]$Text)
     Write-Host ""
-    Write-Host "  ${Script:GREEN}$([char]0x1F4A1) RECOMMENDATION: ${Script:NC}$Text"
+    Write-Host "  ${Script:GREEN}$([char]::ConvertFromUtf32(0x1F4A1)) RECOMMENDATION: ${Script:NC}$Text"
 }
 
 # Prompt for yes/no with default
