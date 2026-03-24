@@ -9,7 +9,12 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.5.0
+#  DMA Splunk Cloud Export Script v4.5.7
+#
+#  v4.5.7 Changes:
+#    - Fix token auth: auto-detect prefix (Bearer vs Splunk) via probe loop
+#    - Tokens created via Settings > Tokens require "Splunk" prefix, not "Bearer"
+#    - Debug mode now logs auth probe response (first 200 chars) for diagnostics
 #
 #  v4.5.0 Changes:
 #    - CRITICAL FIX: Dashboard view queries now use provenance field (search_type=dashboard was broken)
@@ -187,7 +192,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="7d"
-SCRIPT_VERSION="4.5.6"
+SCRIPT_VERSION="4.5.7"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -1633,18 +1638,31 @@ authenticate() {
   local session_key
 
   if [ "$AUTH_METHOD" = "token" ]; then
-    # Token-based auth - verify token works
-    AUTH_HEADER="Authorization: Bearer $AUTH_TOKEN"
-    response=$(curl -s -k $CURL_PROXY_ARGS \
-      -H "Authorization: Bearer $AUTH_TOKEN" \
-      "${SPLUNK_URL}/services/authentication/current-context?output_mode=json")
+    # Token-based auth - verify token works.
+    # Splunk supports two token prefixes depending on how the token was created:
+    #   "Bearer" - OAuth2 / JWT tokens
+    #   "Splunk" - tokens created via Settings > Tokens (Token Management)
+    # Try Bearer first, then fall back to Splunk prefix automatically.
+    local token_prefix=""
+    for try_prefix in "Bearer" "Splunk"; do
+      response=$(curl -s -k $CURL_PROXY_ARGS \
+        -H "Authorization: ${try_prefix} $AUTH_TOKEN" \
+        "${SPLUNK_URL}/services/authentication/current-context?output_mode=json")
+      debug_log "AUTH" "Token probe (${try_prefix}): $(echo "$response" | head -c 200)"
+      if echo "$response" | grep -q "username"; then
+        token_prefix="$try_prefix"
+        break
+      fi
+    done
 
-    if echo "$response" | grep -q "username"; then
+    if [ -n "$token_prefix" ]; then
+      AUTH_HEADER="Authorization: ${token_prefix} $AUTH_TOKEN"
       local username=$(json_value "$response" '.entry[0].content.username')
-      success "Token authentication successful (user: $username)"
+      success "Token authentication successful (prefix: ${token_prefix}, user: $username)"
       return 0
     else
-      error "Token authentication failed"
+      error "Token authentication failed (tried Bearer and Splunk prefixes)"
+      debug_log "AUTH" "Last response: $(echo "$response" | head -c 500)"
       return 1
     fi
 
