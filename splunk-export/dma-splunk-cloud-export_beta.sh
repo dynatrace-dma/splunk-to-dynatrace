@@ -1643,6 +1643,10 @@ authenticate() {
     #   "Bearer" - OAuth2 / JWT tokens
     #   "Splunk" - tokens created via Settings > Tokens (Token Management)
     # Try Bearer first, then fall back to Splunk prefix automatically.
+    local token_len=${#AUTH_TOKEN}
+    local token_mask="${AUTH_TOKEN:0:6}...${AUTH_TOKEN: -4}"
+    debug_log "AUTH" "Token length=${token_len}, value=${token_mask}"
+
     local token_prefix=""
     for try_prefix in "Bearer" "Splunk"; do
       response=$(curl -s -k $CURL_PROXY_ARGS \
