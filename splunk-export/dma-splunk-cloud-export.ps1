@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    DMA Splunk Cloud Export Script v4.3.0 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.5.8 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
@@ -12,8 +12,59 @@
     IMPORTANT: This script is for SPLUNK CLOUD only. For Splunk Enterprise,
     use dma-splunk-export.sh instead.
 
-    This is a functionally identical PowerShell conversion of
-    dma-splunk-cloud-export.sh v4.3.0 for Windows environments.
+    This is a functionally equivalent PowerShell port of
+    dma-splunk-cloud-export_beta.sh v4.5.8 for Windows environments.
+
+    v4.5.8 Changes (parity with bash v4.5.8, 2026-03-31):
+
+      Token authentication:
+      - Auto-detect token prefix (Bearer vs Splunk) via probe loop against
+        /services/authentication/current-context; Splunk-issued tokens
+        (Settings > Tokens) require "Splunk" prefix, not "Bearer"
+      - Invoke-SplunkApi now uses AUTH_HEADER set by Connect-SplunkCloud
+        instead of hardcoding Bearer — honours the discovered prefix
+      - Return code checks after server_info and app list fetch; clear error
+        messages when token lacks get_info, list_apps, or admin_all_objects
+
+      Async search dispatch (replaces blocking mode):
+      - Invoke-AnalyticsSearch rewritten: exec_mode=normal returns SID immediately,
+        then polls dispatchState (QUEUED/PARSING/RUNNING/FINALIZING/DONE/FAILED)
+      - Adaptive poll interval: starts at 5s, increases by 5s per iteration, caps at 30s
+      - MaxWait default 3600s (1 hour) — up from 300s blocking timeout
+      - Auto-cancels timed-out jobs to free search quota
+      - Invoke-AnalyticsSearchBlocking preserved for fast | rest queries
+
+      Global aggregate analytics (replaces per-app loops):
+      - Export-GlobalAnalytics runs 6 global queries instead of N*7 per-app queries
+        (for 90 apps: 630 search jobs reduced to 6)
+      - Query 1: Dashboard views — uses provenance field (search_type=dashboard was broken);
+        view session de-duplication (counts page loads, not panel searches)
+      - Query 2: User activity — searches per user per app
+      - Query 3: Search type breakdown — derives search_type from provenance/search_id
+      - Query 4: Daily ingestion volume — license_usage.log + tstats fallback
+      - Query 5: Alert firing stats — scheduler-based execution statistics
+      - Query 6: Alerts inventory — per-app | rest (blocking, only remaining per-app query)
+
+      Progressive checkpointing:
+      - Save-AnalyticsCheckpoint / Test-AnalyticsCheckpoint track completed queries
+      - Interrupted analytics can resume where they left off via .analytics_checkpoint file
+      - Each of the 6 global queries is independently checkpointed
+
+      New features:
+      - -TestAccess: pre-flight API access check across 9 categories (no export written)
+      - -Remask FILE: re-anonymize an existing archive without connecting to Splunk
+      - -AnalyticsPeriod: configurable analytics time window (default: 7d; e.g. 30d, 90d)
+
+      Expanded RBAC collection:
+      - Added /services/authorization/capabilities
+      - Added /services/authentication/providers/SAML (config)
+      - Added /services/admin/SAML-groups (now always collected, not just non-scoped)
+      - Added /services/admin/LDAP-groups
+      - Added /services/authentication/providers/LDAP (config)
+      - All new endpoints handle 404 gracefully with placeholder JSON
+
+      Other:
+      - USAGE_PERIOD default changed from 30d to 7d (4x less _audit data to scan)
 
     REQUIREMENTS:
       - PowerShell 5.1+ (Windows PowerShell) or PowerShell 7+ (PowerShell Core)
@@ -160,6 +211,15 @@ param(
     [Parameter(HelpMessage = "Skip _internal index searches")]
     [switch]$SkipInternal,
 
+    [Parameter(HelpMessage = "Analytics time window (e.g., 7d, 30d, 90d)")]
+    [string]$AnalyticsPeriod = "",
+
+    [Parameter(HelpMessage = "Pre-flight check: test API access for all categories (no export)")]
+    [switch]$TestAccess,
+
+    [Parameter(HelpMessage = "Re-anonymize an existing unmasked archive (no Splunk connection needed)")]
+    [string]$Remask = "",
+
     [Parameter(HelpMessage = "Display version and exit")]
     [switch]$Version,
 
@@ -171,7 +231,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.3.0"
+$Script:SCRIPT_VERSION = "4.5.8"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -248,6 +308,7 @@ $Script:AUTH_TOKEN = ""
 $Script:SPLUNK_USER = ""
 $Script:SPLUNK_PASSWORD = ""
 $Script:SESSION_KEY = ""
+$Script:AUTH_HEADER = ""          # Set by Connect-SplunkCloud; used by Invoke-SplunkApi
 
 # Export settings
 $Script:EXPORT_DIR = ""
@@ -273,7 +334,7 @@ $Script:COLLECT_INDEXES = $true
 $Script:COLLECT_LOOKUPS = $false
 $Script:COLLECT_AUDIT = $false
 $Script:ANONYMIZE_DATA = $true
-$Script:USAGE_PERIOD = "30d"
+$Script:USAGE_PERIOD = "7d"             # Default analytics window (was 30d in v4.3.0; 7d matches bash default)
 $Script:SKIP_INTERNAL = $false
 
 # App-scoped collection mode
@@ -285,6 +346,13 @@ $Script:PROXY_URL = ""
 # Resume settings
 $Script:RESUME_ARCHIVE = ""
 $Script:RESUME_MODE = $false
+
+# Test-access mode
+$Script:TEST_ACCESS_MODE = $false
+
+# Remask mode
+$Script:REMASK_MODE = $false
+$Script:REMASK_ARCHIVE = ""
 
 # Non-interactive mode flag
 $Script:NON_INTERACTIVE = $false
@@ -424,6 +492,16 @@ if ($ResumeCollect) {
 }
 if ($SkipInternal) {
     $Script:SKIP_INTERNAL = $true
+}
+if ($AnalyticsPeriod) {
+    $Script:USAGE_PERIOD = $AnalyticsPeriod
+}
+if ($TestAccess) {
+    $Script:TEST_ACCESS_MODE = $true
+}
+if ($Remask) {
+    $Script:REMASK_MODE = $true
+    $Script:REMASK_ARCHIVE = $Remask
 }
 
 # Auto-detect non-interactive mode when all required params are provided
@@ -1043,9 +1121,12 @@ function Invoke-SplunkApi {
     # Build URL
     $url = "$Script:SPLUNK_URL$Endpoint"
 
-    # Build auth headers
+    # Build auth headers — use AUTH_HEADER set by Connect-SplunkCloud when available,
+    # so the token prefix discovered during auth probing (Bearer vs Splunk) is honoured.
     $headers = @{}
-    if ($Script:SESSION_KEY) {
+    if ($Script:AUTH_HEADER) {
+        $headers["Authorization"] = $Script:AUTH_HEADER
+    } elseif ($Script:SESSION_KEY) {
         $headers["Authorization"] = "Splunk $Script:SESSION_KEY"
     } elseif ($Script:AUTH_TOKEN) {
         $headers["Authorization"] = "Bearer $Script:AUTH_TOKEN"
@@ -1557,36 +1638,57 @@ function Test-SplunkConnectivity {
 
 function Connect-SplunkCloud {
     if ($Script:AUTH_METHOD -eq "token") {
-        # Token-based auth - verify token works
-        try {
-            $webParams = @{
-                Uri             = "$Script:SPLUNK_URL/services/authentication/current-context?output_mode=json"
-                Method          = "GET"
-                Headers         = @{ "Authorization" = "Bearer $Script:AUTH_TOKEN" }
-                TimeoutSec      = $Script:API_TIMEOUT
-                UseBasicParsing = $true
-                ErrorAction     = "Stop"
-            }
-            if ($Script:IsPSCore) {
-                $webParams["SkipCertificateCheck"] = $true
-            }
-            if ($Script:PROXY_URL) {
-                $webParams["Proxy"] = $Script:PROXY_URL
-            }
+        # Token-based auth — probe both Bearer and Splunk prefixes.
+        # Splunk Cloud tokens from Settings > Tokens require "Splunk" prefix;
+        # OAuth2/JWT tokens require "Bearer". Try both and keep the one that works.
+        $tokenLen = $Script:AUTH_TOKEN.Length
+        $tokenMask = if ($tokenLen -gt 10) { "$($Script:AUTH_TOKEN.Substring(0,6))...$($Script:AUTH_TOKEN.Substring($tokenLen-4))" } else { "***" }
+        Write-DebugLog "AUTH" "Token length=$tokenLen, value=$tokenMask"
 
-            $response = Invoke-WebRequest @webParams
-            $data = $response.Content | ConvertFrom-Json
+        $winningPrefix = ""
+        $winningData = $null
 
-            if ($data.entry -and $data.entry.Count -gt 0) {
-                $username = $data.entry[0].content.username
-                Write-Success "Token authentication successful (user: $username)"
-                return $true
+        foreach ($tryPrefix in @("Bearer", "Splunk")) {
+            try {
+                $webParams = @{
+                    Uri             = "$Script:SPLUNK_URL/services/authentication/current-context?output_mode=json"
+                    Method          = "GET"
+                    Headers         = @{ "Authorization" = "$tryPrefix $($Script:AUTH_TOKEN)" }
+                    TimeoutSec      = $Script:API_TIMEOUT
+                    UseBasicParsing = $true
+                    ErrorAction     = "Stop"
+                }
+                if ($Script:IsPSCore) {
+                    $webParams["SkipCertificateCheck"] = $true
+                }
+                if ($Script:PROXY_URL) {
+                    $webParams["Proxy"] = $Script:PROXY_URL
+                }
+
+                $response = Invoke-WebRequest @webParams
+                $probeSnippet = if ($response.Content.Length -gt 200) { $response.Content.Substring(0, 200) } else { $response.Content }
+                Write-DebugLog "AUTH" "Token probe ($tryPrefix): $probeSnippet"
+                $data = $response.Content | ConvertFrom-Json
+
+                if ($data.entry -and $data.entry.Count -gt 0) {
+                    $winningPrefix = $tryPrefix
+                    $winningData = $data
+                    break
+                }
+            }
+            catch {
+                Write-DebugLog "AUTH" "Token probe ($tryPrefix): failed - $($_.Exception.Message)"
             }
         }
-        catch {
-            # Fall through to error
+
+        if ($winningPrefix) {
+            $Script:AUTH_HEADER = "$winningPrefix $($Script:AUTH_TOKEN)"
+            $username = $winningData.entry[0].content.username
+            Write-Success "Token authentication successful (prefix: $winningPrefix, user: $username)"
+            return $true
         }
-        Write-Error2 "Token authentication failed"
+
+        Write-Error2 "Token authentication failed (tried Bearer and Splunk prefixes)"
         return $false
     }
     else {
@@ -2734,13 +2836,54 @@ function Export-RbacData {
         Write-Log "Collected roles"
     }
 
-    # SAML groups (may not be available) - skip in scoped mode
-    if (-not $Script:SCOPE_TO_APPS) {
-        $response = Invoke-SplunkApi -Endpoint "/services/admin/SAML-groups" -Data "output_mode=json"
-        if ($null -ne $response) {
-            Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/saml_groups.json") -Data $response
-            Write-Log "Collected SAML groups"
-        }
+    # Capabilities
+    $response = Invoke-SplunkApi -Endpoint "/services/authorization/capabilities" -Data "output_mode=json"
+    if ($null -ne $response -and $response.entry) {
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/capabilities.json") -Data $response
+        Write-Log "Collected system capabilities"
+    } else {
+        $note = [PSCustomObject]@{ configured = $false; note = "Capabilities endpoint not available or access denied" }
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/capabilities.json") -Data $note
+    }
+
+    # SAML groups (may not be available)
+    $response = Invoke-SplunkApi -Endpoint "/services/admin/SAML-groups" -Data "output_mode=json"
+    if ($null -ne $response -and $response.entry) {
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/saml_groups.json") -Data $response
+        Write-Log "Collected SAML groups"
+    } else {
+        $note = [PSCustomObject]@{ configured = $false; note = "SAML groups not configured or not accessible" }
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/saml_groups.json") -Data $note
+    }
+
+    # SAML config
+    $response = Invoke-SplunkApi -Endpoint "/services/authentication/providers/SAML" -Data "output_mode=json"
+    if ($null -ne $response -and $response.entry) {
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/saml_config.json") -Data $response
+        Write-Log "Collected SAML configuration"
+    } else {
+        $note = [PSCustomObject]@{ configured = $false; note = "SAML authentication not configured" }
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/saml_config.json") -Data $note
+    }
+
+    # LDAP groups
+    $response = Invoke-SplunkApi -Endpoint "/services/admin/LDAP-groups" -Data "output_mode=json"
+    if ($null -ne $response -and $response.entry) {
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/ldap_groups.json") -Data $response
+        Write-Log "Collected LDAP groups"
+    } else {
+        $note = [PSCustomObject]@{ configured = $false; note = "LDAP groups not configured or not accessible" }
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/ldap_groups.json") -Data $note
+    }
+
+    # LDAP config
+    $response = Invoke-SplunkApi -Endpoint "/services/authentication/providers/LDAP" -Data "output_mode=json"
+    if ($null -ne $response -and $response.entry) {
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/ldap_config.json") -Data $response
+        Write-Log "Collected LDAP configuration"
+    } else {
+        $note = [PSCustomObject]@{ configured = $false; note = "LDAP authentication not configured" }
+        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "dma_analytics/rbac/ldap_config.json") -Data $note
     }
 
     # Current user context
@@ -2926,55 +3069,52 @@ function Save-FilteredByAcl {
 # ANALYTICS SEARCH ENGINE
 # =============================================================================
 
+# Async search dispatch with adaptive polling (v4.5.0)
+# Replaces blocking mode (300s hard limit) with exec_mode=normal + dispatchState polling.
+# MaxWait defaults to 3600s (1 hour) — suitable for large _audit analytics.
 function Invoke-AnalyticsSearch {
     param(
         [string]$SearchQuery,
         [string]$OutputFile,
         [string]$Label,
-        [int]$Timeout = 300
+        [int]$MaxWait = 3600
     )
 
     Write-Info "Running: $Label"
-
     $startTime = Get-Date
 
-    # Create search job (blocking mode)
-    $postData = "search=$([System.Uri]::EscapeDataString($SearchQuery))&output_mode=json&exec_mode=blocking&timeout=$Timeout"
+    # Step 1: Dispatch with exec_mode=normal (returns SID immediately, non-blocking)
+    $postData = "search=$([System.Uri]::EscapeDataString($SearchQuery))&output_mode=json&exec_mode=normal&max_time=0"
     $jobResponse = Invoke-SplunkApi -Endpoint "/services/search/jobs" -Method "POST" -Data $postData
 
     if ($null -eq $jobResponse) {
         $Script:STATS_ERRORS++
         $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
         $queryPreview = if ($SearchQuery.Length -gt 200) { $SearchQuery.Substring(0, 200) } else { $SearchQuery }
-        $queryPreview = $queryPreview -replace '"', '\"'
-
         $errorJson = @{
-            error = "search_create_failed"
+            error = "search_dispatch_failed"
             description = $Label
-            message = "Failed to create search job. This may be due to permissions, API restrictions, or query syntax."
+            message = "Failed to dispatch search job."
             elapsed_seconds = $elapsed
             query_preview = $queryPreview
             troubleshooting = @(
                 "1. Verify user has 'search' capability",
                 "2. Check if this search command is allowed in Splunk Cloud",
-                "3. Try running the search manually in Splunk Web",
-                "4. Some REST commands (| rest) may be restricted"
+                "3. Try running the search manually in Splunk Web"
             )
         }
         Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
-        Write-Warning2 "Failed to run search: $Label"
+        Write-Warning2 "Failed to dispatch search: $Label"
         return $false
     }
 
-    # Get SID
+    # Step 2: Extract SID
     $sid = $null
     if ($jobResponse.sid) {
         $sid = $jobResponse.sid
     } elseif ($jobResponse.entry) {
-        $entry = @($jobResponse.entry)[0]
-        if ($entry.content -and $entry.content.sid) {
-            $sid = $entry.content.sid
-        }
+        $e = @($jobResponse.entry)[0]
+        if ($e.content -and $e.content.sid) { $sid = $e.content.sid }
     }
 
     if (-not $sid) {
@@ -2982,13 +3122,10 @@ function Invoke-AnalyticsSearch {
         $errorMsg = "Unknown error"
         if ($jobResponse.messages) {
             $msgs = @($jobResponse.messages)
-            if ($msgs.Count -gt 0 -and $msgs[0].text) {
-                $errorMsg = $msgs[0].text
-            }
+            if ($msgs.Count -gt 0 -and $msgs[0].text) { $errorMsg = $msgs[0].text }
         }
-
         $errorJson = @{
-            error = "no_search_id"
+            error = "no_sid_returned"
             description = $Label
             message = $errorMsg
             troubleshooting = @(
@@ -2998,11 +3135,90 @@ function Invoke-AnalyticsSearch {
             )
         }
         Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
-        Write-Warning2 "Could not get SID for search: $Label"
+        Write-Warning2 "No SID returned for search: $Label"
         return $false
     }
 
-    # Get results
+    Write-DebugLog "SEARCH" "[DISPATCH] sid=$sid label=$Label"
+
+    # Step 3: Poll dispatchState with adaptive interval (5s -> 30s, cap 30s)
+    $pollInterval = 5
+    $lastLogTime = Get-Date
+
+    while ($true) {
+        Start-Sleep -Seconds $pollInterval
+
+        $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
+
+        # Timeout check
+        if ($elapsed -gt $MaxWait) {
+            Write-Warning2 "Search timed out after ${elapsed}s: $Label"
+            Write-DebugLog "SEARCH" "[TIMEOUT] sid=$sid after ${elapsed}s"
+            # Cancel the job to free search quota
+            try {
+                Invoke-SplunkApi -Endpoint "/services/search/jobs/$sid/control" -Method "POST" -Data "action=cancel" | Out-Null
+            } catch { }
+            $errorJson = @{
+                error = "search_timeout"
+                description = $Label
+                message = "Search exceeded maximum wait time of ${MaxWait}s"
+                search_id = $sid
+                elapsed_seconds = $elapsed
+            }
+            Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
+            return $false
+        }
+
+        # Check job status
+        $jobStatus = Invoke-SplunkApi -Endpoint "/services/search/jobs/$sid" -Data "output_mode=json"
+        if ($null -eq $jobStatus) {
+            Write-Warning2 "Failed to poll search status: $Label"
+            return $false
+        }
+
+        $dispatchState = ""
+        if ($jobStatus.entry) {
+            $e = @($jobStatus.entry)[0]
+            if ($e.content) { $dispatchState = $e.content.dispatchState }
+        }
+
+        switch ($dispatchState) {
+            "DONE" {
+                Write-DebugLog "SEARCH" "[DONE] sid=$sid ${elapsed}s total"
+                break
+            }
+            "FAILED" {
+                $failMsg = if ($jobStatus.entry -and @($jobStatus.entry)[0].content.messages) {
+                    (@($jobStatus.entry)[0].content.messages | Select-Object -First 1).text
+                } else { "Search failed (no detail)" }
+                Write-Warning2 "Search FAILED: $Label - $failMsg"
+                $errorJson = @{
+                    error = "search_failed"
+                    description = $Label
+                    message = $failMsg
+                    search_id = $sid
+                    elapsed_seconds = $elapsed
+                }
+                Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
+                return $false
+            }
+            default {
+                # QUEUED, PARSING, RUNNING, FINALIZING — keep waiting
+                $sinceLastLog = [int]((Get-Date) - $lastLogTime).TotalSeconds
+                if ($sinceLastLog -ge 60) {
+                    Write-Log "  Still running: $Label (${dispatchState}, ${elapsed}s elapsed)"
+                    $lastLogTime = Get-Date
+                }
+                # Adaptive interval: increase by 5s up to 30s cap
+                if ($pollInterval -lt 30) { $pollInterval += 5 }
+                continue
+            }
+        }
+        # If we reached here via DONE break, exit the loop
+        if ($dispatchState -eq "DONE") { break }
+    }
+
+    # Step 4: Fetch results
     $results = Invoke-SplunkApi -Endpoint "/services/search/jobs/$sid/results" -Data "output_mode=json&count=0"
 
     if ($null -ne $results) {
@@ -3028,8 +3244,250 @@ function Invoke-AnalyticsSearch {
     }
 }
 
+# Blocking search — for fast | rest queries that complete in seconds (e.g., alerts inventory).
+# Do NOT use for _audit/_internal searches (use Invoke-AnalyticsSearch instead).
+function Invoke-AnalyticsSearchBlocking {
+    param(
+        [string]$SearchQuery,
+        [string]$OutputFile,
+        [string]$Label,
+        [int]$Timeout = 300
+    )
+
+    Write-Info "Running: $Label"
+    $startTime = Get-Date
+
+    $postData = "search=$([System.Uri]::EscapeDataString($SearchQuery))&output_mode=json&exec_mode=blocking&timeout=$Timeout"
+    $jobResponse = Invoke-SplunkApi -Endpoint "/services/search/jobs" -Method "POST" -Data $postData
+
+    if ($null -eq $jobResponse) {
+        $Script:STATS_ERRORS++
+        $errorJson = @{
+            error = "search_create_failed"
+            description = $Label
+            message = "Failed to create blocking search job."
+            troubleshooting = @(
+                "1. Verify user has 'search' capability",
+                "2. Some REST commands (| rest) may be restricted in Splunk Cloud"
+            )
+        }
+        Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
+        Write-Warning2 "Failed to run search: $Label"
+        return $false
+    }
+
+    # Get SID
+    $sid = $null
+    if ($jobResponse.sid) {
+        $sid = $jobResponse.sid
+    } elseif ($jobResponse.entry) {
+        $e = @($jobResponse.entry)[0]
+        if ($e.content -and $e.content.sid) { $sid = $e.content.sid }
+    }
+
+    if (-not $sid) {
+        $Script:STATS_ERRORS++
+        $errorJson = @{
+            error = "no_search_id"
+            description = $Label
+            message = "No SID returned from blocking search"
+        }
+        Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
+        Write-Warning2 "No SID for blocking search: $Label"
+        return $false
+    }
+
+    # Fetch results (blocking mode — search is already done)
+    $results = Invoke-SplunkApi -Endpoint "/services/search/jobs/$sid/results" -Data "output_mode=json&count=0"
+
+    if ($null -ne $results) {
+        Write-JsonFile -Path $OutputFile -Data $results
+        $elapsed = [int]((Get-Date) - $startTime).TotalSeconds
+        Write-Log "Completed search: $Label (${elapsed}s)"
+        return $true
+    } else {
+        $Script:STATS_ERRORS++
+        $errorJson = @{
+            error = "results_fetch_failed"
+            description = $Label
+            message = "Blocking search completed but could not retrieve results"
+            search_id = $sid
+        }
+        Write-JsonFile -Path $OutputFile -Data ([PSCustomObject]$errorJson)
+        return $false
+    }
+}
+
 # =============================================================================
-# APP-SCOPED ANALYTICS COLLECTION
+# PROGRESSIVE ANALYTICS CHECKPOINTING (v4.5.0)
+# =============================================================================
+# Each completed analytics query saves a checkpoint. On resume, already-completed
+# queries are skipped. Checkpoint file: $EXPORT_DIR/.analytics_checkpoint
+
+function Save-AnalyticsCheckpoint {
+    param([string]$Phase, [string]$File)
+    $checkpointFile = Join-Path $Script:EXPORT_DIR ".analytics_checkpoint"
+    # Only save if the output file exists and doesn't contain an error marker
+    if ((Test-Path $File) -and -not (Select-String -Path $File -Pattern '"error"' -Quiet -ErrorAction SilentlyContinue)) {
+        Add-Content -Path $checkpointFile -Value $Phase -Encoding UTF8
+        Write-Log "  Checkpoint saved: $Phase"
+    }
+}
+
+function Test-AnalyticsCheckpoint {
+    param([string]$Phase)
+    $checkpointFile = Join-Path $Script:EXPORT_DIR ".analytics_checkpoint"
+    if (-not (Test-Path $checkpointFile)) { return $false }
+    $lines = Get-Content $checkpointFile -ErrorAction SilentlyContinue
+    return ($lines -contains $Phase)
+}
+
+# =============================================================================
+# GLOBAL AGGREGATE ANALYTICS (v4.5.0)
+# =============================================================================
+# Replaces per-app analytics loops with 6 global queries. For N apps, this
+# reduces search jobs from N×7 to 6. The Curator splits global results into
+# per-app folders after import.
+
+function Export-GlobalAnalytics {
+    if (-not $Script:COLLECT_USAGE) { return }
+
+    $analyticsDir = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics"
+    if (-not (Test-Path $analyticsDir)) { New-Item -ItemType Directory -Path $analyticsDir -Force | Out-Null }
+
+    # Build app filter for scoped mode
+    $appFilter = ""
+    if ($Script:SCOPE_TO_APPS -and $Script:SELECTED_APPS.Count -gt 0) {
+        $appList = ($Script:SELECTED_APPS | ForEach-Object { "app=`"$_`"" }) -join " OR "
+        $appFilter = "($appList)"
+        Write-Log "  App-scoped analytics: filtering to $($Script:SELECTED_APPS.Count) apps"
+    }
+
+    $analyticsStart = Get-Date
+    Write-Info "Running global analytics queries (v4.5.0 - async dispatch)..."
+    Write-Host ""
+    Write-Host "  ${Script:DIM}Analytics period: $($Script:USAGE_PERIOD) | Dispatch: async (max 1h per query)${Script:NC}"
+    Write-Host "  ${Script:DIM}Queries use verified field names: provenance, sourcetype=audittrail${Script:NC}"
+    Write-Host ""
+
+    $period = $Script:USAGE_PERIOD
+
+    # =========================================================================
+    # QUERY 1: DASHBOARD VIEWS (MOST CRITICAL)
+    # Uses provenance field (not broken search_type=dashboard).
+    # De-duplicates using view_session (30s window per user = 1 page load).
+    # =========================================================================
+    if (Test-AnalyticsCheckpoint "dashboard_views") {
+        Write-Log "  [1/6] Dashboard views - SKIP (checkpoint exists)"
+    } else {
+        $q1File = Join-Path $analyticsDir "dashboard_views_global.json"
+        $q1 = "search index=_audit sourcetype=audittrail action=search info=granted $appFilter (provenance=""UI:Dashboard:*"" OR provenance=""UI:dashboard:*"") user!=""splunk-system-user"" earliest=-$period | rex field=provenance ""UI:[Dd]ashboard:(?<dashboard_name>[\w\-\.]+)"" | where isnotnull(dashboard_name) | eval view_session=user.""_"".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count"
+        Invoke-AnalyticsSearch -SearchQuery $q1 -OutputFile $q1File -Label "Dashboard views (global, provenance-based)" -MaxWait 3600
+        Save-AnalyticsCheckpoint "dashboard_views" $q1File
+    }
+
+    # =========================================================================
+    # QUERY 2: USER ACTIVITY
+    # Counts searches per user per app for migration team planning.
+    # =========================================================================
+    if (Test-AnalyticsCheckpoint "user_activity") {
+        Write-Log "  [2/6] User activity - SKIP (checkpoint exists)"
+    } else {
+        $q2File = Join-Path $analyticsDir "user_activity_global.json"
+        $q2 = "search index=_audit sourcetype=audittrail action=search info=granted $appFilter user!=""splunk-system-user"" user!=""nobody"" earliest=-$period | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user | sort -searches"
+        Invoke-AnalyticsSearch -SearchQuery $q2 -OutputFile $q2File -Label "User activity (global)" -MaxWait 3600
+        Save-AnalyticsCheckpoint "user_activity" $q2File
+    }
+
+    # =========================================================================
+    # QUERY 3: SEARCH TYPE BREAKDOWN
+    # Derives search_type from provenance/search_id (search_type is NOT a native
+    # _audit field — it's computed from provenance by Monitoring Console).
+    # =========================================================================
+    if (Test-AnalyticsCheckpoint "search_patterns") {
+        Write-Log "  [3/6] Search patterns - SKIP (checkpoint exists)"
+    } else {
+        $q3File = Join-Path $analyticsDir "search_patterns_global.json"
+        $q3 = "search index=_audit sourcetype=audittrail action=search info=granted $appFilter user!=""splunk-system-user"" earliest=-$period | eval search_type=case(match(provenance, ""^UI:[Dd]ashboard:""), ""dashboard"", match(search_id, ""^(rt_)?scheduler__""), ""scheduled"", match(savedsearch_name, ""^_ACCELERATE_""), ""acceleration"", match(search_id, ""^SummaryDirector_""), ""summarization"", isnotnull(provenance) AND match(provenance, ""^UI:""), ""interactive"", 1=1, ""other"") | stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type | sort -total_searches"
+        Invoke-AnalyticsSearch -SearchQuery $q3 -OutputFile $q3File -Label "Search type breakdown (global)" -MaxWait 1800
+        Save-AnalyticsCheckpoint "search_patterns" $q3File
+    }
+
+    # =========================================================================
+    # QUERY 4: DAILY INGESTION VOLUME (from _internal license_usage.log)
+    # Critical for Dynatrace Grail storage planning and cost estimation.
+    # =========================================================================
+    if (Test-AnalyticsCheckpoint "index_volume") {
+        Write-Log "  [4/6] Index volume - SKIP (checkpoint exists)"
+    } else {
+        $q4File = Join-Path $analyticsDir "index_volume_summary.json"
+        if (-not $Script:SKIP_INTERNAL) {
+            $q4 = "search index=_internal source=*license_usage.log type=Usage earliest=-$period | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/7, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event"
+            Invoke-AnalyticsSearch -SearchQuery $q4 -OutputFile $q4File -Label "Daily ingestion volume (license_usage.log)" -MaxWait 600
+        } else {
+            $skipJson = [PSCustomObject]@{ skipped = $true; reason = "_internal index not accessible (-SkipInternal). Use index metadata from REST API for size estimates." }
+            Write-JsonFile -Path $q4File -Data $skipJson
+        }
+        Save-AnalyticsCheckpoint "index_volume" $q4File
+
+        # 4b. Fallback: event counts via | tstats (works even without _internal)
+        $q4bFile = Join-Path $analyticsDir "index_event_counts_daily.json"
+        try {
+            Invoke-AnalyticsSearchBlocking -SearchQuery "| tstats count where index=* by index, _time span=1d | rename index as index_name | sort _time, -count" `
+                -OutputFile $q4bFile -Label "Index event counts (tstats fallback)" -Timeout 60
+        } catch { }
+    }
+
+    # =========================================================================
+    # QUERY 5: ALERT FIRING STATS (from _internal scheduler)
+    # Shows which saved searches/alerts are actively running and their status.
+    # =========================================================================
+    if (Test-AnalyticsCheckpoint "alert_firing") {
+        Write-Log "  [5/6] Alert firing - SKIP (checkpoint exists)"
+    } else {
+        $q5File = Join-Path $analyticsDir "alert_firing_global.json"
+        if (-not $Script:SKIP_INTERNAL) {
+            $q5 = "search index=_internal sourcetype=scheduler status=* $appFilter earliest=-$period | stats count as total_runs, sum(eval(if(status=""success"",1,0))) as successful, sum(eval(if(status=""skipped"",1,0))) as skipped, sum(eval(if(status!=""success"" AND status!=""skipped"",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs"
+            Invoke-AnalyticsSearch -SearchQuery $q5 -OutputFile $q5File -Label "Alert firing stats (global)" -MaxWait 3600
+        } else {
+            $skipJson = [PSCustomObject]@{ skipped = $true; reason = "_internal index not accessible (-SkipInternal). Alert firing stats require scheduler logs." }
+            Write-JsonFile -Path $q5File -Data $skipJson
+        }
+        Save-AnalyticsCheckpoint "alert_firing" $q5File
+    }
+
+    # =========================================================================
+    # QUERY 6: ALERTS INVENTORY via REST (per-app, uses blocking since | rest is fast)
+    # =========================================================================
+    if (Test-AnalyticsCheckpoint "alerts_inventory") {
+        Write-Log "  [6/6] Alerts inventory - SKIP (checkpoint exists)"
+    } else {
+        $q6Count = 0
+        foreach ($app in $Script:SELECTED_APPS) {
+            $appAnalysisDir = Join-Path $Script:EXPORT_DIR "$app/splunk-analysis"
+            if (-not (Test-Path $appAnalysisDir)) { New-Item -ItemType Directory -Path $appAnalysisDir -Force | Out-Null }
+            try {
+                Invoke-AnalyticsSearchBlocking `
+                    -SearchQuery "| rest /servicesNS/-/$app/saved/searches | search (is_scheduled=1 OR alert.track=1) | table title, cron_schedule, alert.severity, alert.track, actions, disabled | rename title as alert_name" `
+                    -OutputFile (Join-Path $appAnalysisDir "alerts_inventory.json") `
+                    -Label "Alerts inventory for $app" -Timeout 120
+            } catch { }
+            $q6Count++
+        }
+        # Write marker file so checkpoint works
+        $markerFile = Join-Path $analyticsDir ".alerts_inventory_done"
+        $markerJson = [PSCustomObject]@{ completed = $true; apps_processed = $q6Count }
+        Write-JsonFile -Path $markerFile -Data $markerJson
+        Save-AnalyticsCheckpoint "alerts_inventory" $markerFile
+    }
+
+    $analyticsElapsed = [int]((Get-Date) - $analyticsStart).TotalSeconds
+    $oldQueryCount = $Script:SELECTED_APPS.Count * 7
+    Write-Success "Global analytics completed in ${analyticsElapsed}s (6 queries vs $oldQueryCount in previous versions)"
+}
+
+# =============================================================================
+# APP-SCOPED ANALYTICS COLLECTION (LEGACY - replaced by Export-GlobalAnalytics)
 # =============================================================================
 
 function Export-AppAnalytics {
@@ -4798,6 +5256,307 @@ function Test-HasCollectedData {
 }
 
 # =============================================================================
+# TEST-ACCESS MODE (v4.5.0)
+# =============================================================================
+# Pre-flight check: verifies API access across all collection categories.
+# No data is exported. Prints PASS/FAIL/WARN/SKIP per category with a verdict.
+
+$Script:TEST_RESULTS = @()
+$Script:TEST_PASSED = 0
+$Script:TEST_FAILED = 0
+$Script:TEST_WARNED = 0
+$Script:TEST_SKIPPED = 0
+$Script:TEST_CRITICAL_FAILURE = $false
+
+function Record-TestResult {
+    param([string]$Category, [string]$Status, [string]$Detail, [string]$Level = "REQUIRED")
+    $Script:TEST_RESULTS += [PSCustomObject]@{ Category = $Category; Status = $Status; Detail = $Detail; Level = $Level }
+    switch ($Status) {
+        "PASS" { $Script:TEST_PASSED++ }
+        "FAIL" { $Script:TEST_FAILED++; if ($Level -eq "CRITICAL") { $Script:TEST_CRITICAL_FAILURE = $true } }
+        "WARN" { $Script:TEST_WARNED++ }
+        "SKIP" { $Script:TEST_SKIPPED++ }
+    }
+    $statusTag = switch ($Status) {
+        "PASS" { "${Script:GREEN}OK  ${Script:NC}" }
+        "FAIL" { "${Script:RED}FAIL${Script:NC}" }
+        "WARN" { "${Script:YELLOW}WARN${Script:NC}" }
+        "SKIP" { "${Script:DIM}SKIP${Script:NC}" }
+    }
+    $paddedCategory = $Category.PadRight(40)
+    Write-Host "  [$statusTag]  $paddedCategory $Detail"
+}
+
+function Write-TestSummary {
+    $total = $Script:TEST_PASSED + $Script:TEST_FAILED + $Script:TEST_WARNED + $Script:TEST_SKIPPED
+    Write-Host ""
+    Write-Host "  ${Script:BOLD}Results: $total tests${Script:NC}"
+    Write-Host "    ${Script:GREEN}PASS${Script:NC}: $($Script:TEST_PASSED)  ${Script:RED}FAIL${Script:NC}: $($Script:TEST_FAILED)  ${Script:YELLOW}WARN${Script:NC}: $($Script:TEST_WARNED)  SKIP: $($Script:TEST_SKIPPED)"
+    Write-Host ""
+    if ($Script:TEST_FAILED -eq 0) {
+        Write-Host "  ${Script:GREEN}${Script:BOLD}VERDICT: All required checks passed${Script:NC}"
+    } elseif ($Script:TEST_CRITICAL_FAILURE) {
+        Write-Host "  ${Script:RED}${Script:BOLD}VERDICT: Critical failure - cannot proceed with export${Script:NC}"
+    } else {
+        Write-Host "  ${Script:YELLOW}${Script:BOLD}VERDICT: Some checks failed - export may be incomplete${Script:NC}"
+    }
+    Write-Host ""
+}
+
+function Invoke-TestAccessMode {
+    Write-Host ""
+    Write-BoxHeader "ACCESS VERIFICATION TEST"
+    Write-Host ""
+    Write-Host "  Testing API access for each data collection category."
+    Write-Host "  No data will be exported. This is a read-only check."
+    Write-Host ""
+
+    # Determine test app
+    $testApp = ""
+    if ($Script:SELECTED_APPS.Count -gt 0) {
+        $testApp = $Script:SELECTED_APPS[0]
+    } else {
+        Write-Info "Fetching app list from Splunk Cloud..."
+        $appsResponse = Invoke-SplunkApi -Endpoint "/services/apps/local" -Data "output_mode=json&count=0"
+        if ($appsResponse -and $appsResponse.entry) {
+            $Script:SELECTED_APPS = @()
+            $skipApps = @('launcher','search','learned','framework','appsbrowser','splunk_archiver',
+                'splunk_httpinput','splunk_instrumentation','splunk_internal_metrics',
+                'splunk_metrics_workspace','splunk_monitoring_console','splunk_rapid_diag',
+                'splunk_secure_gateway','alert_logevent','alert_webhook','introspection_generator_addon',
+                'legacy','sample_app','SplunkLightForwarder','SplunkForwarder')
+            foreach ($e in @($appsResponse.entry)) {
+                $Script:SELECTED_APPS += $e.name
+                if (-not $testApp -and $e.name -notmatch '^_|^splunk_|^Splunk_|^SA-' -and $e.name -notin $skipApps) {
+                    $testApp = $e.name
+                }
+            }
+            $appCount = $Script:SELECTED_APPS.Count
+            if ($appCount -gt 50) {
+                Write-Warning2 "Found $appCount apps - this is a large environment!"
+                Write-Warning2 "Consider using -Apps to filter for faster exports"
+            }
+            Write-Info "Will export $appCount app(s)"
+        }
+        if (-not $testApp) { $testApp = "search" }
+    }
+    Write-Host ""
+    Write-Info "Using app for per-app tests: ${Script:BOLD}$testApp${Script:NC}"
+    Write-Host ""
+    Write-Host "  ${Script:BOLD}Running 9 access checks...${Script:NC}"
+    Write-Host ""
+
+    # 1. System Info (CRITICAL)
+    $r = Invoke-SplunkApi -Endpoint "/services/server/info" -Data "output_mode=json"
+    if ($r -and $r.entry) {
+        $ver = @($r.entry)[0].content.version
+        Record-TestResult "System Info" "PASS" "Splunk v$ver" "CRITICAL"
+    } else {
+        Record-TestResult "System Info" "FAIL" "Cannot reach server" "CRITICAL"
+    }
+    if ($Script:TEST_CRITICAL_FAILURE) {
+        Write-Host ""
+        Write-Error2 "Critical failure: cannot reach Splunk API. Stopping tests."
+        Write-TestSummary
+        exit 1
+    }
+
+    # 2. Configurations
+    $r = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/configs/conf-indexes" -Data "output_mode=json&count=1"
+    if ($r -and $r.entry) {
+        Record-TestResult "Configurations (indexes)" "PASS" "$(@($r.entry).Count) entries" "REQUIRED"
+    } else {
+        Record-TestResult "Configurations (indexes)" "FAIL" "Cannot read config" "REQUIRED"
+    }
+
+    # 3. Dashboards
+    $r = Invoke-SplunkApi -Endpoint "/servicesNS/-/$testApp/data/ui/views" -Data "output_mode=json&count=1"
+    if ($r -and $r.entry) {
+        Record-TestResult "Dashboards ($testApp)" "PASS" "$(@($r.entry).Count) found" "REQUIRED"
+    } else {
+        Record-TestResult "Dashboards ($testApp)" "WARN" "No dashboards or access denied" "REQUIRED"
+    }
+
+    # 4. Saved Searches / Alerts
+    $r = Invoke-SplunkApi -Endpoint "/servicesNS/-/$testApp/saved/searches" -Data "output_mode=json&count=1"
+    if ($r -and $r.entry) {
+        Record-TestResult "Saved Searches / Alerts ($testApp)" "PASS" "$(@($r.entry).Count) found" "REQUIRED"
+    } else {
+        Record-TestResult "Saved Searches / Alerts ($testApp)" "WARN" "No searches or access denied" "REQUIRED"
+    }
+
+    # 5. RBAC
+    if (-not $Script:COLLECT_RBAC) {
+        Record-TestResult "RBAC (users/roles)" "SKIP" "Not requested (add -Rbac)" "OPTIONAL"
+    } else {
+        $users = Invoke-SplunkApi -Endpoint "/services/authentication/users" -Data "output_mode=json&count=1"
+        $roles = Invoke-SplunkApi -Endpoint "/services/authorization/roles" -Data "output_mode=json&count=1"
+        if ($users -and $roles) {
+            Record-TestResult "RBAC (users/roles)" "PASS" "Users + Roles OK" "OPTIONAL"
+        } elseif ($users) {
+            Record-TestResult "RBAC (users/roles)" "WARN" "Users OK, Roles denied" "OPTIONAL"
+        } else {
+            Record-TestResult "RBAC (users/roles)" "FAIL" "Both denied" "OPTIONAL"
+        }
+    }
+
+    # 6. Knowledge Objects
+    $macros = Invoke-SplunkApi -Endpoint "/servicesNS/-/$testApp/admin/macros" -Data "output_mode=json&count=1"
+    $props = Invoke-SplunkApi -Endpoint "/servicesNS/-/$testApp/configs/conf-props" -Data "output_mode=json&count=1"
+    $lookups = Invoke-SplunkApi -Endpoint "/servicesNS/-/$testApp/data/lookup-table-files" -Data "output_mode=json&count=1"
+    $koList = @()
+    if ($macros) { $koList += "macros" }
+    if ($props) { $koList += "props" }
+    if ($lookups) { $koList += "lookups" }
+    if ($koList.Count -gt 0) {
+        Record-TestResult "Knowledge Objects ($testApp)" "PASS" ($koList -join ", ") "REQUIRED"
+    } else {
+        Record-TestResult "Knowledge Objects ($testApp)" "FAIL" "Cannot read knowledge objects" "REQUIRED"
+    }
+
+    # 7. App Analytics (_audit)
+    if (-not $Script:COLLECT_USAGE) {
+        Record-TestResult "App Analytics (_audit)" "SKIP" "Not requested (add -Usage)" "OPTIONAL"
+    } else {
+        $testSearch = "search index=_audit sourcetype=audittrail | head 1"
+        $testFile = [System.IO.Path]::GetTempFileName()
+        $ok = Invoke-AnalyticsSearch -SearchQuery $testSearch -OutputFile $testFile -Label "Test _audit access" -MaxWait 60
+        if ($ok -and (Test-Path $testFile) -and -not (Select-String -Path $testFile -Pattern '"error"' -Quiet -ErrorAction SilentlyContinue)) {
+            Record-TestResult "App Analytics (_audit)" "PASS" "index=_audit accessible" "OPTIONAL"
+        } else {
+            Record-TestResult "App Analytics (_audit)" "WARN" "_audit not accessible (normal in Splunk Cloud)" "OPTIONAL"
+        }
+        Remove-Item $testFile -ErrorAction SilentlyContinue
+    }
+
+    # 8. Usage Analytics (_internal)
+    if (-not $Script:COLLECT_USAGE) {
+        Record-TestResult "Usage Analytics (_internal)" "SKIP" "Not requested (add -Usage)" "OPTIONAL"
+    } else {
+        $testSearch = "search index=_internal sourcetype=scheduler | head 1"
+        $testFile = [System.IO.Path]::GetTempFileName()
+        $ok = Invoke-AnalyticsSearch -SearchQuery $testSearch -OutputFile $testFile -Label "Test _internal access" -MaxWait 60
+        if ($ok -and (Test-Path $testFile) -and -not (Select-String -Path $testFile -Pattern '"error"' -Quiet -ErrorAction SilentlyContinue)) {
+            Record-TestResult "Usage Analytics (_internal)" "PASS" "_internal accessible" "OPTIONAL"
+        } else {
+            Record-TestResult "Usage Analytics (_internal)" "WARN" "_internal not accessible" "OPTIONAL"
+        }
+        Remove-Item $testFile -ErrorAction SilentlyContinue
+    }
+
+    # 9. Indexes
+    $r = Invoke-SplunkApi -Endpoint "/services/data/indexes" -Data "output_mode=json&count=1"
+    if ($r -and $r.entry) {
+        Record-TestResult "Indexes" "PASS" "$(@($r.entry).Count) found" "REQUIRED"
+    } else {
+        Record-TestResult "Indexes" "FAIL" "Cannot read indexes" "REQUIRED"
+    }
+
+    Write-TestSummary
+
+    if ($Script:TEST_FAILED -gt 0) { exit 2 }
+    exit 0
+}
+
+# =============================================================================
+# REMASK MODE (v4.5.5)
+# =============================================================================
+# Re-anonymize an existing archive without connecting to Splunk.
+
+function Invoke-RemaskArchive {
+    param([string]$ArchivePath)
+
+    if (-not (Test-Path $ArchivePath)) {
+        Write-Error2 "Archive not found: $ArchivePath"
+        exit 1
+    }
+
+    Write-Host ""
+    Write-BoxHeader "RE-ANONYMIZATION MODE"
+    Write-Host ""
+    Write-Info "Re-anonymizing archive: $ArchivePath"
+    Write-Host ""
+
+    # Extract to temp directory
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "dma_remask_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    Write-Info "Extracting archive..."
+    try {
+        tar -xzf $ArchivePath -C $tempDir 2>$null
+    } catch {
+        Write-Error2 "Failed to extract archive: $($_.Exception.Message)"
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+
+    # Find the export directory inside
+    $extractedDirs = Get-ChildItem -Path $tempDir -Directory
+    if ($extractedDirs.Count -eq 0) {
+        Write-Error2 "No directories found in archive"
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+    $sourceDir = $extractedDirs[0].FullName
+
+    # Count files for validation
+    $fileCountBefore = (Get-ChildItem -Path $sourceDir -Recurse -File).Count
+    Write-Info "Found $fileCountBefore files in export"
+
+    # Copy to _masked directory
+    $maskedDir = "${sourceDir}_masked"
+    Write-Info "Creating masked copy..."
+    Copy-Item -Path $sourceDir -Destination $maskedDir -Recurse -Force
+
+    $fileCountAfterCopy = (Get-ChildItem -Path $maskedDir -Recurse -File).Count
+    if ($fileCountAfterCopy -ne $fileCountBefore) {
+        Write-Warning2 "File count mismatch after copy: expected $fileCountBefore, got $fileCountAfterCopy"
+    }
+
+    # Run anonymization on the masked copy
+    $Script:EXPORT_DIR = $maskedDir
+    $Script:ANONYMIZE_DATA = $true
+    # Reset anonymization counters
+    $Script:AnonEmailMap = @{}
+    $Script:AnonHostMap = @{}
+    $Script:ANON_EMAIL_COUNTER = 0
+    $Script:ANON_HOST_COUNTER = 0
+
+    Write-Info "Running anonymization..."
+    Invoke-ExportAnonymization
+
+    $fileCountAfterAnon = (Get-ChildItem -Path $maskedDir -Recurse -File).Count
+    if ($fileCountAfterAnon -ne $fileCountBefore) {
+        Write-Warning2 "File count changed during anonymization: $fileCountBefore -> $fileCountAfterAnon"
+    }
+
+    # Create masked archive
+    $archiveBaseName = [System.IO.Path]::GetFileNameWithoutExtension([System.IO.Path]::GetFileNameWithoutExtension($ArchivePath))
+    $outputDir = Split-Path $ArchivePath -Parent
+    if (-not $outputDir) { $outputDir = Get-Location }
+    $maskedArchivePath = Join-Path $outputDir "${archiveBaseName}_masked.tar.gz"
+    $maskedDirName = Split-Path $maskedDir -Leaf
+
+    Write-Info "Creating masked archive..."
+    Push-Location $tempDir
+    try {
+        tar -czf $maskedArchivePath $maskedDirName 2>$null
+    } finally {
+        Pop-Location
+    }
+
+    # Clean up
+    Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Host ""
+    Write-Success "Masked archive created: $maskedArchivePath"
+    $archiveSize = [math]::Round((Get-Item $maskedArchivePath).Length / 1MB, 1)
+    Write-Info "  Size: ${archiveSize} MB"
+    Write-Info "  Files anonymized: $fileCountAfterAnon"
+    Write-Host ""
+}
+
+# =============================================================================
 # COLLECTION ORCHESTRATOR
 # =============================================================================
 
@@ -4890,21 +5649,14 @@ function Start-Collection {
         $collected++
     }
 
-    # App-scoped analytics
+    # Global aggregate analytics (v4.5.0 — replaces per-app loop)
     $currentStep++
-    if ($Script:RESUME_MODE -and (Test-HasCollectedData "app_analytics")) {
-        Write-Host "  [$currentStep/$totalSteps] App-scoped analytics... ${Script:GREEN}SKIP (already collected)${Script:NC}"
+    if ($Script:RESUME_MODE -and (Test-HasCollectedData "app_analytics") -and -not $Script:COLLECT_USAGE) {
+        Write-Host "  [$currentStep/$totalSteps] Global analytics... ${Script:GREEN}SKIP (already collected)${Script:NC}"
         $skipped++
     } else {
-        Write-Host "  [$currentStep/$totalSteps] Collecting app-scoped analytics..."
-        if ($Script:COLLECT_USAGE) {
-            foreach ($app in $Script:SELECTED_APPS) {
-                if (Test-Path (Join-Path $Script:EXPORT_DIR $app)) {
-                    Export-AppAnalytics -AppName $app
-                }
-            }
-            Write-Success "App-scoped analytics collected (see each app's splunk-analysis/ folder)"
-        }
+        Write-Host "  [$currentStep/$totalSteps] Running global aggregate analytics..."
+        Export-GlobalAnalytics
         $collected++
     }
 
@@ -4955,27 +5707,36 @@ function Invoke-Main {
         Write-Host "Usage: .\dma-splunk-cloud-export.ps1 [OPTIONS]"
         Write-Host ""
         Write-Host "Options:"
-        Write-Host "  -Stack URL          Splunk Cloud stack URL"
-        Write-Host "  -Token TOKEN        API token for authentication"
-        Write-Host "  -User USER          Username (if not using token)"
-        Write-Host "  -Password PASS      Password (if not using token)"
-        Write-Host "  -AllApps            Export all applications"
-        Write-Host "  -Apps LIST          Comma-separated list of apps"
-        Write-Host "  -Output DIR         Output directory"
-        Write-Host "  -Rbac               Collect RBAC/users data (OFF by default)"
-        Write-Host "  -Usage              Collect usage analytics (OFF by default)"
-        Write-Host "  -Proxy URL          Route all connections through a proxy server (e.g., http://proxy:8080)"
-        Write-Host "  -ResumeCollect FILE Resume a previous interrupted export from a .tar.gz archive"
-        Write-Host "  -SkipInternal       Skip searches requiring _internal index"
-        Write-Host "  -Debug_Mode         Enable verbose debug logging"
-        Write-Host "  -NonInteractive     Force non-interactive mode"
-        Write-Host "  -SkipAnonymization  Skip data anonymization"
-        Write-Host "  -Version            Show version"
-        Write-Host "  -Help               Show this help"
+        Write-Host "  -Stack URL           Splunk Cloud stack URL"
+        Write-Host "  -Token TOKEN         API token for authentication"
+        Write-Host "  -User USER           Username (if not using token)"
+        Write-Host "  -Password PASS       Password (if not using token)"
+        Write-Host "  -AllApps             Export all applications"
+        Write-Host "  -Apps LIST           Comma-separated list of apps"
+        Write-Host "  -Output DIR          Output directory"
+        Write-Host "  -Rbac                Collect RBAC/users data (OFF by default)"
+        Write-Host "  -Usage               Collect usage analytics (OFF by default)"
+        Write-Host "  -AnalyticsPeriod N   Analytics time window (default: 7d; e.g. 30d, 90d)"
+        Write-Host "  -Proxy URL           Route all connections through a proxy server"
+        Write-Host "  -ResumeCollect FILE  Resume a previous interrupted export from archive"
+        Write-Host "  -SkipInternal        Skip searches requiring _internal index"
+        Write-Host "  -TestAccess          Pre-flight check: test API access (no export)"
+        Write-Host "  -Remask FILE         Re-anonymize an existing archive (no Splunk needed)"
+        Write-Host "  -Debug_Mode          Enable verbose debug logging"
+        Write-Host "  -NonInteractive      Force non-interactive mode"
+        Write-Host "  -SkipAnonymization   Skip data anonymization"
+        Write-Host "  -Version             Show version"
+        Write-Host "  -ShowHelp            Show this help"
         Write-Host ""
         Write-Host "Performance Tips:"
         Write-Host "  For large environments, use -Apps with specific apps:"
         Write-Host "    .\dma-splunk-cloud-export.ps1 -Stack acme.splunkcloud.com -Token XXX -Apps 'myapp'"
+        return
+    }
+
+    # Handle --remask (no Splunk connection needed)
+    if ($Script:REMASK_MODE) {
+        Invoke-RemaskArchive -ArchivePath $Script:REMASK_ARCHIVE
         return
     }
 
@@ -5047,11 +5808,14 @@ function Invoke-Main {
 
         # Get server info
         $serverInfo = Invoke-SplunkApi -Endpoint "/services/server/info" -Data "output_mode=json"
-        if ($serverInfo -and $serverInfo.entry) {
-            $entry = @($serverInfo.entry)[0]
-            $Script:SPLUNK_VERSION = $entry.content.version
-            $Script:SERVER_GUID = $entry.content.guid
+        if ($null -eq $serverInfo -or $null -eq $serverInfo.entry) {
+            Write-Error2 "Failed to retrieve server info. The token may lack permission for /services/server/info."
+            Write-Error2 "Verify the user has 'get_info' capability, or try a token with admin_all_objects."
+            exit 1
         }
+        $entry = @($serverInfo.entry)[0]
+        $Script:SPLUNK_VERSION = $entry.content.version
+        $Script:SERVER_GUID = $entry.content.guid
         $Script:CLOUD_TYPE = "cloud"
         Write-Info "Connected to Splunk Cloud v$($Script:SPLUNK_VERSION)"
 
@@ -5064,11 +5828,14 @@ function Invoke-Main {
 
             Write-Info "Fetching app list from Splunk Cloud..."
             $appsResponse = Invoke-SplunkApi -Endpoint "/services/apps/local" -Data "output_mode=json&count=0"
-            if ($appsResponse -and $appsResponse.entry) {
-                $Script:SELECTED_APPS = @()
-                foreach ($entry in @($appsResponse.entry)) {
-                    $Script:SELECTED_APPS += $entry.name
-                }
+            if ($null -eq $appsResponse -or $null -eq $appsResponse.entry) {
+                Write-Error2 "Failed to fetch app list from /services/apps/local."
+                Write-Error2 "The token user may lack 'list_apps' or 'admin_all_objects' capability."
+                exit 1
+            }
+            $Script:SELECTED_APPS = @()
+            foreach ($appEntry in @($appsResponse.entry)) {
+                $Script:SELECTED_APPS += $appEntry.name
             }
 
             if ($Script:SELECTED_APPS.Count -gt 50) {
@@ -5078,6 +5845,11 @@ function Invoke-Main {
         }
 
         $Script:STATS_APPS = $Script:SELECTED_APPS.Count
+        if ($Script:STATS_APPS -eq 0) {
+            Write-Error2 "No applications found! Cannot proceed with empty app list."
+            Write-Error2 "Check that your credentials have permission to list apps."
+            exit 1
+        }
         Write-Info "Will export $($Script:STATS_APPS) app(s)"
     } else {
         # =====================================================================
@@ -5113,6 +5885,12 @@ function Invoke-Main {
         Write-Host "  ${Script:DIM}Collections scoped to selected apps: $($Script:SELECTED_APPS -join ', ')${Script:NC}"
         Write-Host "  ${Script:DIM}Global user/usage analytics will be filtered to these apps${Script:NC}"
         Write-Host ""
+    }
+
+    # Test-access mode: run pre-flight checks and exit (no export)
+    if ($Script:TEST_ACCESS_MODE) {
+        Invoke-TestAccessMode
+        # Invoke-TestAccessMode calls exit, never reaches here
     }
 
     # Run collection
