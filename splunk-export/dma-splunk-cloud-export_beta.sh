@@ -9,7 +9,15 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.5.7
+#  DMA Splunk Cloud Export Script v4.5.8
+#
+#  v4.5.8 Changes:
+#    - Fix token auth: api_call now uses AUTH_HEADER set by authenticate() instead of
+#      hardcoding Bearer prefix — honours the discovered prefix (Bearer vs Splunk)
+#    - Fix silent errors: api_call error/warning messages now route to stderr so they
+#      are visible when api_call is invoked inside $() command substitution
+#    - Add return code checks after server_info and app list fetch — clear error message
+#      when token lacks permissions instead of cryptic "No applications found"
 #
 #  v4.5.7 Changes:
 #    - Fix token auth: auto-detect prefix (Bearer vs Splunk) via probe loop
@@ -192,7 +200,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="7d"
-SCRIPT_VERSION="4.5.7"
+SCRIPT_VERSION="4.5.8"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -1082,9 +1090,12 @@ api_call() {
   # Build URL
   local url="${SPLUNK_URL}${endpoint}"
 
-  # Build auth header
+  # Build auth header — use AUTH_HEADER set by authenticate() when available,
+  # so the token prefix discovered during auth probing (Bearer vs Splunk) is honoured.
   local auth_header=""
-  if [ -n "$SESSION_KEY" ]; then
+  if [ -n "$AUTH_HEADER" ]; then
+    auth_header="$AUTH_HEADER"
+  elif [ -n "$SESSION_KEY" ]; then
     auth_header="Authorization: Splunk $SESSION_KEY"
   elif [ -n "$AUTH_TOKEN" ]; then
     auth_header="Authorization: Bearer $AUTH_TOKEN"
@@ -1134,6 +1145,8 @@ api_call() {
     local response_size=${#response}
     debug_api_call "$method" "$endpoint" "$http_code" "$response_size" "$duration"
 
+    # NOTE: error/warning calls below use >&2 so messages are visible to the user
+    # even when api_call is invoked inside $() command substitution.
     case "$http_code" in
       200|201)
         # Success
@@ -1147,7 +1160,7 @@ api_call() {
         ((retries++))
         ((STATS_API_RETRIES++))
         local delay=$((retries * 2))
-        warning "Timeout/connection error. Retry $retries/$MAX_RETRIES in ${delay}s"
+        warning "Timeout/connection error. Retry $retries/$MAX_RETRIES in ${delay}s" >&2
         sleep "$delay"
         ;;
       429)
@@ -1160,26 +1173,26 @@ api_call() {
         local wait_time=$((retries * BACKOFF_MULTIPLIER * 2))
         if [ $wait_time -gt 60 ]; then wait_time=60; fi
 
-        warning "Rate limited (429). Waiting ${wait_time}s before retry ($retries/$MAX_RETRIES)..."
+        warning "Rate limited (429). Waiting ${wait_time}s before retry ($retries/$MAX_RETRIES)..." >&2
         sleep "$wait_time"
         ;;
       401)
         debug_log "ERROR" "Auth failed (401) on $endpoint"
         ((STATS_API_FAILURES++))
         if [ -n "$SESSION_KEY" ]; then
-          error "Session key rejected (401) on: $endpoint"
-          error "This can occur on Splunk Cloud search head clusters where session keys"
-          error "are node-specific and may not be recognized by other cluster members."
-          error "Recommendation: Use token-based authentication instead (--token flag)."
+          error "Session key rejected (401) on: $endpoint" >&2
+          error "This can occur on Splunk Cloud search head clusters where session keys" >&2
+          error "are node-specific and may not be recognized by other cluster members." >&2
+          error "Recommendation: Use token-based authentication instead (--token flag)." >&2
         else
-          error "Authentication failed (401). Please check your credentials."
+          error "Authentication failed (401) on: $endpoint" >&2
         fi
         return 1
         ;;
       403)
         debug_log "ERROR" "Access forbidden (403) on $endpoint"
         ((STATS_API_FAILURES++))
-        error "Access forbidden (403) for: $endpoint. Check user capabilities."
+        error "Access forbidden (403) for: $endpoint. Check user capabilities." >&2
         return 1
         ;;
       404)
@@ -1193,7 +1206,7 @@ api_call() {
           return 0
         else
           debug_log "WARN" "Not found (404) on $endpoint"
-          warning "Resource not found (404): $endpoint"
+          warning "Resource not found (404): $endpoint" >&2
           return 1
         fi
         ;;
@@ -1202,12 +1215,12 @@ api_call() {
         ((retries++))
         ((STATS_API_RETRIES++))
         local wait_time=$((retries * 2))
-        warning "Server error ($http_code). Retrying in ${wait_time}s ($retries/$MAX_RETRIES)..."
+        warning "Server error ($http_code). Retrying in ${wait_time}s ($retries/$MAX_RETRIES)..." >&2
         sleep "$wait_time"
         ;;
       *)
         ((STATS_API_FAILURES++))
-        error "Unexpected HTTP $http_code for: $endpoint"
+        error "Unexpected HTTP $http_code for: $endpoint" >&2
         log "Response: $response"
         return 1
         ;;
@@ -1215,7 +1228,7 @@ api_call() {
   done
 
   ((STATS_API_FAILURES++))
-  error "Max retries exceeded for: $endpoint"
+  error "Max retries exceeded for: $endpoint" >&2
   return 1
 }
 
@@ -6673,6 +6686,11 @@ main() {
     # Get server info
     local server_info
     server_info=$(api_call "/services/server/info" "GET" "output_mode=json")
+    if [ $? -ne 0 ] || [ -z "$server_info" ]; then
+      error "Failed to retrieve server info. The token may lack permission for /services/server/info."
+      error "Verify the user has 'get_info' capability, or try a token with admin_all_objects."
+      exit 1
+    fi
     SPLUNK_VERSION=$(json_value "$server_info" '.entry[0].content.version')
     SERVER_GUID=$(json_value "$server_info" '.entry[0].content.guid')
     CLOUD_TYPE="cloud"
@@ -6703,6 +6721,12 @@ main() {
       info "Fetching app list from Splunk Cloud..."
       local apps_response
       apps_response=$(api_call "/services/apps/local" "GET" "output_mode=json&count=0")
+      if [ $? -ne 0 ] || [ -z "$apps_response" ]; then
+        error "Failed to fetch app list from /services/apps/local."
+        error "The token user may lack 'list_apps' or 'admin_all_objects' capability."
+        error "Try: curl -k -H \"Authorization: Bearer \$TOKEN\" \"${SPLUNK_URL}/services/apps/local?output_mode=json&count=1\""
+        exit 1
+      fi
       if $HAS_JQ; then
         while IFS= read -r line; do
           SELECTED_APPS+=("$line")
