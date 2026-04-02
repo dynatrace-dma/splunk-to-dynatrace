@@ -1,14 +1,75 @@
 # DMA Splunk Cloud Export Script - Technical Specification
 
-## Version 4.3.0 | REST API-Only Data Collection for Splunk Cloud
+## Version 4.5.8 | REST API-Only Data Collection for Splunk Cloud
 
-**Last Updated**: February 2026
+**Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud README](README-SPLUNK-CLOUD.md) | [Export Schema](EXPORT-SCHEMA.md)
 
 ---
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
 > *An ACE Services Division of Dynatrace*
+
+---
+
+## What's New in v4.5.8
+
+### Token Authentication Fixes
+- **Auto-detect token prefix**: The script probes both `Bearer` and `Splunk` prefixes against `/services/authentication/current-context`. Tokens created via Splunk's Settings > Tokens require the `Splunk` prefix, not `Bearer`. The script automatically discovers the correct prefix.
+- **AUTH_HEADER consistency**: `api_call()` now uses the `AUTH_HEADER` set by `authenticate()` instead of hardcoding `Bearer`. This ensures the discovered prefix is honoured throughout all API calls.
+- **Error visibility**: Error/warning messages inside `api_call()` now route to stderr (`>&2`), so they are visible even when `api_call` is invoked inside `$()` command substitution.
+- **Return code checks**: After `server_info` and `apps/local` fetches, the script checks for null/empty responses and exits with a clear error message about missing capabilities (instead of the cryptic "No applications found").
+
+### Async Search Dispatch (replaces blocking mode)
+Analytics searches now use `exec_mode=normal` (non-blocking) instead of `exec_mode=blocking`:
+
+1. **Dispatch**: POST to `/services/search/jobs` with `exec_mode=normal&max_time=0` — returns SID immediately
+2. **Poll**: GET `/services/search/jobs/{sid}?output_mode=json`, extract `dispatchState`
+3. **States**: `QUEUED` → `PARSING` → `RUNNING` → `FINALIZING` → `DONE` (or `FAILED`)
+4. **Adaptive interval**: Starts at 5s, increases by 5s per iteration, caps at 30s
+5. **Timeout**: 1 hour per query (up from 300s hard blocking limit). Timed-out jobs are auto-cancelled via `POST action=cancel` to free search quota.
+6. **Blocking preserved**: `Invoke-AnalyticsSearchBlocking` kept for fast `| rest` queries (e.g., alerts inventory)
+
+### Global Aggregate Analytics (replaces per-app loops)
+The v4.5.0 release fundamentally changed analytics collection:
+
+- **Old approach**: N apps x 7 queries = N*7 search jobs (for 90 apps = 630 jobs)
+- **New approach**: 6 global queries with `by app` grouping = 6 jobs total
+- The **DMA Curator Server** splits global results into per-app files after import
+
+| # | Query | Timeout | Output |
+|---|-------|---------|--------|
+| 1 | Dashboard views (provenance-based) | 1h | `dashboard_views_global.json` |
+| 2 | User activity | 1h | `user_activity_global.json` |
+| 3 | Search type breakdown | 30min | `search_patterns_global.json` |
+| 4 | Daily ingestion volume | 10min | `index_volume_summary.json` |
+| 5 | Alert firing stats | 1h | `alert_firing_global.json` |
+| 6 | Alerts inventory (per-app `\| rest`) | 5min/app | `{app}/splunk-analysis/alerts_inventory.json` |
+
+**Critical fix**: Dashboard view queries now use the `provenance` field (`provenance="UI:Dashboard:*"`) instead of `search_type=dashboard`, which is NOT a native `_audit` field and produced unreliable results. View counts use session de-duplication (30-second window per user) to count page loads, not individual panel searches.
+
+### New CLI Flags
+
+| Flag (Bash / PowerShell) | Description |
+|--------------------------|-------------|
+| `--test-access` / `-TestAccess` | Pre-flight check: test API access across 9 categories, then exit (no export written) |
+| `--remask FILE` / `-Remask FILE` | Re-anonymize an existing archive without connecting to Splunk |
+| `--analytics-period N` / `-AnalyticsPeriod N` | Analytics time window (default: 7d; e.g. 30d, 90d) |
+| `--skip-internal` / `-SkipInternal` | Skip `_audit`/`_internal` index searches for restricted accounts |
+
+### Progressive Analytics Checkpointing
+Each global analytics query saves a checkpoint on success to `$EXPORT_DIR/.analytics_checkpoint`. On resume (`--resume-collect`), only incomplete queries are re-run. This enables recovery from mid-analytics interruptions without re-running already-completed queries.
+
+### Expanded RBAC Collection
+New endpoints (all with graceful 404 handling):
+- `/services/authorization/capabilities` → `capabilities.json`
+- `/services/authentication/providers/SAML` → `saml_config.json`
+- `/services/admin/SAML-groups` → `saml_groups.json`
+- `/services/admin/LDAP-groups` → `ldap_groups.json`
+- `/services/authentication/providers/LDAP` → `ldap_config.json`
+
+### Default Changes
+- `USAGE_PERIOD` changed from `30d` to `7d` (4x less `_audit` data to scan)
 
 ---
 
@@ -251,10 +312,13 @@ curl -k -u "username:password" \
 
 ```bash
 # Token-based authentication (recommended)
+# The script auto-detects the correct prefix (Bearer or Splunk)
 curl -k -H "Authorization: Bearer <token>" \
   "https://acme.splunkcloud.com:8089/services/server/info" \
   -d "output_mode=json"
 ```
+
+> **v4.5.7+**: Tokens created via Splunk's Settings > Tokens require the `Splunk` prefix (not `Bearer`). The script automatically probes both prefixes and uses whichever succeeds. If both fail, it reports "tried Bearer and Splunk prefixes" with debug logging of the probe responses.
 
 **Creating an Auth Token**:
 1. Log into Splunk Cloud web UI
@@ -366,24 +430,34 @@ curl -k -u "$USER:$PASS" \
 # - Owner and permissions
 ```
 
-### 3.5 Usage Analytics via Search
+### 3.5 Usage Analytics via Async Search Dispatch (v4.5.0+)
+
+Analytics searches use async dispatch with adaptive polling:
 
 ```bash
-# Create a search job to get usage analytics
-curl -k -u "$USER:$PASS" \
+# Step 1: Dispatch with exec_mode=normal (returns SID immediately)
+curl -k -H "$AUTH_HEADER" \
   "https://$STACK:8089/services/search/jobs" \
-  -d "search=search index=_audit action=search earliest=-30d | stats count by user, savedsearch_name" \
-  -d "output_mode=json"
+  -d "search=search index=_audit sourcetype=audittrail action=search earliest=-7d | stats count by user, app" \
+  -d "output_mode=json" -d "exec_mode=normal" -d "max_time=0"
 
-# Poll for completion
-curl -k -u "$USER:$PASS" \
-  "https://$STACK:8089/services/search/jobs/{sid}"
+# Step 2: Poll dispatchState (adaptive interval: 5s → 30s)
+curl -k -H "$AUTH_HEADER" \
+  "https://$STACK:8089/services/search/jobs/{sid}?output_mode=json"
+# Check response.entry[0].content.dispatchState for DONE/FAILED/RUNNING
 
-# Get results
-curl -k -u "$USER:$PASS" \
+# Step 3: Fetch results when DONE
+curl -k -H "$AUTH_HEADER" \
   "https://$STACK:8089/services/search/jobs/{sid}/results" \
   -d "output_mode=json" -d "count=0"
+
+# On timeout: cancel job to free search quota
+curl -k -H "$AUTH_HEADER" \
+  "https://$STACK:8089/services/search/jobs/{sid}/control" \
+  -d "action=cancel"
 ```
+
+> **v4.5.0 change**: Previous versions used `exec_mode=blocking` with a 300s hard timeout. The async approach allows 1-hour timeouts per query and enables adaptive polling that reduces API load on busy stacks.
 
 ---
 
@@ -423,12 +497,18 @@ curl -k -u "$USER:$PASS" \
 
 ### 4.4 Users & RBAC
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/services/authentication/users` | GET | All users |
-| `/services/authorization/roles` | GET | All roles |
-| `/services/authentication/current-context` | GET | Current user context |
-| `/services/admin/SAML-groups` | GET | SAML group mappings |
+| Endpoint | Method | Purpose | Since |
+|----------|--------|---------|-------|
+| `/services/authentication/users` | GET | All users | v3.0 |
+| `/services/authorization/roles` | GET | All roles | v3.0 |
+| `/services/authentication/current-context` | GET | Current user context & capabilities | v3.0 |
+| `/services/authorization/capabilities` | GET | System capabilities list | v4.5.0 |
+| `/services/admin/SAML-groups` | GET | SAML group mappings | v4.0 |
+| `/services/authentication/providers/SAML` | GET | SAML configuration | v4.5.0 |
+| `/services/admin/LDAP-groups` | GET | LDAP group mappings | v4.5.0 |
+| `/services/authentication/providers/LDAP` | GET | LDAP configuration | v4.5.0 |
+
+> **Graceful handling**: All RBAC endpoints handle 404 gracefully. When SAML or LDAP is not configured, the script writes `{"configured": false, "note": "..."}` instead of failing.
 
 ### 4.5 Indexes & Data
 
@@ -617,7 +697,12 @@ dma_cloud_export_[stack]_[timestamp]/
 ├── _rbac/
 │   ├── users.json                     # From /services/authentication/users
 │   ├── roles.json                     # From /services/authorization/roles
-│   └── saml_groups.json               # From /services/admin/SAML-groups
+│   ├── capabilities.json              # From /services/authorization/capabilities (v4.5.0)
+│   ├── saml_groups.json               # From /services/admin/SAML-groups
+│   ├── saml_config.json               # From /services/authentication/providers/SAML (v4.5.0)
+│   ├── ldap_groups.json               # From /services/admin/LDAP-groups (v4.5.0)
+│   ├── ldap_config.json               # From /services/authentication/providers/LDAP (v4.5.0)
+│   └── current_context.json           # From /services/authentication/current-context
 │
 ├── _usage_analytics/
 │   ├── search_activity.json           # From search on _audit
@@ -661,17 +746,16 @@ dma_cloud_export_[stack]_[timestamp]/
 ├── dma-env-summary.md             # Human-readable summary report
 │
 ├── _usage_analytics/
-│   ├── search_activity.json              # Search frequency data
-│   ├── dashboard_usage.json              # Dashboard view metrics
-│   ├── alert_metrics.json                # Alert trigger statistics
-│   ├── dashboard_ownership.json          # Dashboard → owner mapping
-│   ├── alert_ownership.json              # Alert → owner mapping
+│   ├── dashboard_views_global.json       # Dashboard views (provenance-based, v4.5.0)
+│   ├── user_activity_global.json         # Searches per user per app (v4.5.0)
+│   ├── search_patterns_global.json       # Search type breakdown (v4.5.0)
+│   ├── index_volume_summary.json         # Daily ingestion by index (v4.5.0)
+│   ├── index_event_counts_daily.json     # Event counts via tstats (v4.5.0)
+│   ├── alert_firing_global.json          # Alert execution statistics (v4.5.0)
+│   ├── dashboard_ownership.json          # Dashboard → owner mapping (REST)
+│   ├── alert_ownership.json              # Alert → owner mapping (REST)
 │   ├── ownership_summary.json            # Ownership by user summary
-│   ├── top_indexes_by_volume.json        # Volume analysis
-│   ├── top_sourcetypes_by_volume.json    # Sourcetype volume data
-│   ├── top_hosts_by_volume.json          # Host volume data
-│   ├── zero_view_dashboards.json         # Elimination candidates
-│   └── never_fired_alerts.json           # Elimination candidates
+│   └── .analytics_checkpoint             # Progressive checkpoint file (internal)
 │
 └── [other directories as before]
 ```
@@ -762,7 +846,7 @@ Identifies unused assets that may be candidates for retirement:
       "dashboard": "old_unused_dashboard",
       "app": "legacy_app",
       "owner": "departed_user",
-      "views_30d": 0
+      "views_period": 0
     }
   ]
 }
@@ -777,7 +861,7 @@ Identifies unused assets that may be candidates for retirement:
       "alert": "never_triggered_alert",
       "app": "test_app",
       "owner": "test_user",
-      "triggers_30d": 0
+      "triggers_period": 0
     }
   ]
 }
@@ -793,23 +877,17 @@ The script generates a standardized `manifest.json` file with a guaranteed schem
 
 ```json
 {
-  "schemaVersion": "4.1.0",
-  "exportType": "splunk_cloud",
-  "exportTimestamp": "2025-12-03T10:30:00Z",
-  "scriptVersion": "4.1.0",
+  "schema_version": "4.0",
+  "archive_structure_version": "v2",
+  "export_type": "splunk_cloud",
+  "export_timestamp": "2026-04-02T10:30:00Z",
+  "export_tool_version": "4.5.8",
 
-  "cloudEnvironment": {
-    "stackUrl": "acme-corp.splunkcloud.com",
-    "stackType": "victoria",
-    "splunkVersion": "9.1.2312",
-    "serverGuid": "ABC123-DEF456-...",
-    "cloudRegion": "aws-us-west-2"
-  },
-
-  "authentication": {
-    "method": "api_token",
-    "username": "admin@acme-corp.com",
-    "capabilities": ["admin_all_objects", "list_users", "search"]
+  "splunk": {
+    "stack_url": "acme-corp.splunkcloud.com",
+    "stack_type": "victoria",
+    "version": "9.3.2411.128",
+    "server_guid": "ABC123-DEF456-..."
   },
 
   "collection": {
@@ -818,32 +896,33 @@ The script generates a standardized `manifest.json` file with a guaranteed schem
     "alerts": 187,
     "users": 150,
     "indexes": 32,
-    "apiCallsMade": 523,
-    "rateLimitHits": 3,
+    "usage_period": "7d",
+    "api_calls": 523,
+    "api_retries": 3,
     "errors": 0,
     "warnings": 5
   },
 
-  "usageIntelligence": {
-    "analysisPeriod": "30d",
-    "totalSearches": 45678,
-    "totalDashboardViews": 12345,
-    "totalAlertTriggers": 4567,
-    "topIndexesByVolume": [...],
-    "topSourcetypesByVolume": [...],
-    "topHostsByVolume": [...],
+  "usage_intelligence": {
+    "analysis_period": "7d",
+    "dispatch_mode": "async",
+    "global_queries": 6,
+    "dashboard_views_source": "provenance",
     "elimination_candidates": {
-      "zeroDashboards": 12,
-      "neverFiredAlerts": 23
+      "zero_view_dashboards": 12,
+      "never_fired_alerts": 23
     }
   },
 
-  "exportDuration": {
-    "startTime": "2025-12-03T10:25:00Z",
-    "endTime": "2025-12-03T10:32:45Z",
-    "durationSeconds": 465
+  "export_duration": {
+    "start_time": "2026-04-02T10:25:00Z",
+    "end_time": "2026-04-02T10:32:45Z",
+    "duration_seconds": 465
   }
 }
+```
+
+> **v4.5.0 change**: Field names use `snake_case` (not camelCase). The `authentication` block was removed from the manifest (credentials are not persisted). The `splunk` block replaces `cloudEnvironment`.
 ```
 
 ### 8.2 Schema Versioning
@@ -853,7 +932,10 @@ The script generates a standardized `manifest.json` file with a guaranteed schem
 | 1.0.0 | 1.0.0 | Initial schema |
 | 3.0.0 | 3.0.0 | Added usage analytics |
 | 3.5.0 | 3.5.0 | Added ownership mapping, elimination candidates, volume analysis |
-| 4.0.0 | 4.0.0 | Enterprise resilience: paginated APIs, checkpoints, extended timeouts, timing stats |
+| 4.0.0 | 4.0.0 | Enterprise resilience: paginated APIs, checkpoints, extended timeouts, timing stats; app-centric v2 structure |
+| 4.0.0 | 4.3.0 | Resume collection, proxy support, PowerShell edition, 12h runtime |
+| 4.0.0 | 4.5.0 | Async dispatch, global aggregate analytics, provenance field fix, progressive checkpointing, expanded RBAC |
+| 4.0.0 | 4.5.8 | Token prefix auto-detection, error stderr routing, return code checks |
 
 ---
 
@@ -1020,7 +1102,7 @@ curl -k "$URL/services/server/info"  # Not recommended
 
 ### Overview
 
-**`dma-splunk-cloud-export.ps1`** v4.3.0 provides identical export functionality for Windows environments. It requires zero external dependencies -- no Python, no curl, no jq. It uses native PowerShell cmdlets for all operations.
+**`dma-splunk-cloud-export.ps1`** v4.5.8 provides identical export functionality for Windows environments. It requires zero external dependencies -- no Python, no curl, no jq. It uses native PowerShell cmdlets for all operations.
 
 - **PowerShell 5.1+** (Windows PowerShell, included with Windows 10/Server 2016+)
 - **PowerShell 7+** (cross-platform -- Windows, macOS, Linux)
@@ -1030,17 +1112,21 @@ curl -k "$URL/services/server/info"  # Not recommended
 | Bash | PowerShell | Description |
 |------|------------|-------------|
 | `--stack URL` | `-Stack URL` | Splunk Cloud stack URL |
-| `--token TOKEN` | `-Token TOKEN` | API bearer token |
+| `--token TOKEN` | `-Token TOKEN` | API token (prefix auto-detected) |
 | `--user USER` | `-User USER` | Username for basic auth |
 | `--password PASS` | `-Password PASS` | Password for basic auth |
 | `--all-apps` | `-AllApps` | Export all apps |
 | `--apps LIST` | `-Apps LIST` | Comma-separated app names |
 | `--rbac` | `-Rbac` | Enable RBAC collection |
 | `--usage` | `-Usage` | Enable usage analytics collection |
+| `--analytics-period N` | `-AnalyticsPeriod N` | Analytics time window (default: 7d) |
 | `--scoped` | *(auto)* | Auto-scoped when `-Apps` is specified |
-| `--skip-internal` | `-SkipInternal` | Skip `_internal` searches |
+| `--skip-internal` | `-SkipInternal` | Skip `_audit`/`_internal` searches |
+| `--test-access` | `-TestAccess` | Pre-flight API access check (no export) |
+| `--remask FILE` | `-Remask FILE` | Re-anonymize existing archive |
 | `--resume-collect FILE` | `-ResumeCollect FILE` | Resume from a previous archive |
 | `--proxy URL` | `-Proxy URL` | Route all connections through a proxy server |
+| `--skip-anonymize` | `-SkipAnonymization` | Skip data anonymization |
 | `-d, --debug` | `-Debug_Mode` | Enable debug logging |
 | `--output DIR` | `-Output DIR` | Output directory |
 | `--help` | `-ShowHelp` | Show help message |
@@ -1138,4 +1224,4 @@ The PowerShell script uses **native PowerShell cmdlets** for all JSON processing
 ---
 
 *End of Splunk Cloud Export Script Technical Specification*
-*Version 4.3.0*
+*Version 4.5.8*

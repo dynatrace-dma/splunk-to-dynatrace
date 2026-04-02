@@ -1,31 +1,57 @@
 # DMA Splunk Enterprise Export Script
 ## READ THIS FIRST - Complete Prerequisites Guide
 
-**Version**: 4.2.4
-**Last Updated**: February 2026
-**Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise Export Specification](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | [Export Improvement Analysis](EXPORT-IMPROVEMENT-ANALYSIS.md) | For Splunk Cloud exports, see [Cloud Export README](README-SPLUNK-CLOUD.md)
+**Version**: 4.4.0
+**Last Updated**: April 2026
+**Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise Export Specification](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | For Splunk Cloud exports, see [Cloud Export README](README-SPLUNK-CLOUD.md)
 
-### What's New in v4.2.4
+### What's New in v4.4.0
 
-#### Two-Archive Anonymization (Preserves Original Data)
-When anonymization is enabled, the script now creates **TWO archives**:
-- `{export_name}.tar.gz` - **Original, untouched data** (keep for your records)
-- `{export_name}_masked.tar.gz` - **Anonymized copy** (safe to share)
+#### New CLI Flags
 
-This preserves the original data in case anonymization corrupts files. Users can re-run anonymization on the original without re-running the entire export.
+| Flag | Description |
+|------|-------------|
+| `--token TOKEN` | API token authentication (recommended for automation) |
+| `--proxy URL` | Route all connections through an HTTP proxy |
+| `--skip-internal` | Skip `_audit`/`_internal` index searches for restricted accounts |
+| `--test-access` | Pre-flight API access check across all categories (no export) |
+| `--remask FILE` | Re-anonymize an existing archive without connecting to Splunk |
+| `--resume-collect FILE` | Resume an interrupted export from a `.tar.gz` archive |
+| `--analytics-period N` | Analytics time window (default: 7d; e.g. 30d, 90d) |
 
-#### Performance Optimizations
-- **RBAC/Users collection now OFF by default** - Use `--rbac` flag to enable
-- **Usage analytics now OFF by default** - Use `--usage` flag to enable
-- **Faster defaults**: Batch size 250 (was 100), API delay 50ms (was 250ms)
-- **Optimized queries**: Sampling for expensive regex extractions, `max()` instead of `latest()` for faster aggregations
-- **Savedsearches ACL fix**: Now correctly filters searches by app ownership
+#### Token & Session Key Authentication
+- `--token TOKEN` sets `AUTH_HEADER` for all API calls (replaces `-u user:pass`)
+- Password auth now POSTs to `/services/auth/login`, extracts session key, sets `AUTH_HEADER="Authorization: Splunk $SESSION_KEY"`
+- Passwords URL-encoded via Python stdin (safe for `$`, backticks, `"`, `\`)
+- Token-only invocation auto-enables non-interactive mode
+
+#### Expanded RBAC Collection
+Now collects: capabilities, SAML groups, SAML config, LDAP groups, LDAP config. All new endpoints handle 404 gracefully with placeholder JSON when not configured.
+
+#### Progressive Checkpointing
+Each collection phase saves a checkpoint. Resume skips already-completed phases. Analytics checkpoints are per-query, so interrupted analytics resume mid-way.
+
+#### Default Changes
+- Analytics period default changed from 30d to **7d**
+- RBAC and usage remain OFF by default (use `--rbac` / `--usage`)
+
+### Previous v4.3.0 Changes
+
+- Async search dispatch (exec_mode=normal + dispatchState polling)
+- `--analytics-period` flag for custom time windows
+- `--usage` / `--rbac` enable flags (both off by default)
+- 12-hour maximum runtime (up from 4 hours)
+
+### Previous v4.2.4 Changes
+
+- **Two-Archive Anonymization**: Original + `_masked` copy for safe sharing
+- **RBAC/Usage OFF by default**: Use `--rbac` / `--usage` to enable
+- **Faster defaults**: Batch size 250, API delay 50ms
 
 ### Previous v4.2.0 Changes
 
-- **App-Centric Dashboard Structure (v2)**: Dashboards now saved to `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/` to prevent name collisions
-- **Manifest Schema v4.0**: Added `archive_structure_version: "v2"` for DMA to detect the new structure
-- **No More Flat Folders**: Removed `dashboards_classic/` and `dashboards_studio/` at root level
+- **App-Centric Dashboard Structure (v2)**: `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/`
+- **Manifest Schema v4.0**: `archive_structure_version: "v2"`
 
 ---
 
@@ -765,27 +791,34 @@ Toggle: 9
 
 ## 8. Command-Line Arguments & Automation
 
-**Updated in v4.1.0**: The script supports comprehensive command-line arguments for automation, app-scoped exports, and troubleshooting.
+**Updated in v4.4.0**: The script supports comprehensive command-line arguments for automation, app-scoped exports, and troubleshooting.
 
 ### 8.1 Available Command-Line Arguments
 
 | Argument | Description | Example |
 |----------|-------------|---------|
+| `--token TOKEN` | API token authentication **(NEW v4.3.0, recommended)** | `--token "xxxxx"` |
 | `-u, --username` | Splunk admin username | `-u admin` |
 | `-p, --password` | Splunk admin password | `-p MyPassword123` |
 | `-h, --host` | Splunk host (default: localhost) | `-h splunk-server.local` |
 | `-P, --port` | Splunk REST API port (default: 8089) | `-P 8089` |
 | `--splunk-home` | Splunk installation path | `--splunk-home /opt/splunk` |
-| `--apps` | Comma-separated list of apps to export **(NEW v4.1.0)** | `--apps "search,myapp,security"` |
+| `--apps` | Comma-separated list of apps to export | `--apps "search,myapp,security"` |
 | `--all-apps` | Export all applications (default) | `--all-apps` |
-| `--quick` | Quick mode - skip analytics **(TESTING ONLY - see warning)** | `--quick` |
-| `--scoped` | Scope collections to selected apps only **(NEW v4.1.0)** | `--scoped` |
-| `--no-usage` | Skip usage analytics collection **(NEW v4.1.0)** | `--no-usage` |
-| `--no-rbac` | Skip RBAC/user collection **(NEW v4.1.0)** | `--no-rbac` |
+| `--rbac` | Enable RBAC/user collection (OFF by default) | `--rbac` |
+| `--usage` | Enable usage analytics (OFF by default) | `--usage` |
+| `--analytics-period N` | Analytics time window (default: 7d) **(NEW v4.3.0)** | `--analytics-period 30d` |
+| `--proxy URL` | Route all connections through HTTP proxy **(NEW v4.4.0)** | `--proxy http://proxy:8080` |
+| `--skip-internal` | Skip `_audit`/`_internal` searches **(NEW v4.4.0)** | `--skip-internal` |
+| `--test-access` | Pre-flight API access check (no export) **(NEW v4.4.0)** | `--test-access` |
+| `--remask FILE` | Re-anonymize existing archive **(NEW v4.4.0)** | `--remask ./export.tar.gz` |
+| `--resume-collect FILE` | Resume from previous archive **(NEW v4.4.0)** | `--resume-collect ./export.tar.gz` |
+| `--quick` | Quick mode - skip analytics **(TESTING ONLY)** | `--quick` |
+| `--scoped` | Scope collections to selected apps only | `--scoped` |
 | `--anonymize` | Enable data anonymization (default) | `--anonymize` |
 | `--no-anonymize` | Disable data anonymization | `--no-anonymize` |
 | `-y, --yes` | Auto-confirm all prompts (non-interactive) | `-y` |
-| `-d, --debug` | Enable verbose debug logging **(NEW v4.1.0)** | `--debug` |
+| `-d, --debug` | Enable verbose debug logging | `--debug` |
 | `--help` | Show help message | `--help` |
 
 ### 8.2 Non-Interactive Mode (Automation)
@@ -1182,7 +1215,7 @@ When you run `./dma-splunk-export.sh`, you'll see:
 ║                 🏢  SPLUNK ENTERPRISE EXPORT SCRIPT  🏢                       ║
 ║                                                                                ║
 ║          Complete Data Collection for Migration to Dynatrace Gen3            ║
-║                        Version 4.1.0                                    ║
+║                        Version 4.4.0                                    ║
 ║                                                                                ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
@@ -1551,7 +1584,7 @@ This human-readable summary report is generated in the export directory:
 
 **Export Date**: 2025-12-03T20:23:47Z
 **Hostname**: splunk-sh01.acme-corp.com
-**Export Tool Version**: 4.1.0
+**Export Tool Version**: 4.4.0
 
 ---
 
@@ -1616,7 +1649,7 @@ This human-readable summary report is generated in the export directory:
 | Dashboards | Yes |
 | Alerts & Saved Searches | Yes |
 | Users & RBAC | Yes |
-| Usage Analytics | Yes (30d) |
+| Usage Analytics | Yes (7d default) |
 | Index Statistics | Yes |
 | Lookup Tables | Yes |
 | Audit Log Sample | Yes |
@@ -1679,7 +1712,7 @@ This machine-readable manifest is used by DMA to process your export:
     "alerts": true,
     "rbac": true,
     "usage_analytics": true,
-    "usage_period": "30d",
+    "usage_period": "7d",
     "indexes": true,
     "lookups": true,
     "audit_sample": true
@@ -1731,13 +1764,13 @@ This machine-readable manifest is used by DMA to process your export:
     "summary": {
       "dashboards_never_viewed": 23,
       "alerts_never_fired": 11,
-      "users_inactive_30d": 3,
+      "users_inactive": 3,
       "alerts_with_failures": 4
     },
     "volume": {
       "avg_daily_gb": 127.4,
       "peak_daily_gb": 245.8,
-      "total_30d_gb": 3822.5,
+      "total_period_gb": 3822.5,
       "top_indexes_by_volume": [
         {"index": "main", "total_gb": 1245.6},
         {"index": "security", "total_gb": 876.3},

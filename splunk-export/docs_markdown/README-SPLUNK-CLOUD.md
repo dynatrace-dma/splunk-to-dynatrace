@@ -1,58 +1,63 @@
 # DMA Splunk Cloud Export Script
 ## Prerequisites Guide for Splunk Cloud (Classic & Victoria Experience)
 
-**Version**: 4.3.0
-**Last Updated**: February 2026
+**Version**: 4.5.8
+**Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md)
 
-### What's New in v4.3.0
+### What's New in v4.5.8
 
-#### Resume Collection (`--resume-collect`)
-Pass a previous `.tar.gz` export to the script, and it will extract it, detect what has already been collected, fill in the gaps, and create a versioned output archive (`-v1`, `-v2`, etc.). This is ideal for exports that timed out or were interrupted before completion. You can also add `--rbac` or `--usage` flags to complete exports that were originally run without those options.
+#### Token Authentication Fixes
+- **Auto-detect token prefix** (Bearer vs Splunk) via probe loop — tokens created via Splunk's Settings > Tokens require the `Splunk` prefix, not `Bearer`
+- `Invoke-SplunkApi` / `api_call` now uses the discovered auth header instead of hardcoding Bearer
+- Clear error messages when the token lacks permissions for `server_info` or app listing (previously showed cryptic "No applications found")
 
-#### 12-Hour Max Runtime
-`MAX_TOTAL_TIME` has been increased to `43200` seconds (12 hours), up from 14400 (4 hours), to support very large Splunk Cloud environments with thousands of apps and dashboards.
+#### Async Search Dispatch (replaces blocking mode)
+- `exec_mode=normal` returns the SID immediately; the script polls `dispatchState` with adaptive intervals (5s, increasing to 30s cap)
+- Maximum wait per query: 1 hour (up from 300s hard timeout in blocking mode)
+- Auto-cancels timed-out jobs to free Splunk search quota
+- `Invoke-AnalyticsSearchBlocking` preserved for fast `| rest` queries
 
-#### PowerShell Edition
-A new `dma-splunk-cloud-export.ps1` script provides identical functionality for Windows environments. It requires only PowerShell 5.1+ and has zero external dependencies (no Python, curl, or jq needed). See the [PowerShell Edition](#powershell-edition) section below for details.
+#### Global Aggregate Analytics (replaces per-app loops)
+- 6 global queries replace N x 7 per-app queries (for 90 apps: 630 jobs reduced to 6)
+- Dashboard views use `provenance` field — `search_type=dashboard` was NOT a native `_audit` field and produced unreliable results
+- View session de-duplication counts page loads (30s window per user), not individual panel searches
+- Search type breakdown derived from `provenance`/`search_id` via `eval case()`
 
-#### Proxy Support (`--proxy` / `-Proxy`)
-Both Cloud scripts now support routing all connections through a corporate proxy server. This is essential for enterprise environments where direct internet access to Splunk Cloud is blocked by a firewall or security policy.
+#### New CLI Flags
+| Flag (Bash / PowerShell) | Description |
+|--------------------------|-------------|
+| `--test-access` / `-TestAccess` | Pre-flight check: test API access across 9 categories, then exit (no export) |
+| `--remask FILE` / `-Remask FILE` | Re-anonymize an existing archive without connecting to Splunk |
+| `--analytics-period N` / `-AnalyticsPeriod N` | Analytics time window (default: 7d; also: 30d, 90d) |
+| `--skip-internal` / `-SkipInternal` | Skip `_audit`/`_internal` index searches for restricted accounts |
 
-```bash
-# Bash: Route through corporate proxy
-./dma-splunk-cloud-export.sh --proxy http://proxy.company.com:8080
+#### Expanded RBAC Collection
+Now collects capabilities, SAML config, SAML groups, LDAP groups, LDAP config. All new endpoints handle 404 gracefully with placeholder JSON when SAML/LDAP is not configured.
 
-# PowerShell: Route through corporate proxy
-.\dma-splunk-cloud-export.ps1 -Proxy "http://proxy.company.com:8080"
-```
+#### Progressive Analytics Checkpointing
+Each of the 6 global analytics queries saves a checkpoint on completion. If an export is interrupted and resumed, only incomplete queries are re-run.
 
-When a proxy is configured:
-- DNS resolution and TCP port connectivity tests are skipped (the proxy handles routing)
-- All `curl` / `Invoke-WebRequest` calls are routed through the proxy
-- If not provided via flag, the script prompts interactively during setup (default: No)
-- If connectivity fails, error messages include proxy-specific troubleshooting guidance
+#### Default Changes
+- `USAGE_PERIOD` changed from 30d to **7d** (4x less `_audit` data to scan)
+
+### Previous v4.3.0 Changes
+
+- **Resume Collection** (`--resume-collect`): Resume interrupted exports from `.tar.gz` archive
+- **12-Hour Max Runtime**: `MAX_TOTAL_TIME=43200` (up from 4 hours)
+- **PowerShell Edition**: `dma-splunk-cloud-export.ps1` with zero external dependencies
+- **Proxy Support** (`--proxy` / `-Proxy`): Route all connections through corporate proxy
 
 ### Previous v4.2.4 Changes
 
-#### Two-Archive Anonymization (Preserves Original Data)
-When anonymization is enabled, the script now creates **TWO archives**:
-- `{export_name}.tar.gz` - **Original, untouched data** (keep for your records)
-- `{export_name}_masked.tar.gz` - **Anonymized copy** (safe to share)
-
-This preserves the original data in case anonymization corrupts files. Users can re-run anonymization on the original without re-running the entire export.
-
-#### Performance Optimizations
-- **RBAC/Users collection now OFF by default** - Use `--rbac` flag to enable
-- **Usage analytics now OFF by default** - Use `--usage` flag to enable
-- **Faster defaults**: Batch size 250 (was 100), API delay 50ms (was 250ms)
-- **Optimized queries**: Sampling for expensive regex extractions, `max()` instead of `latest()` for faster aggregations
+- **Two-Archive Anonymization**: Original + `_masked` copy for safe sharing
+- **RBAC/Usage OFF by default**: Use `--rbac` / `--usage` to enable
+- **Faster defaults**: Batch size 250, API delay 50ms
 
 ### Previous v4.2.0 Changes
 
-- **App-Centric Dashboard Structure (v2)**: Dashboards now saved to `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/` to prevent name collisions
-- **Manifest Schema v4.0**: Added `archive_structure_version: "v2"` for DMA to detect the new structure
-- **No More Flat Folders**: Removed `dashboards_classic/` and `dashboards_studio/` at root level
+- **App-Centric Dashboard Structure (v2)**: `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/`
+- **Manifest Schema v4.0**: `archive_structure_version: "v2"`
 
 ---
 
@@ -544,29 +549,29 @@ export SPLUNK_CLOUD_TOKEN="your-api-token"
 
 ---
 
-## Command-Line Arguments (Updated in v4.3.0)
+## Command-Line Arguments (Updated in v4.5.8)
 
-| Argument | Description | Example |
-|----------|-------------|---------|
-| `--stack` | Splunk Cloud stack URL | `--stack acme.splunkcloud.com` |
-| `--token` | API token for authentication | `--token "xxxxx"` |
-| `--user` | Username (if not using token) | `--user admin` |
-| `--password` | Password (if not using token) | `--password "xxx"` |
-| `--apps` | Comma-separated list of apps | `--apps "search,myapp"` |
-| `--all-apps` | Export all applications (default) | `--all-apps` |
-| `--scoped` | Scope collections to selected apps only | `--scoped` |
-| `--rbac` | Enable RBAC/user collection (OFF by default) | `--rbac` |
-| `--usage` | Enable usage analytics collection (OFF by default) | `--usage` |
-| `--no-usage` | Skip usage analytics (legacy — usage is OFF by default) | `--no-usage` |
-| `--no-rbac` | Skip RBAC collection (legacy — RBAC is OFF by default) | `--no-rbac` |
-| `--skip-internal` | Skip searches requiring `_internal` index | `--skip-internal` |
-| `--output` | Output directory | `--output /path/to/output` |
-| `--resume-collect FILE` | Resume from previous .tar.gz archive | `--resume-collect ./previous.tar.gz` |
-| `--proxy URL` | Route all connections through a proxy server | `--proxy http://proxy:8080` |
-| `-d, --debug` | Enable verbose debug logging | `--debug` |
-| `--help` | Show help message | `--help` |
-
-> **Note**: PowerShell equivalents use `-` prefix (e.g., `-Stack`, `-Token`, `-Rbac`, `-Usage`, `-ResumeCollect`, `-Proxy`)
+| Argument (Bash) | PowerShell | Description |
+|------------------|------------|-------------|
+| `--stack URL` | `-Stack URL` | Splunk Cloud stack URL |
+| `--token TOKEN` | `-Token TOKEN` | API token (recommended) |
+| `--user USER` | `-User USER` | Username (alternative to token) |
+| `--password PASS` | `-Password PASS` | Password (used with `--user`) |
+| `--apps "a,b"` | `-Apps "a,b"` | Comma-separated list of apps |
+| `--all-apps` | `-AllApps` | Export all applications (default) |
+| `--scoped` | N/A | Scope collections to selected apps only |
+| `--rbac` | `-Rbac` | Enable RBAC/user collection (OFF by default) |
+| `--usage` | `-Usage` | Enable usage analytics (OFF by default) |
+| `--analytics-period N` | `-AnalyticsPeriod N` | Analytics time window (default: 7d; e.g. 30d, 90d) |
+| `--skip-internal` | `-SkipInternal` | Skip `_audit`/`_internal` index searches |
+| `--test-access` | `-TestAccess` | Pre-flight API access check (no export) |
+| `--remask FILE` | `-Remask FILE` | Re-anonymize existing archive (no Splunk needed) |
+| `--resume-collect FILE` | `-ResumeCollect FILE` | Resume from previous .tar.gz archive |
+| `--proxy URL` | `-Proxy URL` | Route all connections through proxy |
+| `--output DIR` | `-Output DIR` | Output directory |
+| `-d, --debug` | `-Debug_Mode` | Enable verbose debug logging |
+| `--skip-anonymize` | `-SkipAnonymization` | Skip data anonymization |
+| `--help` | `-ShowHelp` | Show help message |
 
 ### App-Scoped Export Mode
 
@@ -1003,7 +1008,7 @@ When you run `./dma-splunk-cloud-export.sh`, you'll see:
 ║                   ☁️  SPLUNK CLOUD EXPORT SCRIPT  ☁️                         ║
 ║                                                                                ║
 ║          Complete REST API-Based Data Collection for Migration              ║
-║                        Version 4.1.0                                    ║
+║                        Version 4.5.8                                    ║
 ║                                                                                ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
@@ -1154,7 +1159,7 @@ Ready to proceed? (Y/n):
 ✓ Collected 8 roles
 
   [6/7] Collecting usage analytics...
-◐ Running search: Dashboard views (last 30 days)...
+◐ Running search: Dashboard views (last 7 days)...
 ✓ Dashboard usage collected
 ◐ Running search: User activity...
 ✓ User activity collected
@@ -1260,7 +1265,7 @@ This human-readable summary report is generated in the export directory:
 # DMA Splunk Cloud Environment Summary
 
 **Export Date**: 2025-12-03 14:30:52 EST
-**Export Script Version**: 4.1.0
+**Export Script Version**: 4.5.8
 **Export Type**: Splunk Cloud (REST API)
 
 ---
@@ -1305,7 +1310,7 @@ This human-readable summary report is generated in the export directory:
 - ✅ Dashboards (Classic and Dashboard Studio)
 - ✅ Alerts and Saved Searches
 - ✅ Users, Roles, and RBAC
-- ✅ Usage Analytics (last 30d)
+- ✅ Usage Analytics (last 7d)
 - ✅ Index Statistics
 - ⏭️ Lookup Contents (skipped)
 - ⏭️ Data Anonymization (available - enable with option 8)
@@ -1399,7 +1404,7 @@ This machine-readable manifest is used by DMA to process your export:
     "alerts": true,
     "rbac": true,
     "usage_analytics": true,
-    "usage_period": "30d",
+    "usage_period": "7d",
     "indexes": true,
     "lookups": false
   },
@@ -1441,13 +1446,13 @@ This machine-readable manifest is used by DMA to process your export:
     "summary": {
       "dashboards_never_viewed": 12,
       "alerts_never_fired": 8,
-      "users_inactive_30d": 5,
+      "users_inactive": 5,
       "alerts_with_failures": 2
     },
     "volume": {
       "avg_daily_gb": 45.7,
       "peak_daily_gb": 78.3,
-      "total_30d_gb": 1371.2,
+      "total_period_gb": 1371.2,
       "top_indexes_by_volume": [
         {"index": "main", "total_gb": 456.2},
         {"index": "security", "total_gb": 312.8},

@@ -1,13 +1,13 @@
-# DMA Splunk Export Schema v4.3
+# DMA Splunk Export Schema v4.0
 
 ## Purpose
 
 This document defines the **guaranteed output schema** for all DMA Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DMA can reliably parse them.
 
-> **Applies to all three export scripts:**
-> - `dma-splunk-export.sh` (Enterprise, Bash)
-> - `dma-splunk-cloud-export.sh` (Cloud, Bash)
-> - `dma-splunk-cloud-export.ps1` (Cloud, PowerShell)
+> **Applies to all export scripts:**
+> - `dma-splunk-export.sh` (Enterprise, Bash, v4.4.0)
+> - `dma-splunk-cloud-export_beta.sh` (Cloud, Bash, v4.5.8)
+> - `dma-splunk-cloud-export.ps1` (Cloud, PowerShell, v4.5.8)
 
 ---
 
@@ -243,7 +243,7 @@ Every export MUST include a `manifest.json` at the root with this exact schema:
     "alerts": true,
     "rbac": true,
     "usage_analytics": true,
-    "usage_period": "30d",
+    "usage_period": "7d",
     "indexes": true,
     "lookups": false,
     "audit_sample": false,

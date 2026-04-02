@@ -1741,7 +1741,7 @@ except:
     print('')
 " 2>/dev/null)
 
-  local required_caps=("admin_all_objects" "list_users" "search")
+  local required_caps=("admin_all_objects" "list_all_users" "search")
   local missing_caps=()
 
   for cap in "${required_caps[@]}"; do

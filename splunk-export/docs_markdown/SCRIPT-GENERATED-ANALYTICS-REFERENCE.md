@@ -3,14 +3,14 @@
 ## DMA Splunk Export - Complete Analytics File Reference
 
 **Applies To**: Splunk Enterprise & Splunk Cloud Export Scripts
-**Version**: 4.2.4 (Enterprise) / 4.3.0 (Cloud Bash & PowerShell)
-**Last Updated**: February 2026
+**Version**: 4.4.0 (Enterprise) / 4.5.8 (Cloud Bash & PowerShell)
+**Last Updated**: April 2026
 
 > **Note**: The PowerShell Cloud script (`dma-splunk-cloud-export.ps1`) generates the same analytics files as the Bash Cloud script (`dma-splunk-cloud-export.sh`).
 
-### Important: v4.2.4 Default Behavior Change
+### Important: Default Behavior and v4.5.0 Analytics Overhaul
 
-**RBAC/Users and Usage Analytics are now OFF by default** for faster exports. To collect these analytics files, you must explicitly enable them:
+**RBAC/Users and Usage Analytics are OFF by default** (since v4.2.4). To collect these analytics files, you must explicitly enable them:
 
 ```bash
 # Enable RBAC/user collection
@@ -24,8 +24,21 @@
 ```
 
 Without these flags, the following file categories will be empty or skipped:
-- User Activity Analytics (requires `--rbac`)
+- User Activity Analytics (requires `--usage`)
 - Usage-based analytics (requires `--usage`)
+- RBAC data (requires `--rbac`)
+
+### v4.5.0 Analytics Architecture Change (Cloud scripts)
+
+In v4.5.0, the Cloud scripts underwent a major analytics overhaul:
+
+- **Global aggregate queries**: 6 global queries replace N x 7 per-app loops (for 90 apps: 630 search jobs reduced to 6)
+- **Async search dispatch**: `exec_mode=normal` + `dispatchState` polling with adaptive intervals (5s-30s) replaces blocking mode (which had a 300s hard timeout)
+- **Provenance field**: Dashboard view queries now use the `provenance` field (NOT `search_type=dashboard`, which is not a native `_audit` field and was unreliable)
+- **View session de-duplication**: Counts page loads (30-second window per user) instead of individual panel searches
+- **Default analytics period**: Changed from 30 days to **7 days** (reduces `_audit` scan volume by 4x)
+
+The SPL queries documented below reflect the **v4.5.8** implementation.
 
 ---
 
@@ -137,17 +150,24 @@ When parsing export archives, DMA handles missing analytics gracefully:
 
 **Cloud Availability**: 🟡 Requires `_audit` index access - may fail in restricted Cloud environments
 
-**SPL Query Source**:
+**SPL Query Source** (v4.5.8 — global aggregate, provenance-based):
 ```spl
-index=_audit action=search info=granted search_type=dashboard
-| stats count as view_count, dc(user) as unique_users, latest(_time) as last_viewed
-  by app, dashboard
-| sort - view_count
-| head 100
+index=_audit sourcetype=audittrail action=search info=granted
+  (provenance="UI:Dashboard:*" OR provenance="UI:dashboard:*")
+  user!="splunk-system-user" earliest=-7d
+| rex field=provenance "UI:[Dd]ashboard:(?<dashboard_name>[\w\-\.]+)"
+| where isnotnull(dashboard_name)
+| eval view_session=user."_".floor(_time/30)
+| stats dc(view_session) as view_count, dc(user) as unique_users,
+  values(user) as viewers, latest(_time) as last_viewed
+  by app, dashboard_name
+| sort -view_count
 ```
 
+> **v4.5.0 fix**: Previous versions used `search_type=dashboard`, which is NOT a native `_audit` field and produced unreliable results. The `provenance` field reliably identifies dashboard-triggered searches. View counts use session de-duplication (30-second window per user) to count page loads, not individual panel searches.
+
 **Description**:
-Lists the top 100 most-viewed dashboards in the Splunk environment over the analysis period (default 30 days). Includes view count, unique viewer count, and last access timestamp.
+Lists the most-viewed dashboards in the Splunk environment over the analysis period (default 7 days). Includes de-duplicated view count, unique viewer count, viewer list, and last access timestamp. Results are grouped by app and dashboard name (global aggregate — not per-app).
 
 **Sample Output**:
 ```json
@@ -177,14 +197,20 @@ Lists the top 100 most-viewed dashboards in the Splunk environment over the anal
 
 **Cloud Availability**: 🟡 Requires `_audit` index access - may fail in restricted Cloud environments
 
-**SPL Query Source**:
+**SPL Query Source** (v4.5.8 — provenance-based):
 ```spl
-index=_audit action=search info=granted search_type=dashboard
-| timechart span=1d count as views by dashboard limit=20
+index=_audit sourcetype=audittrail action=search info=granted
+  (provenance="UI:Dashboard:*" OR provenance="UI:dashboard:*")
+  user!="splunk-system-user" earliest=-7d
+| rex field=provenance "UI:[Dd]ashboard:(?<dashboard_name>[\w\-\.]+)"
+| where isnotnull(dashboard_name)
+| timechart span=1d dc(eval(user."_".floor(_time/30))) as views by dashboard_name limit=20
 ```
 
+> **v4.5.0 fix**: Uses `provenance` field instead of broken `search_type=dashboard`. De-duplicates via view sessions.
+
 **Description**:
-Daily view trends for the top 20 dashboards over the analysis period. Shows usage patterns over time.
+Daily view trends for the top 20 dashboards over the analysis period (default 7 days). Shows usage patterns over time.
 
 **DMA Migration Purpose**:
 - **Trend Analysis**: Identify dashboards with growing vs. declining usage
@@ -199,17 +225,24 @@ Daily view trends for the top 20 dashboards over the analysis period. Shows usag
 
 **Cloud Availability**: 🟡 Requires `_audit` index access - may fail in restricted Cloud environments
 
-**SPL Query Source**:
+**SPL Query Source** (v4.5.8 — provenance-based):
 ```spl
-index=_audit action=search info=granted search_type=dashboard
-| stats count by dashboard
-| append [| rest /servicesNS/-/-/data/ui/views | table title | rename title as dashboard | eval count=0]
-| stats sum(count) as total_views by dashboard
-| where total_views=0
+| rest /servicesNS/-/-/data/ui/views
+| rename title as dashboard_name, eai:acl.app as app
+| join type=left dashboard_name app
+  [search index=_audit sourcetype=audittrail action=search info=granted
+    (provenance="UI:Dashboard:*" OR provenance="UI:dashboard:*")
+    user!="splunk-system-user" earliest=-7d
+  | rex field=provenance "UI:[Dd]ashboard:(?<dashboard_name>[\w\-\.]+)"
+  | stats count as view_count by app, dashboard_name]
+| where isnull(view_count) OR view_count=0
+| table app, dashboard_name
 ```
 
+> **v4.5.0 fix**: Uses `provenance` field instead of broken `search_type=dashboard`.
+
 **Description**:
-Lists all dashboards that have **zero views** during the analysis period. These are candidates for elimination rather than migration.
+Lists all dashboards that have **zero views** during the analysis period (default 7 days). These are candidates for elimination rather than migration.
 
 **Sample Output**:
 ```json
@@ -306,7 +339,7 @@ index=_audit action=search info=granted
 ```
 
 **Description**:
-Users with no search activity in the last 30 days.
+Users with no search activity in the analysis period (default 7 days).
 
 **DMA Migration Purpose**:
 - **Scope Reduction**: Don't migrate personal content for inactive users
@@ -545,24 +578,37 @@ Most frequently used SPL commands across all searches.
 
 ---
 
-### 4.2 `search_by_type.json`
+### 4.2 `search_patterns_global.json`
 
-**Location**: `_usage_analytics/search_by_type.json`
+**Location**: `dma_analytics/usage_analytics/search_patterns_global.json`
 
-**SPL Query Source**:
+> **v4.5.0 change**: This file replaces the former `search_by_type.json`. The field `search_type` is NOT a native `_audit` field — it must be derived from `provenance` and `search_id` using `eval case()`. Previous versions incorrectly treated it as a native field.
+
+**SPL Query Source** (v4.5.8 — global aggregate):
 ```spl
-index=_audit action=search info=granted
-| stats count by search_type
-| sort - count
+index=_audit sourcetype=audittrail action=search info=granted
+  user!="splunk-system-user" earliest=-7d
+| eval search_type=case(
+    match(provenance, "^UI:[Dd]ashboard:"), "dashboard",
+    match(search_id, "^(rt_)?scheduler__"), "scheduled",
+    match(savedsearch_name, "^_ACCELERATE_"), "acceleration",
+    match(search_id, "^SummaryDirector_"), "summarization",
+    isnotnull(provenance) AND match(provenance, "^UI:"), "interactive",
+    1=1, "other"
+  )
+| stats count as total_searches, dc(user) as unique_users,
+  dc(search_id) as unique_searches
+  by app, search_type
+| sort -total_searches
 ```
 
 **Description**:
-Search activity broken down by type (ad-hoc, scheduled, dashboard, etc.).
+Search activity broken down by derived type (dashboard, scheduled, acceleration, summarization, interactive, other), grouped by app. The `search_type` is computed from `provenance` and `search_id` fields using the same logic as Splunk's Monitoring Console.
 
 **DMA Migration Purpose**:
-- **Usage Pattern Understanding**: Know the mix of interactive vs. scheduled queries
+- **Usage Pattern Understanding**: Know the mix of interactive vs. scheduled vs. dashboard queries per app
 - **Workflow Planning**: High scheduled search count = more Dynatrace workflows needed
-- **User Behavior**: Understand how users interact with data
+- **Dashboard vs. Ad-hoc**: Distinguish automated dashboard loads from manual exploration
 
 ---
 
@@ -707,14 +753,14 @@ Complete metadata for all saved searches from Splunk REST API.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d@d
+index=_internal source=*license_usage.log type=Usage earliest=-7d@d
 | timechart span=1d sum(b) as bytes by idx
 | eval gb=round(bytes/1024/1024/1024,2)
 | fields _time, idx, gb
 ```
 
 **Description**:
-Daily ingestion volume (GB) per index over the last 30 days.
+Daily ingestion volume (GB) per index over the analysis period (default 7 days).
 
 **DMA Migration Purpose**:
 - **Grail Bucket Sizing**: Size each bucket based on actual daily volume
@@ -729,14 +775,14 @@ Daily ingestion volume (GB) per index over the last 30 days.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d@d
+index=_internal source=*license_usage.log type=Usage earliest=-7d@d
 | timechart span=1d sum(b) as bytes by st
 | eval gb=round(bytes/1024/1024/1024,2)
 | fields _time, st, gb
 ```
 
 **Description**:
-Daily ingestion volume (GB) per sourcetype over the last 30 days.
+Daily ingestion volume (GB) per sourcetype over the analysis period (default 7 days).
 
 **DMA Migration Purpose**:
 - **OpenPipeline Sizing**: Size processing capacity by sourcetype volume
@@ -751,10 +797,10 @@ Daily ingestion volume (GB) per sourcetype over the last 30 days.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d@d
+index=_internal source=*license_usage.log type=Usage earliest=-7d@d
 | timechart span=1d sum(b) as bytes
 | eval gb=round(bytes/1024/1024/1024,2)
-| stats avg(gb) as avg_daily_gb, max(gb) as peak_daily_gb, sum(gb) as total_30d_gb
+| stats avg(gb) as avg_daily_gb, max(gb) as peak_daily_gb, sum(gb) as total_period_gb
 ```
 
 **Description**:
@@ -767,7 +813,7 @@ Summary statistics: average daily volume, peak daily volume, and 30-day total.
     {
       "avg_daily_gb": 125.5,
       "peak_daily_gb": 189.2,
-      "total_30d_gb": 3765.0
+      "total_period_gb": 3765.0
     }
   ]
 }
@@ -786,13 +832,13 @@ Summary statistics: average daily volume, peak daily volume, and 30-day total.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*metrics.log group=per_index_thruput earliest=-30d@d
+index=_internal source=*metrics.log group=per_index_thruput earliest=-7d@d
 | timechart span=1d sum(ev) as events by series
 | rename series as index
 ```
 
 **Description**:
-Daily event count per index over the last 30 days.
+Daily event count per index over the analysis period (default 7 days).
 
 **DMA Migration Purpose**:
 - **Event Rate Planning**: Understand events per second (EPS) by index
@@ -830,7 +876,7 @@ Hourly ingestion pattern showing which hours have highest volume.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d@d
+index=_internal source=*license_usage.log type=Usage earliest=-7d@d
 | stats sum(b) as total_bytes by idx
 | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2)
 | sort - daily_avg_gb
@@ -853,7 +899,7 @@ Top 20 indexes ranked by daily average volume.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d@d
+index=_internal source=*license_usage.log type=Usage earliest=-7d@d
 | stats sum(b) as total_bytes by st
 | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2)
 | sort - daily_avg_gb
@@ -876,7 +922,7 @@ Top 20 sourcetypes ranked by daily average volume.
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d@d
+index=_internal source=*license_usage.log type=Usage earliest=-7d@d
 | stats sum(b) as total_bytes by h
 | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2)
 | sort - daily_avg_gb
@@ -992,7 +1038,7 @@ Inventory of up to 500 forwarding hosts with volume, last activity, and connecti
 
 **SPL Query Source**:
 ```spl
-index=_internal source=*license_usage.log type=Usage earliest=-30d
+index=_internal source=*license_usage.log type=Usage earliest=-7d
 | stats sum(b) as bytes, dc(h) as unique_hosts by st
 | eval daily_avg_gb=round((bytes/30)/1024/1024/1024,2)
 | eval category=case(
@@ -1487,6 +1533,6 @@ When converting queries that reference these analytics, remember:
 
 ---
 
-*Document Version: 4.0.0*
+*Document Version: 4.5.8*
 *Applies To: DMA Splunk Enterprise & Cloud Export Scripts*
 *Last Updated: January 2026*
