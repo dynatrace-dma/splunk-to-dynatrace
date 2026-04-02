@@ -1926,8 +1926,18 @@ select_export_scope() {
   local alert_count=0
 
   if [ -n "$AUTH_HEADER" ]; then
+    echo ""
+    echo -ne "  ${BLUE}◐${NC} Counting dashboards across all namespaces..."
+    local count_start=$(date +%s)
     dashboard_count=$(splunk_api_get_count "/servicesNS/-/-/data/ui/views")
+    local count_elapsed=$(( $(date +%s) - count_start ))
+    echo -e "\r  ${GREEN}✓${NC} Dashboards: ${WHITE}${dashboard_count}${NC} (${count_elapsed}s)          "
+
+    echo -ne "  ${BLUE}◐${NC} Counting saved searches/alerts across all namespaces..."
+    count_start=$(date +%s)
     alert_count=$(splunk_api_get_count "/servicesNS/-/-/saved/searches")
+    count_elapsed=$(( $(date +%s) - count_start ))
+    echo -e "\r  ${GREEN}✓${NC} Saved searches/alerts: ${WHITE}${alert_count}${NC} (${count_elapsed}s)          "
   fi
 
   # Fallback: if REST returned 0 for saved searches (common on large SHC
@@ -4398,15 +4408,21 @@ run_usage_search() {
 
   debug_log "SEARCH" "Dispatched SID=${sid:0:24} for '$description'"
 
+  # Show initial dispatch to terminal
+  echo -ne "    ${BLUE}◐${NC} ${description} — dispatched (SID: ${sid:0:12}...)  \r"
+
   # Step 3: Poll dispatchState until DONE or FAILED (adaptive interval: 5s → 30s)
   local poll_interval=5
   local elapsed=0
+  local scan_count=""
+  local event_count=""
 
   while true; do
     sleep "$poll_interval"
     elapsed=$(( $(date +%s) - search_start_time ))
 
     if [ "$elapsed" -gt "$max_wait" ]; then
+      echo -e "\r    ${RED}✗${NC} ${description} — TIMEOUT after ${max_wait}s                                          "
       debug_log "SEARCH" "TIMEOUT SID=$sid after ${elapsed}s"
       log "TIMEOUT for '$description': Search did not complete in ${max_wait}s"
       curl -k -s -H "$AUTH_HEADER" \
@@ -4431,10 +4447,31 @@ run_usage_search() {
 import json, sys
 try:
     d = json.load(sys.stdin)
-    print(d['entry'][0]['content']['dispatchState'])
+    c = d['entry'][0]['content']
+    print(c.get('dispatchState',''))
 except:
     print('')
 " 2>/dev/null)
+
+    # Extract progress metrics for display
+    local done_progress
+    done_progress=$(echo "$status_response" | \
+      $PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    c = d['entry'][0]['content']
+    pct = c.get('doneProgress', 0)
+    scanned = c.get('scanCount', 0)
+    results = c.get('resultCount', 0)
+    print(f'{pct:.0%}|{scanned}|{results}')
+except:
+    print('|0|0')
+" 2>/dev/null)
+    local pct_display="${done_progress%%|*}"
+    local rest="${done_progress#*|}"
+    scan_count="${rest%%|*}"
+    local result_count="${rest#*|}"
 
     if [ -z "$dispatch_state" ]; then
       local is_done
@@ -4442,12 +4479,27 @@ except:
       [ "$is_done" = "true" ] && dispatch_state="DONE"
     fi
 
+    # Format elapsed as m:ss
+    local mins=$(( elapsed / 60 ))
+    local secs=$(( elapsed % 60 ))
+    local elapsed_fmt
+    if [ "$mins" -gt 0 ]; then
+      elapsed_fmt="${mins}m$(printf '%02d' $secs)s"
+    else
+      elapsed_fmt="${secs}s"
+    fi
+
+    # Live spinner update on terminal
+    local spinner=$(get_spinner)
+
     case "$dispatch_state" in
       DONE)
+        echo -e "\r    ${GREEN}✓${NC} ${description} — done (${elapsed_fmt}, ${result_count} results)                                          "
         log "Search completed (${elapsed}s): $description"
         break
         ;;
       FAILED)
+        echo -e "\r    ${RED}✗${NC} ${description} — FAILED (${elapsed_fmt})                                          "
         local err_msg
         err_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
         log "SEARCH FAILED for '$description': $err_msg"
@@ -4456,6 +4508,19 @@ except:
         return 1
         ;;
       QUEUED|PARSING|RUNNING|FINALIZING)
+        # Show live progress: spinner, state, elapsed, scan count
+        local scan_display=""
+        if [ -n "$scan_count" ] && [ "$scan_count" != "0" ]; then
+          if [ "$scan_count" -ge 1000000 ]; then
+            scan_display=" | $(( scan_count / 1000000 ))M events scanned"
+          elif [ "$scan_count" -ge 1000 ]; then
+            scan_display=" | $(( scan_count / 1000 ))K events scanned"
+          else
+            scan_display=" | ${scan_count} events scanned"
+          fi
+        fi
+        echo -ne "\r    ${spinner} ${description} — ${dispatch_state,,} ${pct_display} (${elapsed_fmt}${scan_display})          \r"
+
         if [ "$poll_interval" -lt 30 ]; then
           poll_interval=$(( poll_interval + 5 ))
         fi
@@ -4464,7 +4529,9 @@ except:
         fi
         ;;
       *)
+        echo -ne "\r    ${spinner} ${description} — polling (${elapsed_fmt})          \r"
         if echo "$status_response" | grep -q '"isFailed":true'; then
+          echo -e "\r    ${RED}✗${NC} ${description} — FAILED (${elapsed_fmt})                                          "
           local fail_msg
           fail_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
           log "SEARCH FAILED for '$description': $fail_msg"
@@ -4557,13 +4624,13 @@ collect_app_analytics() {
   # sourcetype=audittrail narrows at tsidx level for massive environments.
   # =========================================================================
   if has_analytics_checkpoint "dashboard_views"; then
-    log "  [1/6] Dashboard views — SKIP (checkpoint exists)"
+    echo -e "    ${DIM}[1/6] Dashboard views — skipped (checkpoint exists)${NC}"
   else
     local q1_file="$analytics_dir/dashboard_views_global.json"
     run_usage_search \
       "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count" \
       "$q1_file" \
-      "Dashboard views (global, provenance-based)" \
+      "[1/6] Dashboard views (provenance-based)" \
       3600
     save_analytics_checkpoint "dashboard_views" "$q1_file"
   fi
@@ -4574,13 +4641,13 @@ collect_app_analytics() {
   # sourcetype=audittrail + info=granted narrow at tsidx level.
   # =========================================================================
   if has_analytics_checkpoint "user_activity"; then
-    log "  [2/6] User activity — SKIP (checkpoint exists)"
+    echo -e "    ${DIM}[2/6] User activity — skipped (checkpoint exists)${NC}"
   else
     local q2_file="$analytics_dir/user_activity_global.json"
     run_usage_search \
       "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" user!=\"nobody\" earliest=-${USAGE_PERIOD} | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user | sort -searches" \
       "$q2_file" \
-      "User activity (global)" \
+      "[2/6] User activity" \
       3600
     save_analytics_checkpoint "user_activity" "$q2_file"
   fi
@@ -4592,13 +4659,13 @@ collect_app_analytics() {
   # sourcetype=audittrail + info=granted narrow at tsidx level.
   # =========================================================================
   if has_analytics_checkpoint "search_patterns"; then
-    log "  [3/6] Search patterns — SKIP (checkpoint exists)"
+    echo -e "    ${DIM}[3/6] Search patterns — skipped (checkpoint exists)${NC}"
   else
     local q3_file="$analytics_dir/search_patterns_global.json"
     run_usage_search \
       "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | eval search_type=case(match(provenance, \"^UI:[Dd]ashboard:\"), \"dashboard\", match(search_id, \"^(rt_)?scheduler__\"), \"scheduled\", match(savedsearch_name, \"^_ACCELERATE_\"), \"acceleration\", match(search_id, \"^SummaryDirector_\"), \"summarization\", isnotnull(provenance) AND match(provenance, \"^UI:\"), \"interactive\", 1=1, \"other\") | stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type | sort -total_searches" \
       "$q3_file" \
-      "Search type breakdown (global)" \
+      "[3/6] Search type breakdown" \
       1800
     save_analytics_checkpoint "search_patterns" "$q3_file"
   fi
@@ -4608,14 +4675,14 @@ collect_app_analytics() {
   # Critical for Dynatrace Grail storage planning and cost estimation.
   # =========================================================================
   if has_analytics_checkpoint "index_volume"; then
-    log "  [4/6] Index volume — SKIP (checkpoint exists)"
+    echo -e "    ${DIM}[4/6] Index volume — skipped (checkpoint exists)${NC}"
   else
     local q4_file="$analytics_dir/index_volume_summary.json"
     if [ "$SKIP_INTERNAL" != "true" ]; then
       run_usage_search \
         "search index=_internal source=*license_usage.log type=Usage earliest=-${USAGE_PERIOD} | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/${usage_days}, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event" \
         "$q4_file" \
-        "Daily ingestion volume (license_usage.log)" \
+        "[4/6] Index volume (license_usage.log)" \
         600
       save_analytics_checkpoint "index_volume" "$q4_file"
     else
@@ -4629,14 +4696,14 @@ collect_app_analytics() {
   # Shows which saved searches/alerts are actively running and their status.
   # =========================================================================
   if has_analytics_checkpoint "alert_firing"; then
-    log "  [5/6] Alert firing — SKIP (checkpoint exists)"
+    echo -e "    ${DIM}[5/6] Alert firing — skipped (checkpoint exists)${NC}"
   else
     local q5_file="$analytics_dir/alert_firing_global.json"
     if [ "$SKIP_INTERNAL" != "true" ]; then
       run_usage_search \
         "search index=_internal sourcetype=scheduler ${app_filter} earliest=-${USAGE_PERIOD} | fields _time, app, savedsearch_name, status | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
         "$q5_file" \
-        "Alert firing stats (global)" \
+        "[5/6] Alert firing stats" \
         3600
       save_analytics_checkpoint "alert_firing" "$q5_file"
     else
@@ -4650,7 +4717,7 @@ collect_app_analytics() {
   # This is the only per-app query remaining — it uses | rest which is quick.
   # =========================================================================
   if has_analytics_checkpoint "alerts_inventory"; then
-    log "  [6/6] Alerts inventory — SKIP (checkpoint exists)"
+    echo -e "    ${DIM}[6/6] Alerts inventory — skipped (checkpoint exists)${NC}"
   else
     local q6_count=0
     for app in "${SELECTED_APPS[@]}"; do
