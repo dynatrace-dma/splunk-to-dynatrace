@@ -4,88 +4,184 @@
 
 This document defines the **guaranteed output schema** for all DMA Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DMA can reliably parse them.
 
-> **Applies to all export scripts:**
-> - `dma-splunk-export.sh` (Enterprise, Bash, v4.4.0)
-> - `dma-splunk-cloud-export_beta.sh` (Cloud, Bash, v4.5.8)
-> - `dma-splunk-cloud-export.ps1` (Cloud, PowerShell, v4.5.8)
+> **Applies to all export scripts (v4.6.0):**
+> - `dma-splunk-export.sh` (Enterprise, Bash)
+> - `dma-splunk-cloud-export.sh` (Cloud, Bash)
+> - `dma-splunk-cloud-export.ps1` (Cloud, PowerShell)
 
 ---
 
 ## Archive Structure
 
-Every export produces a `.tar.gz` archive with this **exact** structure:
+Every export produces a `.tar.gz` archive with this **exact** structure. When anonymization is enabled, a second `_masked.tar.gz` archive is also created.
+
+### Enterprise Export
 
 ```
 dma_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
-│
-├── manifest.json                    # REQUIRED - Export metadata
-├── _anonymization_report.json       # OPTIONAL - Only present if anonymization enabled
-├── dma-env-summary.md        # REQUIRED - Human-readable summary
-├── export.log                       # REQUIRED - Export process log
-│
-├── _systeminfo/                     # REQUIRED - System information
-│   ├── environment.json             # REQUIRED - Standardized env info
-│   ├── splunk.version               # OPTIONAL - Raw Splunk version file
-│   ├── server_info.json             # OPTIONAL - REST API server info
-│   ├── installed_apps.json          # OPTIONAL - All installed apps
-│   ├── search_peers.json            # OPTIONAL - Distributed search peers
-│   └── license_info.json            # OPTIONAL - License information
-│
-├── _rbac/                           # OPTIONAL - User/role data
-│   ├── users.json                   # User list
-│   ├── roles.json                   # Role definitions
-│   ├── authentication.conf          # Auth config (passwords redacted)
-│   └── authorize.conf               # Authorization config
-│
-├── _indexes/                        # OPTIONAL - Index information
-│   ├── indexes.conf                 # Index definitions
-│   ├── indexes_detailed.json        # REST API index details
-│   └── data_inputs.json             # Data input configurations
-│
-├── _usage_analytics/                # OPTIONAL - Usage data
-│   ├── recent_searches.json         # Search job history
-│   ├── saved_searches_all.json      # All saved searches
-│   ├── kvstore_stats.json           # KV Store statistics
-│   └── server_status.json           # Server status
-│
-├── _system/                         # OPTIONAL - System-level configs
-│   └── local/
-│       ├── inputs.conf
-│       ├── outputs.conf
-│       └── server.conf
-│
-├── _audit_sample/                   # OPTIONAL - Audit log sample
-│   └── audit_sample.log
-│
-└── <app_name>/                      # One directory per exported app
-    ├── dashboards/                  # v2 app-centric structure (v4.2.0+)
-    │   ├── classic/                 # Classic XML dashboards for this app
-    │   │   └── *.xml
-    │   └── studio/                  # Dashboard Studio JSON for this app
-    │       └── *.json
-    ├── default/
-    │   ├── props.conf
-    │   ├── transforms.conf
-    │   ├── eventtypes.conf
-    │   ├── tags.conf
-    │   ├── indexes.conf
-    │   ├── macros.conf
-    │   ├── savedsearches.conf
-    │   ├── inputs.conf
-    │   ├── outputs.conf
-    │   ├── collections.conf
-    │   ├── fields.conf
-    │   ├── workflow_actions.conf
-    │   ├── commands.conf
-    │   └── data/
-    │       └── ui/
-    │           └── views/           # Legacy location (v1 archives only)
-    │               └── *.xml
-    ├── local/
-    │   └── (same structure as default/)
-    └── lookups/                     # OPTIONAL
-        └── *.csv
+|
++-- manifest.json                          # REQUIRED - Export metadata & statistics
++-- _anonymization_report.json             # OPTIONAL - Only in _masked archive
++-- dma-env-summary.md                     # REQUIRED - Human-readable summary
++-- export.log                             # REQUIRED - Export process log
+|
++-- dma_analytics/                         # REQUIRED - All DMA-generated analytics
+|   +-- system_info/                       # REQUIRED - System information
+|   |   +-- environment.json               # REQUIRED - Standardized env info
+|   |   +-- splunk.version                 # OPTIONAL - Raw Splunk version file
+|   |   +-- server_info.json               # OPTIONAL - REST /services/server/info
+|   |   +-- installed_apps.json            # OPTIONAL - REST /services/apps/local
+|   |   +-- search_peers.json              # OPTIONAL - REST distributed search peers
+|   |   +-- license_info.json              # OPTIONAL - REST licenser/licenses
+|   |
+|   +-- rbac/                              # OPTIONAL - User/role data
+|   |   +-- users.json                     # REST /services/authentication/users
+|   |   +-- users_active_in_apps.json      # OPTIONAL - Scoped mode: users with activity
+|   |   +-- roles.json                     # REST /services/authorization/roles
+|   |
+|   +-- indexes/                           # OPTIONAL - Index information
+|   |   +-- indexes.conf                   # System indexes.conf from filesystem
+|   |   +-- indexes_detailed.json          # REST /services/data/indexes
+|   |   +-- data_inputs.json               # REST /services/data/inputs/all
+|   |
+|   +-- usage_analytics/                   # OPTIONAL - Usage analytics data
+|   |   +-- dashboard_views_global.json    # Dashboard views by app (provenance-based)
+|   |   +-- user_activity_global.json      # User activity per app
+|   |   +-- search_patterns_global.json    # Search type breakdown per app
+|   |   +-- index_volume_summary.json      # Per-index daily ingestion (GB)
+|   |   +-- index_event_counts_daily.json  # Event counts per index per day (tstats)
+|   |   +-- alert_firing_global.json       # Alert execution stats per app
+|   |   +-- dashboard_ownership.json       # Dashboard -> owner mapping (REST)
+|   |   +-- alert_ownership.json           # Alert -> owner mapping (REST)
+|   |   +-- ownership_summary.json         # Ownership counts by user
+|   |   +-- saved_searches_all.json        # All saved searches metadata (REST)
+|   |   +-- recent_searches.json           # Recent search jobs (REST)
+|   |   +-- kvstore_stats.json             # KV Store statistics (REST)
+|   |   +-- USAGE_INTELLIGENCE_SUMMARY.md  # Human-readable migration guide
+|   |
+|   +-- index_stats.json                   # OPTIONAL - Legacy index stats
+|
++-- _system/                               # OPTIONAL - System-level configs
+|   +-- local/
+|       +-- inputs.conf
+|       +-- outputs.conf
+|       +-- server.conf
+|       +-- macros.conf                    # System-level macros
+|
++-- <app_name>/                            # One directory per exported app
+    +-- dashboards/                        # v2 app-centric structure (v4.2.0+)
+    |   +-- classic/                       # Classic XML dashboards for this app
+    |   |   +-- *.xml
+    |   +-- studio/                        # Dashboard Studio JSON for this app
+    |       +-- *.json
+    +-- default/                           # Filesystem configs from $SPLUNK_HOME/etc/apps/<app>/default/
+    |   +-- props.conf
+    |   +-- transforms.conf
+    |   +-- eventtypes.conf
+    |   +-- tags.conf
+    |   +-- indexes.conf
+    |   +-- macros.conf
+    |   +-- savedsearches.conf
+    |   +-- inputs.conf
+    |   +-- outputs.conf
+    |   +-- collections.conf
+    |   +-- fields.conf
+    |   +-- workflow_actions.conf
+    |   +-- commands.conf
+    |   +-- data/
+    |       +-- ui/
+    |           +-- views/                 # Legacy dashboard location (filesystem)
+    |               +-- *.xml
+    +-- local/                             # Filesystem configs from $SPLUNK_HOME/etc/apps/<app>/local/
+    |   +-- (same structure as default/)
+    +-- metadata/                          # OPTIONAL - App metadata
+    |   +-- default.meta
+    |   +-- local.meta
+    +-- lookups/                           # OPTIONAL - Lookup table files
+        +-- *.csv
 ```
+
+### Cloud Export
+
+Cloud exports use REST API JSON responses instead of filesystem `.conf` files. Knowledge objects are stored as JSON at the app root level rather than in `default/` and `local/` subdirectories.
+
+```
+dma_cloud_export_<stack>_<YYYYMMDD_HHMMSS>.tar.gz
+|
++-- manifest.json                          # REQUIRED - Export metadata & statistics
++-- _anonymization_report.json             # OPTIONAL - Only in _masked archive
++-- dma-env-summary.md                     # REQUIRED - Human-readable summary
++-- _export.log                            # REQUIRED - Export process log
+|
++-- dma_analytics/                         # REQUIRED - All DMA-generated analytics
+|   +-- system_info/                       # REQUIRED - System information
+|   |   +-- environment.json               # REQUIRED - Standardized env info
+|   |   +-- server_info.json               # OPTIONAL - REST /services/server/info
+|   |   +-- installed_apps.json            # OPTIONAL - REST /services/apps/local
+|   |   +-- license_info.json              # OPTIONAL - REST licenser/licenses
+|   |   +-- server_settings.json           # OPTIONAL - REST /services/server/settings
+|   |   +-- all_dashboards.json            # OPTIONAL - Master dashboard list from REST
+|   |
+|   +-- rbac/                              # OPTIONAL - User/role data
+|   |   +-- users.json                     # REST /services/authentication/users
+|   |   +-- users_active_in_apps.json      # OPTIONAL - Scoped mode: users with activity
+|   |   +-- roles.json                     # REST /services/authorization/roles
+|   |
+|   +-- indexes/                           # OPTIONAL - Index information
+|   |   +-- indexes.json                   # REST /services/data/indexes
+|   |   +-- indexes_extended.json          # OPTIONAL - REST /services/data/indexes-extended
+|   |   +-- indexes_used_by_apps.json      # OPTIONAL - Scoped mode: indexes per app
+|   |
+|   +-- usage_analytics/                   # OPTIONAL - Usage analytics data
+|       +-- dashboard_views_global.json    # Dashboard views by app (provenance-based)
+|       +-- user_activity_global.json      # User activity per app
+|       +-- search_patterns_global.json    # Search type breakdown per app
+|       +-- index_volume_summary.json      # Per-index daily ingestion (GB)
+|       +-- index_event_counts_daily.json  # Event counts per index per day (tstats)
+|       +-- alert_firing_global.json       # Alert execution stats per app
+|       +-- dashboard_ownership.json       # Dashboard -> owner mapping (REST)
+|       +-- alert_ownership.json           # Alert -> owner mapping (REST)
+|       +-- ownership_summary.json         # Ownership counts by user
+|       +-- saved_searches_all.json        # All saved searches metadata (REST)
+|       +-- recent_searches.json           # Recent search jobs (REST)
+|       +-- kvstore_stats.json             # KV Store statistics (REST)
+|       +-- USAGE_INTELLIGENCE_SUMMARY.md  # Human-readable migration guide
+|
++-- _configs/                              # OPTIONAL - Global system configs (REST JSON)
+|   +-- indexes.json                       # Global indexes config
+|   +-- inputs.json                        # Global inputs config
+|   +-- outputs.json                       # Global outputs config
+|
++-- <app_name>/                            # One directory per exported app
+    +-- dashboards/                        # v2 app-centric structure (v4.2.0+)
+    |   +-- classic/                       # Classic XML dashboards (saved as JSON from REST)
+    |   |   +-- *.json
+    |   +-- studio/                        # Dashboard Studio JSON for this app
+    |       +-- *.json
+    +-- savedsearches.json                 # Saved searches for this app (REST, filtered by acl.app)
+    +-- props.json                         # Props config for this app (REST)
+    +-- transforms.json                    # Transforms config for this app (REST)
+    +-- macros.json                        # Macros for this app (REST)
+    +-- eventtypes.json                    # Event types for this app (REST)
+    +-- tags.json                          # Tags for this app (REST)
+    +-- field_extractions.json             # Field extractions for this app (REST)
+    +-- inputs.json                        # Data inputs for this app (REST)
+    +-- lookups.json                       # Lookup table metadata (REST)
+    +-- splunk-analysis/                   # OPTIONAL - Per-app analytics
+        +-- alerts_inventory.json          # Alerts inventory for this app (REST)
+```
+
+### Key Differences: Enterprise vs Cloud
+
+| Aspect | Enterprise | Cloud |
+|--------|-----------|-------|
+| Config format | `.conf` files (INI) from filesystem | `.json` files from REST API |
+| Config location | `<app>/default/` and `<app>/local/` | `<app>/` (flat, single JSON per type) |
+| Dashboard format | Classic: `.xml`, Studio: `.json` | Both stored as `.json` from REST |
+| System configs | `_system/local/*.conf` from filesystem | `_configs/*.json` from REST |
+| Log file name | `export.log` | `_export.log` |
+| Search peers | Collected (distributed search) | Not applicable (cloud) |
+| Filesystem access | Direct file copy | REST API only |
 
 ---
 
@@ -93,148 +189,124 @@ dma_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz
 
 Understanding the origin of each file helps distinguish between **raw Splunk data** and **DMA-generated migration intelligence**.
 
-### Category 1: Script-Generated Analytics (DMA Migration Intelligence)
+### Category 1: Global Analytics (SPL Search Queries)
 
-These files are **created by the export script** by running SPL queries against Splunk's internal indexes (`_audit`, `_internal`). They provide migration-specific insights that don't exist natively in Splunk.
+These files are generated by running SPL queries against Splunk's internal indexes (`_audit`, `_internal`). In v4.6.0, these are **6 global aggregate queries** with `by app` grouping, replacing the previous per-app query model.
 
-| Directory | File | Purpose | SPL Query Source |
-|-----------|------|---------|------------------|
-| `_usage_analytics/` | `dashboard_views_top100.json` | Prioritize high-value dashboards | `index=_audit action=search search_type=dashboard` |
-| `_usage_analytics/` | `dashboards_never_viewed.json` | Identify elimination candidates | `index=_audit` + REST comparison |
-| `_usage_analytics/` | `users_most_active.json` | Identify stakeholders | `index=_audit action=search` |
-| `_usage_analytics/` | `users_inactive.json` | Skip inactive user content | `index=_audit` with time filter |
-| `_usage_analytics/` | `alerts_most_fired.json` | Critical alerts to migrate | `index=_internal sourcetype=scheduler` |
-| `_usage_analytics/` | `alerts_never_fired.json` | Elimination candidates | `index=_internal` + REST comparison |
-| `_usage_analytics/` | `alerts_failed.json` | Broken alerts to fix/skip | `index=_internal status=failed` |
-| `_usage_analytics/` | `alerts_with_actions.json` | Alerts with triggered actions | `index=_internal alert_actions!=''` |
-| `_usage_analytics/` | `alert_firing_trend.json` | Alert activity trends | `index=_internal sourcetype=scheduler` |
-| `_usage_analytics/` | `sourcetypes_searched.json` | Data sources actually used | `index=_audit` with rex extraction |
-| `_usage_analytics/` | `indexes_queried.json` | Which indexes matter | `index=_audit` with rex extraction |
-| `_usage_analytics/` | `indexes_searched.json` | Most searched indexes | `index=_audit action=search` |
-| `_usage_analytics/` | `index_sizes.json` | Capacity planning | `| dbinspect` or REST |
-| `_usage_analytics/` | `daily_volume_by_index.json` | Daily ingestion by index | `index=_internal` metrics |
-| `_usage_analytics/` | `daily_volume_by_sourcetype.json` | Daily ingestion by sourcetype | `index=_internal` metrics |
-| `_usage_analytics/` | `daily_volume_summary.json` | Overall volume metrics | `index=_internal` aggregation |
-| `_usage_analytics/` | `daily_events_by_index.json` | Event counts by index | `index=_internal` metrics |
-| `_usage_analytics/` | `hourly_volume_pattern.json` | Peak hour identification | `index=_internal` timechart |
-| `_usage_analytics/` | `top_indexes_by_volume.json` | High-volume index focus | `index=_internal` stats |
-| `_usage_analytics/` | `top_sourcetypes_by_volume.json` | High-volume sourcetype focus | `index=_internal` stats |
-| `_usage_analytics/` | `top_hosts_by_volume.json` | Host-level volume analysis | `index=_internal` stats |
-| `_usage_analytics/` | `search_commands_popular.json` | Popular SPL commands | `index=_audit` with rex extraction |
-| `_usage_analytics/` | `search_by_type.json` | Searches by type | `index=_audit` stats |
-| `_usage_analytics/` | `searches_slow.json` | Performance concerns | `index=_audit` with runtime filter |
-| `_usage_analytics/` | `daily_active_users.json` | User engagement trends | `index=_audit` timechart |
-| `_usage_analytics/` | `activity_by_role.json` | Activity by role | `index=_audit` by roles |
-| `_usage_analytics/` | `dashboard_ownership.json` | Dashboard → owner mapping | REST `/servicesNS/-/-/data/ui/views` |
-| `_usage_analytics/` | `alert_ownership.json` | Alert → owner mapping | REST `/servicesNS/-/-/saved/searches` |
-| `_usage_analytics/` | `ownership_summary.json` | Ownership by user | Aggregation of ownership data |
-| `_usage_analytics/` | `saved_searches_all.json` | All saved searches metadata | REST `/servicesNS/-/-/saved/searches` |
-| `_usage_analytics/` | `recent_searches.json` | Recent search jobs | REST `/services/search/jobs` |
-| `_usage_analytics/` | `kvstore_stats.json` | KV Store statistics | REST `/services/kvstore/status` |
-| `_usage_analytics/` | `scheduler_load.json` | Alert/report load | `index=_internal sourcetype=scheduler` |
-| `_usage_analytics/ingestion_infrastructure/` | `by_connection_type.json` | Ingestion by connection | `index=_internal` metrics |
-| `_usage_analytics/ingestion_infrastructure/` | `by_input_method.json` | Ingestion by input type | `index=_internal` metrics |
-| `_usage_analytics/ingestion_infrastructure/` | `hec_usage.json` | HEC usage metrics | `index=_internal` HEC stats |
-| `_usage_analytics/ingestion_infrastructure/` | `forwarding_hosts.json` | Forwarder host list | `index=_internal` host stats |
-| `_usage_analytics/ingestion_infrastructure/` | `by_sourcetype_category.json` | Sourcetype categories | `index=_internal` stats |
-| `_usage_analytics/ingestion_infrastructure/` | `data_inputs_by_app.json` | Inputs by app | `index=_internal` stats |
-| `_usage_analytics/ingestion_infrastructure/` | `syslog_inputs.json` | Syslog input metrics | `index=_internal` syslog stats |
-| `_usage_analytics/ingestion_infrastructure/` | `scripted_inputs.json` | Scripted input metrics | `index=_internal` script stats |
-| `_usage_analytics/ingestion_infrastructure/` | `summary.json` | Ingestion summary | Aggregation |
-| Root | `manifest.json` | Master manifest with stats | Script-generated metadata |
-| `_systeminfo/` | `environment.json` | Script-detected environment | Script environment detection |
+| File | SPL Source | Purpose |
+|------|-----------|---------|
+| `dashboard_views_global.json` | `index=_audit provenance="UI:Dashboard:*"` with view_session de-duplication | Dashboard usage ranked by views per app |
+| `user_activity_global.json` | `index=_audit action=search` stats by app, user | User search activity per app |
+| `search_patterns_global.json` | `index=_audit action=search` with provenance-based type classification | Search type breakdown (dashboard/scheduled/ad-hoc/other) |
+| `index_volume_summary.json` | `index=_internal source=*license_usage.log type=Usage` | Per-index daily ingestion volume in GB |
+| `index_event_counts_daily.json` | `\| tstats count where index=* by index, _time span=1d` | Daily event counts per index (tstats fallback) |
+| `alert_firing_global.json` | `index=_internal sourcetype=scheduler` stats by app, savedsearch_name | Alert execution counts and success/failure rates |
 
-**Total: ~45 script-generated files** providing migration intelligence
+### Category 2: REST API Metadata
 
-### Category 2: Raw Splunk API Exports (Direct Splunk Data)
+These files are collected directly from Splunk REST APIs. They provide metadata used for ownership mapping, search inventories, and supplementary intelligence.
 
-These files are **direct dumps from Splunk REST APIs** - essentially reformatted native Splunk data structures with minimal transformation.
+| File | REST API Source | Purpose |
+|------|----------------|---------|
+| `dashboard_ownership.json` | `GET /servicesNS/-/-/data/ui/views` | Dashboard-to-owner mapping |
+| `alert_ownership.json` | `GET /servicesNS/-/-/saved/searches` | Alert-to-owner mapping |
+| `ownership_summary.json` | Computed from ownership data | Owner counts for dashboards and alerts |
+| `saved_searches_all.json` | `GET /servicesNS/-/-/saved/searches` (metadata fields only) | All saved search metadata |
+| `recent_searches.json` | `GET /services/search/jobs` | Recent search job list |
+| `kvstore_stats.json` | `GET /services/kvstore/status` | KV Store status |
 
-| Directory | File | Splunk REST API Source | Purpose |
-|-----------|------|------------------------|---------|
-| `_systeminfo/` | `server_info.json` | `GET /services/server/info` | Splunk version, platform |
-| `_systeminfo/` | `installed_apps.json` | `GET /services/apps/local` | App inventory |
-| `_systeminfo/` | `search_peers.json` | `GET /services/search/distributed/peers` | Distributed search topology |
-| `_systeminfo/` | `license_info.json` | `GET /services/licenser/licenses` | License details |
-| `_rbac/` | `users.json` | `GET /services/authentication/users` | User accounts |
-| `_rbac/` | `roles.json` | `GET /services/authorization/roles` | Role definitions |
-| `_indexes/` | `indexes_detailed.json` | `GET /services/data/indexes` | Index configurations |
-| `_indexes/` | `data_inputs.json` | `GET /services/data/inputs/all` | Data input definitions |
-| `<app>/dashboards/studio/` | `{dashboard_name}.json` | `GET /servicesNS/{owner}/{app}/data/ui/views/{name}` | Dashboard Studio JSON (v2 structure) |
-| `<app>/dashboards/classic/` | `{dashboard_name}.xml` | `GET /servicesNS/{owner}/{app}/data/ui/views/{name}` | Classic XML dashboards (v2 structure) |
+### Category 3: System Information (REST API)
 
-**Total: ~10 base files + N dashboard files** (direct Splunk exports)
+| File | REST API Source | Purpose |
+|------|----------------|---------|
+| `environment.json` | Script-detected | Hostname, platform, Splunk version |
+| `server_info.json` | `GET /services/server/info` | Splunk server details |
+| `installed_apps.json` | `GET /services/apps/local` | App inventory |
+| `search_peers.json` | `GET /services/search/distributed/peers` | Distributed search topology (Enterprise only) |
+| `license_info.json` | `GET /services/licenser/licenses` | License details |
+| `server_settings.json` | `GET /services/server/settings` | Server settings (Cloud only) |
 
-### Category 3: Raw File System Exports (Splunk Configuration Files)
+### Category 4: RBAC Data (REST API)
 
-These are **direct copies** of Splunk configuration files from the file system (`$SPLUNK_HOME/etc/`).
+| File | REST API Source | Purpose |
+|------|----------------|---------|
+| `users.json` | `GET /services/authentication/users` | User accounts |
+| `users_active_in_apps.json` | SPL query on `_audit` (scoped mode only) | Users with activity in selected apps |
+| `roles.json` | `GET /services/authorization/roles` | Role definitions |
 
-| Directory | Files | Source Location |
-|-----------|-------|-----------------|
-| `<app_name>/default/` | `*.conf` files | `$SPLUNK_HOME/etc/apps/<app>/default/` |
-| `<app_name>/local/` | `*.conf` files | `$SPLUNK_HOME/etc/apps/<app>/local/` |
-| `<app_name>/default/data/ui/views/` | `*.xml` dashboards | Classic SimpleXML dashboards |
-| `<app_name>/lookups/` | `*.csv` files | Lookup table data |
-| `_system/local/` | `inputs.conf`, `outputs.conf`, etc. | `$SPLUNK_HOME/etc/system/local/` |
-| `_rbac/` | `authentication.conf`, `authorize.conf` | System auth configs |
-| `_indexes/` | `indexes.conf` | Index definitions |
+### Category 5: Index Data
 
-### Summary: File Source Distribution
+| File | Source | Purpose |
+|------|--------|---------|
+| `indexes.conf` | Filesystem (Enterprise) | Index definitions from config |
+| `indexes.json` | REST `/services/data/indexes` (Cloud) | Index configurations |
+| `indexes_detailed.json` | REST `/services/data/indexes` (Enterprise) | Detailed index info |
+| `indexes_extended.json` | REST `/services/data/indexes-extended` (Cloud) | Extended index stats |
+| `data_inputs.json` | REST `/services/data/inputs/all` (Enterprise) | Data input configurations |
 
-| Category | Files | Purpose |
-|----------|-------|---------|
-| **Script-Generated Analytics** | ~45 | Migration intelligence (prioritization, elimination candidates, usage patterns) |
-| **Raw API Exports** | ~10 + dashboards | Direct Splunk data structures |
-| **Raw File Exports** | Variable (per app) | Configuration files copied from disk |
+### Category 6: App Knowledge Objects
 
-### Why This Matters
+**Enterprise** (filesystem `.conf` files):
 
-1. **Script-Generated Analytics** = **Unique DMA Value**
-   - These don't exist in Splunk natively
-   - Enable data-driven migration prioritization
-   - Identify what to migrate vs. eliminate
+| Directory | Files | Source |
+|-----------|-------|--------|
+| `<app>/default/` | `props.conf`, `transforms.conf`, `eventtypes.conf`, `tags.conf`, `macros.conf`, `savedsearches.conf`, `inputs.conf`, `outputs.conf`, `collections.conf`, `fields.conf`, `workflow_actions.conf`, `commands.conf`, `indexes.conf` | `$SPLUNK_HOME/etc/apps/<app>/default/` |
+| `<app>/local/` | Same as default/ | `$SPLUNK_HOME/etc/apps/<app>/local/` |
+| `<app>/lookups/` | `*.csv` | Lookup table data files |
+| `<app>/metadata/` | `default.meta`, `local.meta` | App metadata (export scope) |
 
-2. **Raw Exports** = **Source of Truth**
-   - Exact representation of Splunk configurations
-   - Required for accurate conversion to Dynatrace
-   - No transformation applied
+**Cloud** (REST API JSON, filtered by `acl.app`):
+
+| File | REST API Source |
+|------|----------------|
+| `<app>/savedsearches.json` | `GET /servicesNS/-/<app>/saved/searches` |
+| `<app>/props.json` | `GET /servicesNS/-/<app>/configs/conf-props` |
+| `<app>/transforms.json` | `GET /servicesNS/-/<app>/configs/conf-transforms` |
+| `<app>/macros.json` | `GET /servicesNS/-/<app>/admin/macros` |
+| `<app>/eventtypes.json` | `GET /servicesNS/-/<app>/saved/eventtypes` |
+| `<app>/tags.json` | `GET /servicesNS/-/<app>/configs/conf-tags` |
+| `<app>/field_extractions.json` | `GET /servicesNS/-/<app>/data/transforms/extractions` |
+| `<app>/inputs.json` | `GET /servicesNS/-/<app>/data/inputs/all` |
+| `<app>/lookups.json` | `GET /servicesNS/-/<app>/data/lookup-table-files` |
 
 ---
 
 ## manifest.json (REQUIRED)
 
-Every export MUST include a `manifest.json` at the root with this exact schema:
+Every export MUST include a `manifest.json` at the root. The schema is the same for both Enterprise and Cloud exports.
 
 ```json
 {
   "schema_version": "4.0",
-  "export_tool": "dma-splunk-export",
-  "export_tool_version": "4.0.0",
-  "export_timestamp": "2025-12-03T14:25:30Z",
+  "archive_structure_version": "v2",
+  "export_tool": "dma-splunk-cloud-export",
+  "export_tool_version": "4.6.0",
+  "export_timestamp": "2026-03-15T14:25:30Z",
   "export_duration_seconds": 847,
 
+  "archive_structure": {
+    "version": "v2",
+    "description": "App-centric dashboard organization prevents name collisions",
+    "dashboard_location": "{AppName}/dashboards/classic/ and {AppName}/dashboards/studio/"
+  },
+
   "source": {
-    "hostname": "splunk-sh01.example.com",
-    "fqdn": "splunk-sh01.example.com",
-    "ip_addresses": ["10.0.1.50", "192.168.1.50"],
-    "platform": "Linux",
-    "platform_version": "5.4.0-150-generic",
-    "architecture": "x86_64"
+    "hostname": "mystack.splunkcloud.com",
+    "fqdn": "mystack.splunkcloud.com",
+    "platform": "Splunk Cloud",
+    "platform_version": "victoria"
   },
 
   "splunk": {
-    "home": "/opt/splunk",
-    "version": "9.1.3",
-    "build": "d95b3299fa65",
-    "flavor": "enterprise",
+    "home": "cloud",
+    "version": "9.2.2403.100",
+    "build": "cloud",
+    "flavor": "cloud",
     "role": "search_head",
-    "architecture": "distributed",
-    "is_shc_member": true,
-    "is_shc_captain": false,
-    "is_idx_cluster": true,
-    "is_cloud": false,
-    "license_type": "enterprise",
-    "license_quota_gb": 500
+    "architecture": "cloud",
+    "is_cloud": true,
+    "cloud_type": "victoria",
+    "server_guid": "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
   },
 
   "collection": {
@@ -243,10 +315,9 @@ Every export MUST include a `manifest.json` at the root with this exact schema:
     "alerts": true,
     "rbac": true,
     "usage_analytics": true,
-    "usage_period": "7d",
+    "usage_period": "30d",
     "indexes": true,
     "lookups": false,
-    "audit_sample": false,
     "data_anonymized": false
   },
 
@@ -258,170 +329,103 @@ Every export MUST include a `manifest.json` at the root with this exact schema:
     "alerts": 156,
     "saved_searches": 523,
     "users": 87,
-    "roles": 23,
+    "roles": 0,
     "indexes": 45,
-    "data_inputs": 234,
-    "lookups": 0,
-    "macros": 178,
-    "eventtypes": 45,
-    "props_stanzas": 892,
-    "transforms_stanzas": 234,
-    "errors": 3,
-    "warnings": 12
+    "api_calls_made": 1247,
+    "rate_limit_hits": 3,
+    "errors": 2,
+    "warnings": 8,
+    "total_files": 1247,
+    "total_size_bytes": 48923847
   },
 
   "apps": [
     {
       "name": "security_app",
-      "label": "Security Operations",
-      "version": "2.3.1",
       "dashboards": 87,
+      "dashboards_classic": 45,
+      "dashboards_studio": 42,
       "alerts": 45,
-      "saved_searches": 123,
-      "has_props": true,
-      "has_transforms": true,
-      "has_lookups": false
+      "saved_searches": 123
     },
     {
       "name": "ops_monitoring",
-      "label": "Operations Monitoring",
-      "version": "1.5.0",
       "dashboards": 45,
+      "dashboards_classic": 30,
+      "dashboards_studio": 15,
       "alerts": 23,
-      "saved_searches": 67,
-      "has_props": true,
-      "has_transforms": false,
-      "has_lookups": true
+      "saved_searches": 67
     }
   ],
-
-  "indexes_summary": [
-    {
-      "name": "main",
-      "size_mb": 125000,
-      "event_count": 45000000,
-      "earliest_time": "2024-01-01T00:00:00Z",
-      "latest_time": "2025-12-03T14:00:00Z"
-    },
-    {
-      "name": "security",
-      "size_mb": 89000,
-      "event_count": 23000000,
-      "earliest_time": "2024-06-01T00:00:00Z",
-      "latest_time": "2025-12-03T14:00:00Z"
-    }
-  ],
-
-  "data_sources_summary": [
-    {
-      "sourcetype": "access_combined",
-      "index": "web",
-      "estimated_eps": 5000,
-      "sample_count": 1000000
-    },
-    {
-      "sourcetype": "syslog",
-      "index": "main",
-      "estimated_eps": 12000,
-      "sample_count": 5000000
-    }
-  ],
-
-  "checksums": {
-    "algorithm": "sha256",
-    "manifest": "a1b2c3d4...",
-    "total_files": 1247,
-    "total_size_bytes": 48923847
-  },
 
   "usage_intelligence": {
-    "summary": {
-      "dashboards_never_viewed": 45,
-      "alerts_never_fired": 23,
-      "users_inactive_30d": 12,
-      "alerts_with_failures": 8
-    },
     "prioritization": {
       "top_dashboards": [
-        {"dashboard": "security_overview", "app": "security_app", "views": 15234},
-        {"dashboard": "ops_dashboard", "app": "ops_monitoring", "views": 8901}
-      ],
-      "top_users": [
-        {"user": "admin", "searches": 45123, "last_active": "2025-12-03"},
-        {"user": "analyst1", "searches": 23456, "last_active": "2025-12-02"}
+        {"app": "security_app", "dashboard_name": "security_overview", "view_count": "15234", "unique_users": "45"}
       ],
       "top_alerts": [
-        {"alert": "critical_error_alert", "app": "security_app", "executions": 8923},
-        {"alert": "disk_space_warning", "app": "ops_monitoring", "executions": 5634}
+        {"app": "security_app", "savedsearch_name": "critical_error_alert", "total_runs": "8923", "successful": "8900"}
       ],
-      "top_sourcetypes": [
-        {"sourcetype": "access_combined", "searches": 12345},
-        {"sourcetype": "syslog", "searches": 9876}
-      ],
-      "top_indexes": [
-        {"index": "main", "searches": 34567},
-        {"index": "security", "searches": 23456}
+      "top_users": [
+        {"app": "security_app", "user": "analyst1", "searches": "23456", "last_active": "1711929600"}
       ]
     },
     "volume": {
-      "avg_daily_gb": 125.5,
-      "peak_daily_gb": 189.2,
-      "total_30d_gb": 3765.0,
-      "top_indexes_by_volume": [
-        {"idx": "main", "daily_avg_gb": 45.2},
-        {"idx": "security", "daily_avg_gb": 32.1}
+      "index_volume": [
+        {"index_name": "main", "total_gb": "125.50", "daily_avg_gb": "4.18", "sourcetype_count": "23"}
       ],
-      "top_sourcetypes_by_volume": [
-        {"st": "access_combined", "daily_avg_gb": 28.5},
-        {"st": "syslog", "daily_avg_gb": 22.3}
+      "index_events": [
+        {"index_name": "main", "count": "45000000", "_time": "2026-03-15T00:00:00.000+00:00"}
       ],
-      "top_hosts_by_volume": [
-        {"h": "webserver01", "daily_avg_gb": 5.2},
-        {"h": "appserver01", "daily_avg_gb": 4.8}
-      ],
-      "note": "See _usage_analytics/daily_volume_*.json for full daily breakdown"
+      "note": "See index_volume_summary.json for per-index daily ingestion"
     },
-    "elimination_candidates": {
-      "dashboards_never_viewed_count": 45,
-      "alerts_never_fired_count": 23,
-      "note": "See _usage_analytics/ for full lists of candidates"
-    },
-    "ownership": {
-      "dashboard_owners": 45,
-      "alert_owners": 32,
-      "top_owners": [
-        {"owner": "admin", "dashboards": 87, "alerts": 45},
-        {"owner": "analyst1", "dashboards": 34, "alerts": 23},
-        {"owner": "security_team", "dashboards": 28, "alerts": 18}
-      ],
-      "note": "See _usage_analytics/dashboard_ownership.json and alert_ownership.json for complete mappings"
-    }
+    "search_patterns": [
+      {"app": "security_app", "search_type": "dashboard", "total_searches": "45000", "unique_users": "32"}
+    ]
   }
 }
 ```
+
+### Manifest Field Descriptions
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `schema_version` | string | Always `"4.0"` |
+| `archive_structure_version` | string | Always `"v2"` (app-centric dashboards) |
+| `export_tool` | string | `"dma-splunk-export"` or `"dma-splunk-cloud-export"` |
+| `export_tool_version` | string | Script version (e.g., `"4.6.0"`) |
+| `export_timestamp` | ISO 8601 | When export was created |
+| `export_duration_seconds` | number | Total export time |
+| `archive_structure.version` | string | Dashboard organization version |
+| `archive_structure.dashboard_location` | string | Where dashboards live |
+| `source.hostname` | string | Machine hostname or cloud stack name |
+| `splunk.version` | string | Splunk version |
+| `splunk.flavor` | string | `"enterprise"`, `"cloud"`, or `"uf"` |
+| `splunk.is_cloud` | boolean | Whether this is Splunk Cloud |
+| `collection.*` | boolean | Which data categories were collected |
+| `collection.usage_period` | string | Analytics time range (e.g., `"30d"`) |
+| `statistics.*` | number | Counts of collected objects |
+| `apps` | array | Per-app breakdown of dashboards, alerts, saved searches |
+| `usage_intelligence` | object | Programmatic access to analytics for migration prioritization |
 
 ---
 
 ## environment.json (REQUIRED)
 
-Located at `_systeminfo/environment.json`:
+Located at `dma_analytics/system_info/environment.json`:
 
 ```json
 {
   "hostname": "splunk-sh01",
-  "fqdn": "splunk-sh01.example.com",
   "platform": "Linux",
-  "platform_version": "5.4.0-150-generic",
+  "platformVersion": "5.4.0-150-generic",
   "architecture": "x86_64",
-  "splunk_home": "/opt/splunk",
-  "splunk_flavor": "enterprise",
-  "splunk_role": "search_head",
-  "splunk_architecture": "distributed",
-  "splunk_version": "9.1.3",
-  "export_timestamp": "2025-12-03T14:25:30Z",
-  "export_version": "4.0.0",
-  "timezone": "UTC",
-  "locale": "en_US.UTF-8"
+  "splunkHome": "/opt/splunk",
+  "splunkFlavor": "enterprise",
+  "splunkRole": "search_head",
+  "splunkArchitecture": "distributed",
+  "exportTimestamp": "2026-03-15T14:25:30Z",
+  "exportVersion": "4.6.0"
 }
 ```
 
@@ -429,7 +433,7 @@ Located at `_systeminfo/environment.json`:
 
 ## _anonymization_report.json (OPTIONAL)
 
-This file is **only present when data anonymization is enabled** (Option 9 in Enterprise, Option 8 in Cloud). It documents the anonymization process and serves as a receipt confirming the export has been sanitized.
+This file is **only present when data anonymization is enabled**. It documents the anonymization process and serves as a receipt confirming the export has been sanitized.
 
 ### Two-Archive Approach (v4.2.4+)
 
@@ -452,7 +456,7 @@ The `_anonymization_report.json` file is **only present in the `_masked` archive
 ```json
 {
   "anonymization_applied": true,
-  "timestamp": "2025-12-10T15:30:45Z",
+  "timestamp": "2026-03-15T15:30:45Z",
   "statistics": {
     "files_processed": 847,
     "unique_emails_anonymized": 156,
@@ -460,105 +464,66 @@ The `_anonymization_report.json` file is **only present in the `_masked` archive
     "ip_addresses": "all_redacted"
   },
   "transformations": {
-    "emails": "original@domain.com → user######@anon.dma.local",
-    "hostnames": "server.example.com → host-########.anon.local",
-    "ipv4": "x.x.x.x → [IP-REDACTED]",
-    "ipv6": "xxxx:xxxx:... → [IPv6-REDACTED]"
+    "emails": "original@domain.com -> user######@anon.dma.local",
+    "hostnames": "server.example.com -> host-########.anon.local",
+    "ipv4": "x.x.x.x -> [IP-REDACTED]",
+    "ipv6": "xxxx:xxxx:... -> [IPv6-REDACTED]"
   },
   "note": "This export has been anonymized. Original values cannot be recovered from this data."
 }
 ```
 
-### Field Descriptions
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `anonymization_applied` | boolean | Always `true` when this file exists |
-| `timestamp` | ISO 8601 | When anonymization was performed |
-| `statistics.files_processed` | number | Total text files scanned |
-| `statistics.unique_emails_anonymized` | number | Unique email addresses replaced |
-| `statistics.unique_hosts_anonymized` | number | Unique hostnames replaced |
-| `statistics.ip_addresses` | string | Always "all_redacted" |
-| `transformations` | object | Example mappings showing the pattern used |
-| `note` | string | Warning about irreversibility |
-
 ### Key Properties
 
-- **Consistent Mapping**: The same original email/hostname always produces the same anonymized value (hash-based)
-- **Irreversible**: SHA-256 hashing means originals cannot be recovered
-- **Preserved Relationships**: Data relationships remain intact (e.g., all references to `server-01` become the same anonymized value)
+- **Consistent Mapping**: The same original email/hostname always produces the same anonymized value (SHA-256 hash-based)
+- **Irreversible**: Hashing means originals cannot be recovered
+- **Preserved Relationships**: Data relationships remain intact (all references to `server-01` become the same anonymized value)
 - **Selective Preservation**: `localhost` and `127.0.0.1` are NOT anonymized
 
 ### When to Expect This File
 
-- ✅ Present when user selects anonymization option
-- ❌ Absent when anonymization is not selected
-- Check `manifest.json.collection.data_anonymized` to programmatically detect
+- Present when user selects anonymization option
+- Absent when anonymization is not selected
+- Check `manifest.json` > `collection.data_anonymized` to programmatically detect
 
 ---
 
-## usage_intelligence (OPTIONAL)
+## Usage Analytics (v4.6.0)
 
-The `usage_intelligence` section in `manifest.json` provides programmatic access to usage analytics for migration prioritization. This data is only available if usage collection was enabled during export.
+### Architecture Change in v4.6.0
 
-### Purpose
+Previous versions ran **per-app analytics queries** (N apps x 7 queries = potentially thousands of search jobs). v4.6.0 replaces this with **6 global aggregate queries** that include `by app` grouping. The DMA Curator server splits results into per-app views after import.
 
-This section helps answer critical migration questions:
-- **What should we migrate first?** → `prioritization.top_*` arrays
-- **What can we skip?** → `elimination_candidates.*` counts
-- **Where are the active users?** → `prioritization.top_users`
-- **Which data sources matter?** → `prioritization.top_sourcetypes/indexes`
-- **How much data per day?** → `volume.avg_daily_gb`, `volume.peak_daily_gb`
-- **What are the biggest data sources?** → `volume.top_*_by_volume` arrays
-- **Who owns what?** → `ownership.*` for user-centric migration
+### Global Analytics Files
 
-### Schema
+All 6 files are located in `dma_analytics/usage_analytics/`:
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `summary.dashboards_never_viewed` | number | Count of dashboards with zero views in 30d |
-| `summary.alerts_never_fired` | number | Count of alerts that never executed in 30d |
-| `summary.users_inactive_30d` | number | Count of users with no activity in 30d |
-| `summary.alerts_with_failures` | number | Count of alerts with execution failures |
-| `volume.avg_daily_gb` | number | Average daily ingestion volume in GB |
-| `volume.peak_daily_gb` | number | Peak daily ingestion volume in GB |
-| `volume.total_30d_gb` | number | Total ingestion volume over 30 days in GB |
-| `volume.top_indexes_by_volume` | array | Top 10 indexes by daily average volume |
-| `volume.top_sourcetypes_by_volume` | array | Top 10 sourcetypes by daily average volume |
-| `volume.top_hosts_by_volume` | array | Top 10 hosts by daily average volume |
-| `prioritization.top_dashboards` | array | Top 10 most viewed dashboards |
-| `prioritization.top_users` | array | Top 10 most active users |
-| `prioritization.top_alerts` | array | Top 10 most fired alerts |
-| `prioritization.top_sourcetypes` | array | Top 10 most searched sourcetypes |
-| `prioritization.top_indexes` | array | Top 10 most queried indexes |
-| `elimination_candidates.note` | string | Reference to full data in `_usage_analytics/` |
-| `ownership.dashboard_owners` | number | Count of unique dashboard owners |
-| `ownership.alert_owners` | number | Count of unique alert owners |
-| `ownership.top_owners` | array | Top owners with dashboard and alert counts |
-| `ownership.note` | string | Reference to ownership files in `_usage_analytics/` |
+| File | Query Type | Key Fields | Use For |
+|------|-----------|------------|---------|
+| `dashboard_views_global.json` | `_audit` with provenance | `app`, `dashboard_name`, `view_count`, `unique_users`, `viewers`, `last_viewed` | Migration prioritization by dashboard usage |
+| `user_activity_global.json` | `_audit` action=search | `app`, `user`, `searches`, `unique_searches`, `last_active` | Stakeholder identification and training planning |
+| `search_patterns_global.json` | `_audit` with type classification | `app`, `search_type`, `total_searches`, `unique_users`, `unique_searches` | Workload characterization (dashboard/scheduled/ad-hoc/other) |
+| `index_volume_summary.json` | `_internal` license_usage.log | `index_name`, `total_bytes`, `total_gb`, `daily_avg_gb`, `sourcetype_count`, `host_count` | Dynatrace Grail storage planning and cost estimation |
+| `index_event_counts_daily.json` | `\| tstats` (works without _internal) | `index_name`, `count`, `_time` | Volume trending and event rate estimation |
+| `alert_firing_global.json` | `_internal` sourcetype=scheduler | `app`, `savedsearch_name`, `total_runs`, `successful`, `skipped`, `failed`, `last_run` | Critical alert identification and health assessment |
 
-### Volume Files Reference
+### Supplementary Metadata Files
 
-| File | Content | Use For |
-|------|---------|---------|
-| `daily_volume_by_index.json` | Daily GB by index (30 days) | Capacity planning by index |
-| `daily_volume_by_sourcetype.json` | Daily GB by sourcetype (30 days) | Capacity planning by data type |
-| `daily_volume_summary.json` | Avg, peak, total volume | License planning |
-| `daily_events_by_index.json` | Daily event counts by index | Event rate estimation |
-| `hourly_volume_pattern.json` | Volume by hour (7 days) | Peak hour identification |
-| `top_indexes_by_volume.json` | Top 20 indexes by daily avg | High-volume index focus |
-| `top_sourcetypes_by_volume.json` | Top 20 sourcetypes by daily avg | High-volume sourcetype focus |
-| `top_hosts_by_volume.json` | Top 50 hosts by daily avg | Host-level volume analysis |
+Also in `dma_analytics/usage_analytics/`:
 
-### Ownership Files Reference
+| File | Source | Use For |
+|------|--------|---------|
+| `dashboard_ownership.json` | REST API | Dashboard-to-owner mapping for user-centric migration |
+| `alert_ownership.json` | REST API | Alert-to-owner mapping for user-centric migration |
+| `ownership_summary.json` | Computed | Owner counts for dashboards and alerts |
+| `saved_searches_all.json` | REST API (metadata fields only) | Saved search inventory without full SPL |
+| `recent_searches.json` | REST API | Recent search job list |
+| `kvstore_stats.json` | REST API | KV Store status and statistics |
+| `USAGE_INTELLIGENCE_SUMMARY.md` | Generated | Human-readable migration guide |
 
-| File | Content | Use For |
-|------|---------|---------|
-| `dashboard_ownership.json` | All dashboards with owner, app, sharing | Show users their own dashboards |
-| `alert_ownership.json` | All alerts with owner, app, sharing, schedule | Show users their own alerts |
-| `ownership_summary.json` | Owners with dashboard and alert counts | Identify major content creators |
+### Ownership Files
 
-**Example dashboard_ownership.json:**
+**dashboard_ownership.json example:**
 ```json
 {
   "results": [
@@ -570,23 +535,38 @@ This section helps answer critical migration questions:
 ```
 
 **Use Case - User-Centric Migration:**
-When a user logs into Dynatrace, show them only their Splunk dashboards:
 ```typescript
 // Filter dashboards for current user
 const userDashboards = ownership.results.filter(d => d.owner === currentUser);
 ```
 
+### Per-App Analytics (Cloud)
+
+In Cloud exports, each app directory may contain a `splunk-analysis/` subdirectory with:
+
+| File | Purpose |
+|------|---------|
+| `alerts_inventory.json` | Scheduled alerts and their configuration for this app (via `\| rest` command) |
+
+### v4.6.0 Key Improvements
+
+- **Dashboard views use the `provenance` field** (not `search_type=dashboard` which was unreliable)
+- **View session de-duplication**: Counts page loads (30s window), not individual panel searches
+- **Global aggregate queries**: 6 queries total instead of N x 7 per-app queries
+- **Async search dispatch**: Searches can run up to 1 hour (was limited to 5 minutes with `exec_mode=blocking`)
+- **Never-viewed dashboards**: Computed by the Curator from dashboard list + view data (no slow `| rest + | join`)
+
 ### Migration Decision Matrix
 
 ```
                     HIGH USAGE                    LOW USAGE
-                ┌─────────────────────────┬─────────────────────────┐
-   HIGH VALUE   │ ★ MIGRATE FIRST         │ Review with stakeholders│
-                │ Top dashboards, alerts  │ May have seasonal use   │
-                ├─────────────────────────┼─────────────────────────┤
-   LOW VALUE    │ Consider migrating      │ ✗ ELIMINATE             │
-                │ Users depend on these   │ Never viewed/fired      │
-                └─────────────────────────┴─────────────────────────┘
+                +-------------------------+-------------------------+
+   HIGH VALUE   | MIGRATE FIRST           | Review with stakeholders|
+                | Top dashboards, alerts  | May have seasonal use   |
+                +-------------------------+-------------------------+
+   LOW VALUE    | Consider migrating      | ELIMINATE               |
+                | Users depend on these   | Never viewed/fired      |
+                +-------------------------+-------------------------+
 ```
 
 ---
@@ -594,6 +574,8 @@ const userDashboards = ownership.results.filter(d => d.owner === currentUser);
 ## Guaranteed Fields by Category
 
 ### Apps (per app directory)
+
+**Enterprise (.conf files):**
 
 | File | Guaranteed Fields | Notes |
 |------|-------------------|-------|
@@ -604,7 +586,22 @@ const userDashboards = ownership.results.filter(d => d.owner === currentUser);
 | `eventtypes.conf` | `[eventtype_name]`, `search` | Event classifications |
 | `tags.conf` | `[source/sourcetype/eventtype]`, `tag=value` | Tags |
 
-### Dashboard XML (Classic)
+**Cloud (.json files):**
+
+All REST API JSON responses follow Splunk's standard envelope format:
+```json
+{
+  "entry": [
+    {
+      "name": "stanza_name",
+      "acl": {"app": "app_name", "owner": "admin", "sharing": "app"},
+      "content": { ... }
+    }
+  ]
+}
+```
+
+### Dashboard XML (Classic - Enterprise)
 
 All dashboard XML files must be valid Splunk SimpleXML:
 
@@ -648,15 +645,15 @@ DMA validates exports against these rules:
 
 ### MUST Have (Export Fails Without These)
 1. `manifest.json` exists and is valid JSON
-2. `manifest.json.schema_version` is "3.1" or higher
-3. `_systeminfo/environment.json` exists
-4. At least one of: apps directory OR `_systeminfo/` content
+2. `manifest.json` > `schema_version` is `"3.1"` or higher
+3. `dma_analytics/system_info/environment.json` exists
+4. At least one of: app directories OR `dma_analytics/` content
 
 ### SHOULD Have (Warnings If Missing)
-1. `export.log` for troubleshooting
+1. Export log (`export.log` or `_export.log`) for troubleshooting
 2. `dma-env-summary.md` for human review
-3. `manifest.json.statistics` section populated
-4. `manifest.json.usage_intelligence` section (for migration prioritization)
+3. `manifest.json` > `statistics` section populated
+4. `manifest.json` > `usage_intelligence` section (for migration prioritization)
 
 ### Data Quality Checks
 1. All `.conf` files are valid INI format
@@ -673,19 +670,27 @@ When data is unavailable (no REST API access, permissions, etc.):
 
 1. **Directory still created** but empty or with placeholder
 2. **manifest.json** reflects actual collection status
-3. **Warning logged** to `export.log`
+3. **Warning logged** to export log
 
 Example for missing RBAC:
 ```json
 {
   "collection": {
-    "rbac": false,
-    "rbac_skip_reason": "REST API authentication failed"
+    "rbac": false
   },
   "statistics": {
     "users": 0,
     "roles": 0
   }
+}
+```
+
+Example for scoped mode placeholder:
+```json
+{
+  "scoped": true,
+  "reason": "App-scoped mode - only indexes used by selected apps collected",
+  "apps": ["security_app", "ops_monitoring"]
 }
 ```
 
@@ -695,15 +700,16 @@ Example for missing RBAC:
 
 | Schema Version | Export Tool Version | Changes |
 |----------------|---------------------|---------|
+| 4.0 | 4.6.0 | Global analytics (6 queries vs N x 7), provenance-based dashboard views, async search dispatch, view session de-duplication, simplified usage_analytics directory |
 | 4.0 | 4.2.4 | Two-archive anonymization (original + _masked), RBAC/usage OFF by default, query optimizations |
 | 4.0 | 4.2.0 | App-centric dashboard structure (v2): `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/` |
 | 4.0 | 4.1.0 | App-scoped export mode (`--apps`, `--scoped`, `--quick`), debug mode |
 | 4.0 | 4.0.2 | Auto-fix for CRLF line endings (Windows download compatibility) |
 | 4.0 | 4.0.1 | Container-friendly progress display (newlines at 5% intervals for kubectl/docker exec) |
 | 4.0 | 4.0.0 | Enterprise resilience: paginated APIs, checkpoints, extended timeouts, timing stats |
-| 3.4 | 3.4.0 | Added ownership mapping for user-centric migration (dashboard_ownership.json, alert_ownership.json) |
+| 3.4 | 3.4.0 | Added ownership mapping (dashboard_ownership.json, alert_ownership.json) |
 | 3.3 | 3.3.0 | Added daily volume analysis and volume section to usage_intelligence |
-| 3.2 | 3.2.0 | Added usage_intelligence to manifest.json for programmatic migration prioritization |
+| 3.2 | 3.2.0 | Added usage_intelligence to manifest.json |
 | 3.1 | 3.1.0 | Added progress tracking, histograms, timing |
 | 3.0 | 3.0.0 | Initial standardized schema |
 
@@ -714,20 +720,21 @@ Example for missing RBAC:
 The smallest valid export contains:
 
 ```
-dma_export_splunk01_20251203_142530.tar.gz
-├── manifest.json
-├── _systeminfo/
-│   └── environment.json
-└── (empty or minimal app content)
+dma_export_splunk01_20260315_142530.tar.gz
++-- manifest.json
++-- dma_analytics/
+    +-- system_info/
+        +-- environment.json
 ```
 
 With `manifest.json`:
 ```json
 {
   "schema_version": "4.0",
+  "archive_structure_version": "v2",
   "export_tool": "dma-splunk-export",
-  "export_tool_version": "4.0.0",
-  "export_timestamp": "2025-12-03T14:25:30Z",
+  "export_tool_version": "4.6.0",
+  "export_timestamp": "2026-03-15T14:25:30Z",
   "source": {
     "hostname": "splunk01"
   },
@@ -765,3 +772,4 @@ The parser handles:
 - Partial data (some apps exported, others failed)
 - Version differences (backward compatible)
 - Encoding variations (UTF-8, UTF-16, etc.)
+- Both Enterprise (`.conf`) and Cloud (`.json`) formats

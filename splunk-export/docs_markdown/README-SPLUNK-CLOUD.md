@@ -1,370 +1,238 @@
-# DMA Splunk Cloud Export Script
-## Prerequisites Guide for Splunk Cloud (Classic & Victoria Experience)
+# DMA Splunk Cloud Export — Detailed Guide
 
-**Version**: 4.5.8
+**Version**: 4.6.0
 **Last Updated**: April 2026
-**Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md)
-
-### What's New in v4.5.8
-
-#### Token Authentication Fixes
-- **Auto-detect token prefix** (Bearer vs Splunk) via probe loop — tokens created via Splunk's Settings > Tokens require the `Splunk` prefix, not `Bearer`
-- `Invoke-SplunkApi` / `api_call` now uses the discovered auth header instead of hardcoding Bearer
-- Clear error messages when the token lacks permissions for `server_info` or app listing (previously showed cryptic "No applications found")
-
-#### Async Search Dispatch (replaces blocking mode)
-- `exec_mode=normal` returns the SID immediately; the script polls `dispatchState` with adaptive intervals (5s, increasing to 30s cap)
-- Maximum wait per query: 1 hour (up from 300s hard timeout in blocking mode)
-- Auto-cancels timed-out jobs to free Splunk search quota
-- `Invoke-AnalyticsSearchBlocking` preserved for fast `| rest` queries
-
-#### Global Aggregate Analytics (replaces per-app loops)
-- 6 global queries replace N x 7 per-app queries (for 90 apps: 630 jobs reduced to 6)
-- Dashboard views use `provenance` field — `search_type=dashboard` was NOT a native `_audit` field and produced unreliable results
-- View session de-duplication counts page loads (30s window per user), not individual panel searches
-- Search type breakdown derived from `provenance`/`search_id` via `eval case()`
-
-#### New CLI Flags
-| Flag (Bash / PowerShell) | Description |
-|--------------------------|-------------|
-| `--test-access` / `-TestAccess` | Pre-flight check: test API access across 9 categories, then exit (no export) |
-| `--remask FILE` / `-Remask FILE` | Re-anonymize an existing archive without connecting to Splunk |
-| `--analytics-period N` / `-AnalyticsPeriod N` | Analytics time window (default: 7d; also: 30d, 90d) |
-| `--skip-internal` / `-SkipInternal` | Skip `_audit`/`_internal` index searches for restricted accounts |
-
-#### Expanded RBAC Collection
-Now collects capabilities, SAML config, SAML groups, LDAP groups, LDAP config. All new endpoints handle 404 gracefully with placeholder JSON when SAML/LDAP is not configured.
-
-#### Progressive Analytics Checkpointing
-Each of the 6 global analytics queries saves a checkpoint on completion. If an export is interrupted and resumed, only incomplete queries are re-run.
-
-#### Default Changes
-- `USAGE_PERIOD` changed from 30d to **7d** (4x less `_audit` data to scan)
-
-### Previous v4.3.0 Changes
-
-- **Resume Collection** (`--resume-collect`): Resume interrupted exports from `.tar.gz` archive
-- **12-Hour Max Runtime**: `MAX_TOTAL_TIME=43200` (up from 4 hours)
-- **PowerShell Edition**: `dma-splunk-cloud-export.ps1` with zero external dependencies
-- **Proxy Support** (`--proxy` / `-Proxy`): Route all connections through corporate proxy
-
-### Previous v4.2.4 Changes
-
-- **Two-Archive Anonymization**: Original + `_masked` copy for safe sharing
-- **RBAC/Usage OFF by default**: Use `--rbac` / `--usage` to enable
-- **Faster defaults**: Batch size 250, API delay 50ms
-
-### Previous v4.2.0 Changes
-
-- **App-Centric Dashboard Structure (v2)**: `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/`
-- **Manifest Schema v4.0**: `archive_structure_version: "v2"`
-
----
+**Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | [Export Schema](EXPORT-SCHEMA.md)
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
 > *An ACE Services Division of Dynatrace*
 
 ---
 
-## Quick Start
+## Table of Contents
 
-```bash
-# This script runs from YOUR machine (not on Splunk Cloud)
-# You need network access to your Splunk Cloud instance
-
-./dma-splunk-cloud-export.sh
-```
-
-### Quick Start (PowerShell - Windows)
-
-```powershell
-# This script runs from YOUR Windows machine (not on Splunk Cloud)
-.\dma-splunk-cloud-export.ps1
-
-# Non-interactive with token
-.\dma-splunk-cloud-export.ps1 -Stack "acme-corp.splunkcloud.com" -Token "your-token"
-```
-
----
-
-## How This Differs from Enterprise Export
-
-| Aspect | Enterprise Script | Cloud Script (Bash) | Cloud Script (PowerShell) |
-|--------|------------------|-------------------------|---------------------------|
-| **Where you run it** | ON the Splunk server | ANYWHERE (your laptop, jump host) | ANYWHERE (Windows machine) |
-| **Access method** | SSH + File system | REST API only | REST API only |
-| **What you need** | SSH access + splunk user | Network access + API credentials | Network access + API credentials |
-| **File reading** | Reads props.conf, etc. | Reconstructs from REST API | Reconstructs from REST API |
-| **Dependencies** | bash, tar | bash, curl, Python 3 | PowerShell 5.1+ only (zero external deps) |
+- [What's New in v4.6.0](#whats-new-in-v460)
+- [Previous Version Changes](#previous-version-changes)
+- [Scripts Overview](#scripts-overview)
+- [Prerequisites](#prerequisites)
+- [Required Permissions (CRITICAL)](#required-permissions-critical)
+- [Token Creation Walkthrough](#token-creation-walkthrough)
+- [Connectivity Verification](#connectivity-verification)
+- [Test Access (Pre-Flight Check)](#test-access-pre-flight-check)
+- [Running the Export](#running-the-export)
+- [Command-Line Reference](#command-line-reference)
+- [Interactive vs Non-Interactive Mode](#interactive-vs-non-interactive-mode)
+- [What Is Collected](#what-is-collected)
+- [Data Anonymization and Archives](#data-anonymization-and-archives)
+- [Resume Collection](#resume-collection)
+- [Re-Anonymize an Existing Archive](#re-anonymize-an-existing-archive)
+- [Proxy Support](#proxy-support)
+- [Debug Mode](#debug-mode)
+- [Enterprise Resilience Configuration](#enterprise-resilience-configuration)
+- [Troubleshooting](#troubleshooting)
+- [Security Best Practices](#security-best-practices)
+- [FAQ](#faq)
+- [Where to Upload the Archive](#where-to-upload-the-archive)
 
 ---
 
-## Prerequisites Checklist
+## What's New in v4.6.0
 
-### 1. Network Access
+### Stripped Usage Queries — Global Aggregates Only
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         NETWORK REQUIREMENTS                             │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  Your machine must be able to reach:                                     │
-│                                                                          │
-│    https://<your-stack>.splunkcloud.com:8089                            │
-│                                                                          │
-│  This is the Splunk Cloud REST API management port.                     │
-│                                                                          │
-│  TEST IT:                                                                │
-│  $ curl -I https://acme-corp.splunkcloud.com:8089/services/server/info  │
-│                                                                          │
-│  If this fails, check:                                                   │
-│  • Corporate firewall rules                                              │
-│  • VPN requirements                                                      │
-│  • Splunk Cloud IP allowlist settings                                   │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+The `collect_usage_analytics` phase has been completely reworked. Detailed per-user, per-dashboard, and per-app usage queries have been **removed**. The script now collects only:
 
-### 2. Splunk Cloud Credentials
+- **Ownership data** via REST API (no search jobs) — `dashboard_ownership.json`, `alert_ownership.json`, `ownership_summary.json`
+- **REST metadata** — `saved_searches_all.json`, `recent_searches.json`, `kvstore_stats.json`
+- **Summary data** — `index_volume_summary.json`, `index_event_counts_daily.json`
 
-You need ONE of the following:
+All Explorer-facing usage data comes from the **6 global aggregate queries** in `collect_app_analytics`. These queries run once (not per-app) and produce all the usage data the DMA Explorer needs:
 
-#### Option A: API Token (Recommended)
+| File | Index | Explorer Tab |
+|------|-------|-------------|
+| `dashboard_views_global.json` | `_audit` | Dashboards — view counts per dashboard |
+| `user_activity_global.json` | `_audit` | (supplementary) — searches per user per app |
+| `search_patterns_global.json` | `_audit` | (supplementary) — search type breakdown |
+| `index_volume_summary.json` | `_internal` | Indexes — daily ingestion GB per index |
+| `index_event_counts_daily.json` | `_internal` | Indexes — event counts per index per day |
+| `alert_firing_global.json` | `_internal` | Alerts — execution stats per alert |
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      CREATING AN API TOKEN                               │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  1. Log into Splunk Cloud web UI                                        │
-│     https://your-stack.splunkcloud.com                                  │
-│                                                                          │
-│  2. Click Settings (gear icon) → Tokens                                 │
-│                                                                          │
-│  3. Click "New Token"                                                   │
-│                                                                          │
-│  4. Configure the token:                                                │
-│     • Name: DMA Export Token                                            │
-│     • Expiration: Set appropriate (e.g., 7 days)                        │
-│     • Audience: Search (if asked)                                       │
-│                                                                          │
-│  5. Copy the token value (shown only once!)                             │
-│                                                                          │
-│  6. Store it securely - you'll need it for the export script            │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+### Default Changes in v4.6.0
 
-#### Option B: Username/Password
+| Setting | Previous (v4.5.8) | New (v4.6.0) |
+|---------|-------------------|-------------|
+| `COLLECT_USAGE` | `false` (opt-in) | `true` (on by default) |
+| `USAGE_PERIOD` | `7d` | `30d` |
 
-- Your Splunk Cloud admin username and password
-- If MFA is required, you may need to create an API token instead
-
-### 3. Required Permissions (CRITICAL - READ THIS CAREFULLY)
-
-> **WARNING**: Insufficient permissions are the #1 cause of export failures. Follow this section exactly to avoid partial exports and repeated runs.
-
-The export script needs access to REST API endpoints across ALL apps in your Splunk Cloud environment. This requires a user or token with **elevated privileges** — a standard user account will NOT work.
+Usage analytics is now collected by default. Use `--no-usage` to disable.
 
 ---
 
-#### Complete Capabilities Reference
+## Previous Version Changes
 
-| Capability | Required For | What Fails Without It |
-|------------|--------------|----------------------|
-| `admin_all_objects` | **CRITICAL** | Cannot list apps, dashboards, saved searches in other apps |
-| `list_settings` | Core export | Cannot read server settings, configurations |
-| `rest_properties_get` | REST API access | API calls return 403 Forbidden |
-| `search` | Usage analytics | All `--usage` SPL queries fail |
-| `list_users` | RBAC collection | `--rbac` flag returns empty user list |
-| `list_roles` | RBAC collection | `--rbac` flag returns empty role list |
-| `list_indexes` | Index metadata | Cannot collect index information |
-| `schedule_search` | Usage analytics | Some scheduled search queries fail |
-| `list_inputs` | Data inputs | Cannot collect input configurations |
-| `list_forwarders` | Ingestion data | Cannot collect forwarder information |
-| `indexes_edit` | Index details | Cannot read index properties (some environments) |
-| `read_internal_indexes` | Usage analytics | Cannot query `_internal`, `_audit` indexes |
+### v4.5.8
+
+- **Auto-detect token prefix** (Bearer vs Splunk) via probe loop against `/services/authentication/current-context`
+- **Async search dispatch** (`exec_mode=normal`) replaces blocking mode — max 1 hour per query with adaptive polling (5s, increasing to 30s cap)
+- **6 global aggregate analytics** replace per-app query loops (for 90 apps: 630 jobs reduced to 6)
+- **`--test-access`** pre-flight check — tests 9 API categories, then exits without exporting
+- **`--remask FILE`** re-anonymize an existing archive without connecting to Splunk
+- **`--analytics-period N`** configurable analytics time window (7d, 30d, 90d)
+- **`--skip-internal`** skip `_audit`/`_internal` index searches for restricted accounts
+- **Expanded RBAC** — capabilities, SAML config, SAML groups, LDAP groups, LDAP config
+- **Progressive analytics checkpointing** — each of the 6 global queries saves a checkpoint on completion; interrupted exports resume mid-way
+
+### v4.3.0
+
+- **Resume Collection** (`--resume-collect`): Resume interrupted exports from `.tar.gz` archive
+- **12-Hour Max Runtime**: `MAX_TOTAL_TIME=43200` (up from 4 hours)
+- **PowerShell Edition**: `dma-splunk-cloud-export.ps1` with zero external dependencies
+- **Proxy Support** (`--proxy` / `-Proxy`): Route all connections through corporate proxy
+
+### v4.2.4
+
+- **Two-Archive Anonymization**: Original + `_masked` copy for safe sharing
+- **RBAC/Usage OFF by default**: Use `--rbac` / `--usage` to enable
+- **Faster defaults**: Batch size 250, API delay 50ms
+
+### v4.2.0
+
+- **App-Centric Dashboard Structure (v2)**: `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/`
+- **Manifest Schema v4.0**: `archive_structure_version: "v2"`
 
 ---
 
-#### Option 1: Use the `sc_admin` Role (Recommended for Splunk Cloud)
+## Scripts Overview
+
+There are **two** Cloud export scripts. Both produce the same archive format and accept the same flags (with naming conventions adjusted for PowerShell).
+
+| Script | Platform | Notes |
+|--------|----------|-------|
+| `dma-splunk-cloud-export.sh` | Bash (Linux / macOS / WSL) | Primary Cloud script. Requires curl and Python 3. |
+| `dma-splunk-cloud-export.ps1` | PowerShell 5.1+ (Windows) | Full parity with the Bash script. Zero external dependencies. |
+
+Choose whichever matches the machine you are running from. Both scripts are REST API only and can be run from any machine with network access to the Splunk Cloud management port.
+
+---
+
+## Prerequisites
+
+### Platform Requirements
+
+| Requirement | Bash Script | PowerShell Script |
+|-------------|-------------|-------------------|
+| **Platform** | Linux, macOS, or WSL | Windows 10 1803+ |
+| **Shell** | bash 3.2+ | PowerShell 5.1+ or 7+ |
+| **External dependencies** | curl, Python 3, tar | **None** (zero external deps) |
+| **Disk space** | 500 MB+ free | 500 MB+ free |
+| **Network** | HTTPS to `your-stack.splunkcloud.com:8089` | HTTPS to `your-stack.splunkcloud.com:8089` |
+| **Credentials** | API token (recommended) or username/password | API token (recommended) or username/password |
+
+### Where to Run
+
+The Cloud scripts run **anywhere** with network access to the Splunk Cloud management port (8089). They do not need to be on the Splunk infrastructure:
+
+- Your laptop
+- A jump host or bastion
+- A CI/CD runner
+- Any machine that can reach `your-stack.splunkcloud.com:8089` over HTTPS
+
+### Supported Splunk Cloud Types
+
+| Cloud Type | Supported |
+|------------|-----------|
+| Splunk Cloud Classic | Yes |
+| Splunk Cloud Victoria Experience | Yes |
+| Splunk Cloud on AWS | Yes |
+| Splunk Cloud on GCP | Yes |
+| Splunk Cloud on Azure | Yes |
+
+---
+
+## Required Permissions (CRITICAL)
+
+> **Insufficient permissions are the #1 cause of failed or incomplete exports.** Many API responses silently return empty results when permissions are missing — the export will appear to complete normally but will be missing critical data. Read this section carefully before running anything.
+
+### Recommended: Use the `sc_admin` Role
 
 Splunk Cloud provides a built-in role called `sc_admin` that has all the capabilities needed for a complete export. This is the **easiest and most reliable** approach.
 
-**Step-by-step Setup:**
+Create a user with `sc_admin`, generate an API token for that user, and use that token for the export.
 
-1. **Log into Splunk Cloud** as an admin user
-   ```
-   https://your-stack.splunkcloud.com
-   ```
+### Minimum Required Capabilities
 
-2. **Go to Settings → Access Controls → Users**
+If `sc_admin` is not available, the user's role **must** include all of the following:
 
-3. **Create a new user** (or modify an existing one):
-   - Click "New User" or select an existing user
-   - Username: `dma_export_user` (or any name)
-   - Set a strong password
-   - **Assign Roles**: Select `sc_admin`
-   - Click "Save"
+| Capability | Why It Is Required | What Fails Without It |
+|------------|-------------------|----------------------|
+| `admin_all_objects` | Read dashboards, saved searches, and alerts across **all** apps | Cannot list apps, dashboards, saved searches in other apps — export sees only assets owned by the user |
+| `list_settings` | Read server configuration and system settings | Cannot read server settings or configurations |
+| `rest_properties_get` | Execute REST API calls for configs, knowledge objects, and metadata | API calls return 403 Forbidden |
+| `search` | Run SPL search jobs (required for usage analytics against `_audit` and `_internal`) | All usage analytics queries fail |
+| `list_users` | Enumerate users and roles (required with `--rbac`) | `--rbac` returns empty user list |
+| `list_roles` | List roles and capabilities (required with `--rbac`) | `--rbac` returns empty role list |
+| `list_indexes` | Read index metadata, retention policies, and sourcetype lists | Cannot collect index information |
+| `schedule_search` | Dispatch async search jobs for analytics | Some analytics queries fail |
 
-4. **Create an API Token** for this user:
-   - Log in as the `dma_export_user`
-   - Go to Settings → Tokens
-   - Click "New Token"
-   - Name: `DMA Export Token`
-   - Expiration: 7 days (or as needed)
-   - Click "Create"
-   - **COPY THE TOKEN NOW** (it's only shown once)
+### Internal Index Access (for Usage Analytics)
 
-5. **Run the export** with this token:
-   ```bash
-   ./dma-splunk-cloud-export.sh --stack your-stack.splunkcloud.com --token "YOUR_TOKEN"
-   ```
+When usage analytics is enabled (the default in v4.6.0), the user also needs **search-time access** to these internal indexes:
 
----
+| Index | What It Provides | Without It |
+|-------|-----------------|------------|
+| `_audit` | Dashboard view counts, user activity, search patterns | No usage data — the Explorer's Dashboards, Alerts, and Indexes tabs will show zero usage |
+| `_internal` | Alert firing stats, ingestion volume per index | No alert execution data, no volume estimates for Grail planning |
 
-#### Option 2: Create a Custom Role with Minimum Required Capabilities
+> **`_audit` and `_internal` access is commonly restricted in Splunk Cloud.** This is the single most frequent reason exports appear "empty" in the DMA Explorer. If your Splunk Cloud admin cannot grant access to these indexes, use `--skip-internal` to collect what you can, but understand that usage-based prioritization data will be missing.
 
-If you cannot use `sc_admin` (e.g., due to security policies), create a custom role with exactly the capabilities needed.
+### Custom Role Setup (If Not Using sc_admin)
 
-**Step-by-step Setup:**
+1. Go to **Settings > Access Controls > Roles**
+2. Click **New Role**
+3. Name: `dma_export_role`, Default app: `search`
+4. Under **Capabilities**, enable:
 
-1. **Go to Settings → Access Controls → Roles**
-
-2. **Click "New Role"**
-
-3. **Configure the role:**
-   - Name: `dma_export_role`
-   - Default app: `search`
-
-4. **Under "Capabilities", enable ALL of the following:**
-
-   **Core Capabilities (REQUIRED):**
+   **Core (REQUIRED):**
    ```
    admin_all_objects
    list_settings
    rest_properties_get
-   rest_properties_set
    ```
 
-   **Search Capabilities (REQUIRED for --usage):**
+   **Search (REQUIRED for usage analytics):**
    ```
    search
    schedule_search
-   rtsearch
    ```
 
-   **RBAC Capabilities (REQUIRED for --rbac):**
+   **RBAC (REQUIRED for --rbac):**
    ```
    list_users
-   edit_user
    list_roles
    ```
 
-   **Index Capabilities (REQUIRED for index collection):**
+   **Indexes (REQUIRED for index collection):**
    ```
    list_indexes
-   indexes_edit
    ```
 
-   **Internal Index Access (REQUIRED for usage analytics):**
-   ```
-   list_introspection
-   ```
-
-5. **Under "Indexes searched by default", add:**
-   ```
-   _internal
-   _audit
-   _introspection
-   ```
-
-6. **Under "Indexes", set:**
-   - "Indexes searched by default": Select all indexes OR `*`
-   - "Indexes": Select all indexes OR `*`
-
+5. Under **Indexes searched by default**, add: `_internal`, `_audit`
+6. Under **Indexes**, set: Select all indexes or `*`
 7. **Inherit from**: Select `user` as the base role
+8. Click **Save**
+9. Assign this role to your export user
 
-8. **Click "Save"**
-
-9. **Assign this role to your export user** (Settings → Users → select user → add `dma_export_role`)
-
----
-
-#### Option 3: Using an Existing Admin User
-
-If your organization has an existing admin user with appropriate access, you can use those credentials directly. However, verify the user has all required capabilities first.
-
----
-
-#### Verifying Your Permissions BEFORE Running the Export
-
-Run these searches in Splunk Cloud to verify your token/user has the correct access:
-
-**1. Check your capabilities:**
-```spl
-| rest /services/authentication/current-context
-| table username, roles
-| append [| rest /services/authentication/current-context
-| mvexpand capabilities
-| stats values(capabilities) as capabilities]
-```
-
-**2. Verify you can list all apps:**
-```spl
-| rest /services/apps/local
-| stats count
-```
-Expected: Returns a count > 0 (should show all apps you have access to)
-
-**3. Verify you can access saved searches across apps:**
-```spl
-| rest /servicesNS/-/-/saved/searches
-| stats count by eai:acl.app
-```
-Expected: Returns saved searches from multiple apps
-
-**4. Verify you can query internal indexes (needed for --usage):**
-```spl
-index=_internal sourcetype=splunkd | head 1
-```
-Expected: Returns at least 1 result (not "no results found")
-
-**5. Verify you can query audit index (needed for --usage):**
-```spl
-index=_audit action=search | head 1
-```
-Expected: Returns at least 1 result
-
----
-
-#### Common Permission Errors and Solutions
-
-| Error Message | Cause | Solution |
-|---------------|-------|----------|
-| `No applications found! Cannot proceed` | User lacks `admin_all_objects` or `list_settings` | Assign `sc_admin` role or add missing capabilities |
-| `Access forbidden (403)` | User lacks `rest_properties_get` | Add capability to role |
-| `Failed to retrieve user capabilities` | Token expired or invalid | Generate a new token |
-| `0 users collected` with `--rbac` | User lacks `list_users` capability | Add `list_users` to role |
-| `0 results` from usage queries | User lacks access to `_internal`/`_audit` indexes | Add indexes to role's searchable indexes |
-| `403 on /services/authentication/users` | User cannot list other users | Add `list_users` and `edit_user` capabilities |
-| `Skipping endpoint (blocked in Cloud)` | Normal - some endpoints don't exist in Cloud | Not an error, script handles this automatically |
-
----
-
-#### Minimum Permissions Summary Table
+### Minimum Permissions Summary
 
 | Collection Type | Flag | Required Capabilities | Required Index Access |
 |----------------|------|----------------------|----------------------|
-| **Basic Export** (apps, dashboards, alerts) | (default) | `admin_all_objects`, `list_settings`, `rest_properties_get` | None |
-| **RBAC/Users** | `--rbac` | Above + `list_users`, `list_roles`, `edit_user` | None |
-| **Usage Analytics** | `--usage` | Above + `search`, `schedule_search` | `_internal`, `_audit` |
-| **Index Metadata** | (default) | Above + `list_indexes` | None |
-| **Full Export** | `--rbac --usage` | All of the above | `_internal`, `_audit` |
+| **Basic Export** (apps, dashboards, alerts, configs) | (default) | `admin_all_objects`, `list_settings`, `rest_properties_get` | None |
+| **Usage Analytics** | `--usage` (default ON) | Above + `search`, `schedule_search` | `_internal`, `_audit` |
+| **RBAC/Users** | `--rbac` | Above + `list_users`, `list_roles` | None |
+| **Index Metadata** | (default ON) | Above + `list_indexes` | None |
+| **Full Export** | `--rbac` | All of the above | `_internal`, `_audit` |
 
----
-
-#### Why Can't I Just Use My Regular User Account?
+### Why a Regular User Account Will Not Work
 
 Regular Splunk users typically:
 - Can only see their own apps and objects (not `admin_all_objects`)
@@ -372,59 +240,69 @@ Regular Splunk users typically:
 - Cannot query `_internal` or `_audit` indexes
 - Cannot access REST endpoints for system configuration
 
-The export script needs to see **everything** in your Splunk environment to provide a complete migration assessment. This requires admin-level access.
+The export script needs to see **everything** in your Splunk environment to provide a complete migration assessment.
 
 ---
 
-#### Checking Your Permissions (Quick Test)
+## Token Creation Walkthrough
 
-Before running the full export, test your credentials:
+### Option A: API Token (Recommended)
 
-```bash
-# Test if you can reach the API and list apps
-curl -s -k -H "Authorization: Bearer YOUR_TOKEN" \
-  "https://your-stack.splunkcloud.com:8089/services/apps/local?output_mode=json&count=0" \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print(f'Apps found: {len(d.get(\"entry\",[]))}')"
-```
+1. **Log into Splunk Cloud** as an admin user:
+   ```
+   https://your-stack.splunkcloud.com
+   ```
 
-Expected output: `Apps found: 42` (some number > 0)
+2. **Create a dedicated export user** (or use an existing admin):
+   - Go to **Settings > Access Controls > Users**
+   - Click **New User**
+   - Username: `dma_export_user` (or any name)
+   - Set a strong password
+   - **Assign Roles**: Select `sc_admin` (or your custom `dma_export_role`)
+   - Click **Save**
 
-If you see `Apps found: 0` or an error, your token lacks the required permissions.
+3. **Log in as the export user**, then go to **Settings > Tokens**
 
-### 4. Local Machine Requirements
+4. Click **New Token**:
+   - Name: `DMA Export Token`
+   - Expiration: 7 days (or as appropriate)
+   - Click **Create**
+   - **COPY THE TOKEN IMMEDIATELY** — it is only shown once
 
-| Requirement | Purpose | Check Command |
-|-------------|---------|---------------|
-| `bash` 4.0+ | Script execution | `bash --version` |
-| `curl` | REST API calls | `curl --version` |
-| `Python 3` | JSON parsing | `python3 --version` |
-| Disk space | Store export | 500MB+ free |
+5. **Store the token securely** — you will pass it to the export script via `--token` or an environment variable
 
-#### PowerShell Edition Requirements
+### Option B: Username/Password
 
-| Requirement | Purpose | Check Command |
-|-------------|---------|---------------|
-| PowerShell 5.1+ or 7+ | Script execution | `$PSVersionTable.PSVersion` |
-| Windows 10 1803+ | Built-in tar.exe | `tar --version` |
-| Network access | REST API calls | Port 8089 to Splunk Cloud |
-| No external dependencies | Pure PowerShell | No Python, curl, or jq needed |
+If token creation is not available, you can authenticate with username and password directly. However:
+- If MFA is enabled, you may need to use a token instead
+- Tokens are preferred because they can be scoped and expired independently
+
+### Token Authentication: Bearer vs Splunk Prefix
+
+Splunk Cloud uses two different authorization header formats depending on how the token was created:
+
+| Token Type | Header Format |
+|-----------|---------------|
+| Tokens from **Settings > Tokens** (UI) | `Authorization: Splunk <token>` |
+| JWT / OAuth2 tokens | `Authorization: Bearer <token>` |
+
+You do **not** need to know which format your token uses. The script probes `/services/authentication/current-context` with both `Bearer` and `Splunk` prefixes and automatically uses whichever succeeds. If neither works, authentication has failed (wrong token, expired, or revoked).
 
 ---
 
-## Splunk Cloud Stack URL
+## Connectivity Verification
+
+Before running the export, verify you can reach the Splunk Cloud REST API management port.
 
 ### Finding Your Stack URL
 
-Your Splunk Cloud stack URL is the address you use to access Splunk Cloud:
+Your Splunk Cloud stack URL is the address you use to access the Splunk Cloud web UI:
 
 ```
 https://<stack-name>.splunkcloud.com
 ```
 
-**Examples**:
-- `https://acme-corp.splunkcloud.com`
-- `https://mycompany-prod.splunkcloud.com`
-- `https://enterprise1.splunkcloud.com`
+Examples: `acme-corp.splunkcloud.com`, `mycompany-prod.splunkcloud.com`
 
 ### Testing Connectivity
 
@@ -432,217 +310,418 @@ https://<stack-name>.splunkcloud.com
 # Test if you can reach the REST API
 curl -I "https://your-stack.splunkcloud.com:8089/services/server/info"
 
-# Expected: HTTP/2 401 (Unauthorized - but reachable)
+# Expected: HTTP/2 401 (Unauthorized but reachable)
 # If you get connection refused or timeout, check network/firewall
 ```
 
----
+```powershell
+# PowerShell equivalent
+try {
+    Invoke-WebRequest -Uri "https://your-stack.splunkcloud.com:8089/services/server/info" -Method Head
+} catch {
+    $_.Exception.Response.StatusCode  # Should be 401 (Unauthorized)
+}
+```
 
-## Supported Splunk Cloud Types
+### If Connectivity Fails
 
-| Cloud Type | Supported | Notes |
-|------------|-----------|-------|
-| Splunk Cloud Classic | ✅ Yes | Legacy multi-tenant |
-| Splunk Cloud Victoria Experience | ✅ Yes | Current default |
-| Splunk Cloud on AWS | ✅ Yes | Single-tenant |
-| Splunk Cloud on GCP | ✅ Yes | Single-tenant |
-| Splunk Cloud on Azure | ✅ Yes | Single-tenant |
+- **Corporate firewall**: Confirm outbound HTTPS to port 8089 is allowed
+- **VPN**: Some organizations require VPN for Splunk Cloud API access
+- **IP allowlist**: Some Splunk Cloud instances require your source IP to be allowlisted — check with your Splunk Cloud admin
+- **Proxy**: If you need a proxy, use `--proxy` (see [Proxy Support](#proxy-support))
 
----
+### Adding Your IP to the Allowlist (If Required)
 
-## What Data Can Be Collected
-
-### ✅ Fully Available via REST API
-
-| Data Type | REST Endpoint | Notes |
-|-----------|---------------|-------|
-| Dashboards | `/data/ui/views` | Classic + Dashboard Studio |
-| Saved Searches | `/saved/searches` | Includes alerts, reports |
-| Users | `/authentication/users` | Full user list |
-| Roles | `/authorization/roles` | With capabilities |
-| Macros | `/admin/macros` | All search macros |
-| Eventtypes | `/saved/eventtypes` | Event classifications |
-| Tags | `/configs/conf-tags` | Tag assignments |
-| Lookup Definitions | `/data/lookup-table-files` | File metadata |
-| Lookup Contents | Download via REST | CSV data |
-| Field Extractions | `/data/transforms/extractions` | Regex extractions |
-| Apps List | `/apps/local` | Installed apps |
-| Index Settings | `/data/indexes` | Index configuration |
-
-### ⚠️ Partially Available
-
-| Data Type | Limitation | Workaround |
-|-----------|------------|------------|
-| Props.conf | No file access | Reconstructed from `/configs/conf-props` |
-| Transforms.conf | No file access | Reconstructed from `/configs/conf-transforms` |
-| Usage Analytics | Requires search | Run searches on `_audit` index |
-| Index Sizes | Limited stats | Best-effort from API |
-
-### ❌ Not Available
-
-| Data Type | Why | Impact |
-|-----------|-----|--------|
-| Raw config files | No file system | Use REST reconstruction |
-| $SPLUNK_HOME access | Cloud infrastructure | N/A |
-| Audit.log file | No file system | Use `_audit` index search |
-| License file | Cloud-managed | N/A |
-| Deployment apps | Cloud-managed | N/A |
+1. Find your public IP: `curl ifconfig.me`
+2. Ask your Splunk Cloud admin to add it to the IP allowlist for port 8089
 
 ---
 
-## IP Allowlisting (If Required)
+## Test Access (Pre-Flight Check)
 
-Some Splunk Cloud instances require IP allowlisting for API access:
+**Always run `--test-access` before a full export.** This pre-flight check tests 9 API categories and reports exactly what will and will not work — without writing any export data or creating search jobs.
 
-### Check If Required
-
-Contact your Splunk Cloud admin or check:
-- Splunk Cloud Admin Config (if you have access)
-- Cloud Stack settings
-
-### Adding Your IP
-
-1. Log into Splunk Cloud Admin Config
-2. Go to IP Allowlist settings
-3. Add your machine's public IP:
-   ```bash
-   # Find your public IP
-   curl ifconfig.me
-   ```
-4. Allow port 8089 (REST API)
-
----
-
-## Running the Script
-
-### Basic Usage
+### Running the Test
 
 ```bash
-# Make executable
+# Bash
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN" \
+  --test-access
+```
+
+```powershell
+# PowerShell
+.\dma-splunk-cloud-export.ps1 `
+  -Stack "acme-corp.splunkcloud.com" `
+  -Token $TOKEN `
+  -TestAccess
+```
+
+To also test usage analytics and RBAC access, add those flags:
+
+```bash
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN" \
+  --usage --rbac \
+  --test-access
+```
+
+### Example Output
+
+```
+  +----------------------------------+--------+--------------------+
+  |            ACCESS TEST RESULTS                                 |
+  +----------------------------------+--------+--------------------+
+  | Category                         | Status | Detail             |
+  +----------------------------------+--------+--------------------+
+  | System Info                      |  PASS  | Splunk v9.3.2411   |
+  | Configurations (indexes)         |  PASS  | 12 entries         |
+  | Dashboards (myapp)               |  PASS  | 47 found           |
+  | Saved Searches / Alerts (myapp)  |  PASS  | 83 found           |
+  | RBAC (users/roles)               |  PASS  | 24 users, 8 roles  |
+  | Knowledge Objects (myapp)        |  PASS  | macros, props, ... |
+  | App Analytics (_audit)           |  PASS  | 3 result(s)        |
+  | Usage Analytics (_internal)      |  FAIL  | _internal denied   |
+  | Indexes                          |  PASS  | 12 found           |
+  +----------------------------------+--------+--------------------+
+```
+
+### How to Read the Results
+
+- **PASS** — This category will collect data normally.
+- **FAIL** on `_audit` or `_internal` — Usage analytics will be incomplete. Ask your Splunk admin to grant search access to these indexes, or accept the gap.
+- **FAIL** on `Dashboards` or `Saved Searches` — The user likely lacks `admin_all_objects`. This is a **critical** problem — the export will be mostly empty.
+- **SKIP** — The category was not requested (e.g., RBAC shows SKIP if you did not pass `--rbac`).
+
+> **If `--test-access` shows FAIL on Dashboards, Saved Searches, or System Info, stop and fix permissions before proceeding.** Running a full export with these failures will produce an archive the DMA Server cannot use.
+
+### Verifying Permissions via SPL (Alternative)
+
+You can also verify permissions directly in the Splunk Cloud search bar:
+
+```spl
+| rest /services/authentication/current-context
+| table username, roles
+```
+
+```spl
+| rest /services/apps/local | stats count
+```
+
+```spl
+| rest /servicesNS/-/-/saved/searches | stats count by eai:acl.app
+```
+
+```spl
+index=_audit action=search | head 1
+```
+
+```spl
+index=_internal sourcetype=splunkd | head 1
+```
+
+---
+
+## Running the Export
+
+### Quick Start (Bash)
+
+```bash
+# Make executable (first time only)
 chmod +x dma-splunk-cloud-export.sh
 
-# Run interactively
+# Interactive mode — prompts for everything
 ./dma-splunk-cloud-export.sh
+
+# Non-interactive mode — all parameters on command line
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN"
 ```
 
-### With Pre-set Values
+### Quick Start (PowerShell)
+
+```powershell
+# Interactive mode
+.\dma-splunk-cloud-export.ps1
+
+# Non-interactive mode
+.\dma-splunk-cloud-export.ps1 `
+  -Stack "acme-corp.splunkcloud.com" `
+  -Token $TOKEN
+```
+
+### Full Export with All Options
 
 ```bash
-# Set stack URL via environment
-export SPLUNK_CLOUD_STACK="acme-corp.splunkcloud.com"
-
-# Set token via environment (more secure than command line)
-export SPLUNK_CLOUD_TOKEN="your-api-token"
-
-./dma-splunk-cloud-export.sh
+# Bash — full export with RBAC, usage analytics, 30-day window
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN" \
+  --rbac \
+  --analytics-period 30d
 ```
 
-### Non-Interactive Mode (for automation)
+```powershell
+# PowerShell equivalent
+.\dma-splunk-cloud-export.ps1 `
+  -Stack "acme-corp.splunkcloud.com" `
+  -Token $TOKEN `
+  -Rbac `
+  -AnalyticsPeriod "30d"
+```
+
+### Scoped Export (Specific Apps Only)
+
+For large environments, reduce export time by targeting specific apps:
 
 ```bash
 ./dma-splunk-cloud-export.sh \
-  --stack "acme-corp.splunkcloud.com" \
-  --token "$SPLUNK_CLOUD_TOKEN" \
-  --all-apps \
-  --output /path/to/output
-```
-
----
-
-## Command-Line Arguments (Updated in v4.5.8)
-
-| Argument (Bash) | PowerShell | Description |
-|------------------|------------|-------------|
-| `--stack URL` | `-Stack URL` | Splunk Cloud stack URL |
-| `--token TOKEN` | `-Token TOKEN` | API token (recommended) |
-| `--user USER` | `-User USER` | Username (alternative to token) |
-| `--password PASS` | `-Password PASS` | Password (used with `--user`) |
-| `--apps "a,b"` | `-Apps "a,b"` | Comma-separated list of apps |
-| `--all-apps` | `-AllApps` | Export all applications (default) |
-| `--scoped` | N/A | Scope collections to selected apps only |
-| `--rbac` | `-Rbac` | Enable RBAC/user collection (OFF by default) |
-| `--usage` | `-Usage` | Enable usage analytics (OFF by default) |
-| `--analytics-period N` | `-AnalyticsPeriod N` | Analytics time window (default: 7d; e.g. 30d, 90d) |
-| `--skip-internal` | `-SkipInternal` | Skip `_audit`/`_internal` index searches |
-| `--test-access` | `-TestAccess` | Pre-flight API access check (no export) |
-| `--remask FILE` | `-Remask FILE` | Re-anonymize existing archive (no Splunk needed) |
-| `--resume-collect FILE` | `-ResumeCollect FILE` | Resume from previous .tar.gz archive |
-| `--proxy URL` | `-Proxy URL` | Route all connections through proxy |
-| `--output DIR` | `-Output DIR` | Output directory |
-| `-d, --debug` | `-Debug_Mode` | Enable verbose debug logging |
-| `--skip-anonymize` | `-SkipAnonymization` | Skip data anonymization |
-| `--help` | `-ShowHelp` | Show help message |
-
-### App-Scoped Export Mode
-
-For large Splunk Cloud environments, dramatically reduce export time by targeting specific apps:
-
-```bash
-# Scoped mode - exports app configs + only users/searches related to those apps
-./dma-splunk-cloud-export.sh \
-  --stack acme.splunkcloud.com \
+  --stack acme-corp.splunkcloud.com \
   --token "$TOKEN" \
   --apps "myapp,otherapp" \
   --scoped
 ```
 
-| Mode | What It Does | Use When |
-|------|-------------|----------|
-| `--scoped` | App configs + app-filtered users/usage | You want usage data but only for selected apps |
-| (default) | Full export of all apps + global analytics | **Recommended** - Full migration analysis |
+When `--apps` is used without `--all-apps`, the `--scoped` flag limits all collections (including analytics) to the selected apps only.
 
-### Resume Collection Mode (NEW in v4.3.0)
+---
 
-If a previous export was interrupted, timed out, or was run without certain flags (like `--rbac` or `--usage`), you can resume and complete the export without starting over.
+## Command-Line Reference
 
-The script extracts the previous archive, inspects what was already collected, skips those data types, and collects only the missing pieces. The output is a new versioned archive (e.g., `-v1`, `-v2`).
+### Connection and Authentication
 
-#### Bash Examples
+| Bash | PowerShell | Description | Default |
+|------|------------|-------------|---------|
+| `--stack URL` | `-Stack URL` | Splunk Cloud stack URL (e.g., `acme-corp.splunkcloud.com`) | (prompted) |
+| `--token TOKEN` | `-Token TOKEN` | API token for authentication (recommended) | (prompted) |
+| `--user USER` | `-User USER` | Username (alternative to token) | (prompted) |
+| `--password PASS` | `-Password PASS` | Password (used with `--user`) | (prompted) |
+| `--proxy URL` | `-Proxy URL` | Route all connections through HTTP proxy | (none) |
+
+### Scope and Data Selection
+
+| Bash | PowerShell | Description | Default |
+|------|------------|-------------|---------|
+| `--all-apps` | `-AllApps` | Export all applications | `true` |
+| `--apps "a,b,c"` | `-Apps "a,b,c"` | Export only these apps (comma-separated) | (all) |
+| `--scoped` | `-Scoped` | Scope analytics to selected apps only | `false` |
+| `--rbac` | `-Rbac` | Enable RBAC/users collection | `false` |
+| `--no-rbac` | `-NoRbac` | Disable RBAC collection (legacy flag) | (already off) |
+| `--usage` | `-Usage` | Enable usage analytics | `true` |
+| `--no-usage` | `-NoUsage` | Disable usage analytics | (already on) |
+| `--analytics-period N` | `-AnalyticsPeriod N` | Analytics time window (e.g., `7d`, `30d`, `90d`) | `30d` |
+| `--skip-internal` | `-SkipInternal` | Skip `_audit`/`_internal` index searches | `false` |
+| `--output DIR` | `-Output DIR` | Output directory for the export | `.` (current dir) |
+
+### Special Modes
+
+| Bash | PowerShell | Description |
+|------|------------|-------------|
+| `--test-access` | `-TestAccess` | Pre-flight permission check — test 9 API categories, then exit. **Always run this first.** |
+| `--remask FILE` | `-Remask FILE` | Re-anonymize an existing archive. No Splunk connection needed. |
+| `--resume-collect FILE` | `-ResumeCollect FILE` | Resume an interrupted export from a `.tar.gz` archive. |
+
+### Operational
+
+| Bash | PowerShell | Description |
+|------|------------|-------------|
+| `-d` / `--debug` | `-Debug_Mode` | Verbose debug logging (writes `_export_debug.log`) |
+| N/A | `-SkipAnonymization` | Disable data anonymization (Bash controls this interactively) |
+| N/A | `-NonInteractive` | Explicitly force non-interactive mode (Bash auto-detects when stack + auth are provided) |
+| `--help` | `-ShowHelp` | Show help and exit |
+| N/A | `-Version` | Display version and exit |
+
+### Note on Non-Interactive Detection
+
+The Bash script does not have an explicit `--yes` flag. It automatically enters non-interactive mode when both `--stack` and authentication (`--token` or `--user`/`--password`) are provided on the command line. The PowerShell script has an explicit `-NonInteractive` switch for the same purpose.
+
+---
+
+## Interactive vs Non-Interactive Mode
+
+### Interactive Mode
+
+When run without CLI arguments (or without both `--stack` and `--token`), the script walks you through:
+
+1. **Welcome screen** — version display and continue prompt
+2. **Pre-flight checklist** — system dependency verification (bash, curl, Python)
+3. **Stack URL** — enter your Splunk Cloud address; script tests DNS, TCP 8089, and TLS
+4. **Authentication** — choose token or username/password; credentials are verified against the API
+5. **Capability check** — warns if recommended permissions are missing
+6. **Application selection** — export all apps or pick specific ones
+7. **Data category toggles** — enable/disable configs, dashboards, alerts, RBAC, usage, indexes, anonymization
+8. **Analytics period** (if usage enabled) — choose 7d, 30d, 90d, or 365d
+9. **Collection** — progress displayed per category with progress bars
+10. **Anonymization** — creates the `_masked` archive (unless disabled)
+11. **Summary** — statistics table with counts, timing, and any errors
+
+### Non-Interactive Mode
+
+When all required parameters are on the command line (Bash: `--stack` + `--token`; PowerShell: `-Stack` + `-Token` + `-NonInteractive`), the script runs without any prompts. All defaults apply unless overridden by flags.
 
 ```bash
-# Resume a previous incomplete export
+# Bash — automatically non-interactive
 ./dma-splunk-cloud-export.sh \
-  --stack acme.splunkcloud.com \
+  --stack acme-corp.splunkcloud.com \
   --token "$TOKEN" \
-  --resume-collect ./dma_cloud_export_acme-corp_20260115_093000.tar.gz
-
-# Resume AND add RBAC + usage data that were skipped originally
-./dma-splunk-cloud-export.sh \
-  --stack acme.splunkcloud.com \
-  --token "$TOKEN" \
-  --resume-collect ./dma_cloud_export_acme-corp_20260115_093000.tar.gz \
-  --rbac --usage
+  --rbac
 ```
-
-#### PowerShell Examples
 
 ```powershell
-# Resume a previous incomplete export
+# PowerShell — explicit non-interactive
 .\dma-splunk-cloud-export.ps1 `
-  -Stack "acme.splunkcloud.com" `
+  -Stack "acme-corp.splunkcloud.com" `
   -Token $TOKEN `
-  -ResumeCollect ".\dma_cloud_export_acme-corp_20260115_093000.tar.gz"
-
-# Resume AND add RBAC + usage data
-.\dma-splunk-cloud-export.ps1 `
-  -Stack "acme.splunkcloud.com" `
-  -Token $TOKEN `
-  -ResumeCollect ".\dma_cloud_export_acme-corp_20260115_093000.tar.gz" `
-  -Rbac -Usage
+  -Rbac -NonInteractive
 ```
 
-#### Versioned Output
+### Typical Runtimes
+
+| Environment | Without `--usage` | With `--usage` (default) |
+|-------------|-------------------|--------------------------|
+| Small (10 apps, 200 dashboards) | 2-5 minutes | 5-15 minutes |
+| Medium (50 apps, 1000 dashboards) | 10-20 minutes | 20-45 minutes |
+| Large (200+ apps, 5000+ dashboards) | 30-60 minutes | 1-3 hours |
+
+Analytics searches use async dispatch with up to 1 hour per query, so large `_audit` indexes no longer cause timeouts.
+
+---
+
+## What Is Collected
+
+### Always Collected (defaults ON)
+
+| Category | Description | Migration Use |
+|----------|-------------|---------------|
+| **Dashboards** | Classic XML + Dashboard Studio v2 JSON, per app | Visual conversion to Dynatrace dashboards/notebooks |
+| **Alerts and Saved Searches** | All definitions with SPL queries and schedules | SPL-to-DQL conversion, alert migration |
+| **Configurations** | props.conf, transforms.conf, indexes.conf, inputs.conf (reconstructed from REST) | OpenPipeline generation, field extractions |
+| **Index Statistics** | Index metadata, sizes, retention policies, sourcetypes | Dynatrace Grail bucket planning, capacity estimation |
+| **Knowledge Objects** | Macros, eventtypes, tags, lookups, field extractions | Completeness check for SPL conversion |
+
+### Usage Analytics (default ON in v4.6.0)
+
+When `--usage` is enabled (the default), 6 global aggregate queries run against `_audit` and `_internal`:
+
+| File | Index | Explorer Tab |
+|------|-------|-------------|
+| `dashboard_views_global.json` | `_audit` | Dashboards — view counts per dashboard |
+| `user_activity_global.json` | `_audit` | (supplementary) — searches per user per app |
+| `search_patterns_global.json` | `_audit` | (supplementary) — search type breakdown |
+| `index_volume_summary.json` | `_internal` | Indexes — daily ingestion GB per index |
+| `index_event_counts_daily.json` | `_internal` | Indexes — event counts per index per day |
+| `alert_firing_global.json` | `_internal` | Alerts — execution stats per alert |
+
+Additionally, **ownership data** is collected via REST API (no search jobs required):
+
+| File | Method | Explorer Tab |
+|------|--------|-------------|
+| `dashboard_ownership.json` | REST API | Dashboards — owner column |
+| `alert_ownership.json` | REST API | Alerts — owner column |
+| `ownership_summary.json` | REST API | (supplementary) |
+
+REST metadata files also collected: `saved_searches_all.json`, `recent_searches.json`, `kvstore_stats.json`.
+
+### Opt-In (defaults OFF)
+
+| Category | Flag | Description |
+|----------|------|-------------|
+| **Users and RBAC** | `--rbac` / `-Rbac` | Users, roles, capabilities, LDAP/SAML config. No passwords collected. |
+
+### What Is NOT Collected
+
+- User passwords or password hashes
+- API tokens or session keys
+- Actual log/event data (only metadata and structure)
+- SSL certificates or private keys
+- Raw config files (REST reconstruction is used instead)
+- `$SPLUNK_HOME` filesystem (Cloud has no filesystem access)
+
+---
+
+## Data Anonymization and Archives
+
+When anonymization is enabled (the default), the script creates **two archives**:
+
+| Archive | Contents | Purpose |
+|---------|----------|---------|
+| `dma_cloud_export_<stack>_<YYYYMMDD_HHMMSS>.tar.gz` | Original, untouched data | Reference copy — keep internally |
+| `dma_cloud_export_<stack>_<YYYYMMDD_HHMMSS>_masked.tar.gz` | Anonymized copy | Safe to share with Dynatrace or externally |
+
+### What Gets Anonymized
+
+Anonymization applies deterministic masking:
+
+- **Emails**: `user@corp.com` becomes `anon######@anon.dma.local`
+- **Hostnames**: `splunk-idx01.corp.com` becomes `host-########.anon.local`
+- **IPv4 addresses**: Replaced with `[IP-REDACTED]`
+- **IPv6 addresses**: Replaced with `[IPv6-REDACTED]`
+
+Deterministic means the same input always produces the same output — relationships between objects are preserved in the masked copy.
+
+### Which Archive to Use
+
+- **Upload the `_masked` archive** when sharing externally (with Dynatrace, consultants, etc.)
+- **Upload the original archive** for internal analysis on your own DMA Server — you get real names, emails, and hostnames in the Explorer
+
+---
+
+## Resume Collection
+
+If an export is interrupted (network drop, Ctrl+C, timeout), you can resume it without starting over.
+
+### How It Works
+
+The script extracts the partial archive, detects which phases completed via checkpoint files, and continues from where it stopped. Per-query checkpointing means even individual analytics searches resume mid-way.
+
+### Resume Examples
+
+```bash
+# Bash — resume a previous incomplete export
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN" \
+  --resume-collect ./dma_cloud_export_acme-corp_20260401_143022.tar.gz
+
+# Resume AND add RBAC that was not collected originally
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN" \
+  --resume-collect ./dma_cloud_export_acme-corp_20260401_143022.tar.gz \
+  --rbac
+```
+
+```powershell
+# PowerShell — resume
+.\dma-splunk-cloud-export.ps1 `
+  -Stack "acme-corp.splunkcloud.com" `
+  -Token $TOKEN `
+  -ResumeCollect ".\dma_cloud_export_acme-corp_20260401_143022.tar.gz"
+
+# Resume AND add RBAC
+.\dma-splunk-cloud-export.ps1 `
+  -Stack "acme-corp.splunkcloud.com" `
+  -Token $TOKEN `
+  -ResumeCollect ".\dma_cloud_export_acme-corp_20260401_143022.tar.gz" `
+  -Rbac
+```
+
+### Versioned Output
 
 When resuming, the script creates a versioned archive to avoid overwriting the original:
 
-- Original: `dma_cloud_export_acme-corp_20260115_093000.tar.gz`
-- First resume: `dma_cloud_export_acme-corp_20260115_093000-v1.tar.gz`
-- Second resume: `dma_cloud_export_acme-corp_20260115_093000-v2.tar.gz`
+- Original: `dma_cloud_export_acme-corp_20260401_143022.tar.gz`
+- First resume: `dma_cloud_export_acme-corp_20260401_143022-v1.tar.gz`
+- Second resume: `dma_cloud_export_acme-corp_20260401_143022-v2.tar.gz`
 
-#### What Gets Skipped vs Collected
+### What Gets Skipped vs Re-Collected
 
-| Data Type | Skip If... |
-|-----------|------------|
+| Data Type | Skipped When... |
+|-----------|-----------------|
 | Dashboards | App already has dashboard files |
 | Saved Searches | App already has `savedsearches.json` |
 | Knowledge Objects | App has `macros.json` + `props.json` + `transforms.json` |
@@ -651,205 +730,120 @@ When resuming, the script creates a versioned archive to avoid overwriting the o
 | Usage Analytics | `usage_analytics/` has 2+ files |
 | Indexes | `indexes.json` exists |
 
-### Debug Mode (NEW in v4.1.0)
+---
 
-When troubleshooting issues, enable debug mode to capture detailed logs:
+## Re-Anonymize an Existing Archive
+
+If you need to regenerate the masked copy (e.g., after sharing rules change), use `--remask`:
+
+```bash
+./dma-splunk-cloud-export.sh --remask dma_cloud_export_acme-corp_20260401_143022.tar.gz
+```
+
+```powershell
+.\dma-splunk-cloud-export.ps1 -Remask ".\dma_cloud_export_acme-corp_20260401_143022.tar.gz"
+```
+
+No Splunk connection is needed — the script extracts, anonymizes, and repacks locally. A new `_masked.tar.gz` is created alongside the original.
+
+---
+
+## Proxy Support
+
+If your network requires a proxy to reach the Splunk Cloud API, pass it with `--proxy`:
 
 ```bash
 ./dma-splunk-cloud-export.sh \
-  --stack acme.splunkcloud.com \
+  --stack acme-corp.splunkcloud.com \
   --token "$TOKEN" \
-  --apps myapp \
+  --proxy "http://proxy.corp.com:8080"
+```
+
+```powershell
+.\dma-splunk-cloud-export.ps1 `
+  -Stack "acme-corp.splunkcloud.com" `
+  -Token $TOKEN `
+  -Proxy "http://proxy.corp.com:8080"
+```
+
+The proxy is used for all HTTPS connections to the Splunk Cloud management API. The Bash script passes the proxy via `curl -x`; the PowerShell script uses `Invoke-RestMethod -Proxy`.
+
+---
+
+## Debug Mode
+
+Add `--debug` (Bash) or `-Debug_Mode` (PowerShell) for detailed diagnostics:
+
+```bash
+./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN" \
   --debug
 ```
 
 Debug mode provides:
-- **Console output**: Color-coded messages by category (API, SEARCH, TIMING, ERROR, WARN)
-- **Debug log file**: `export_debug.log` inside the export directory (included in the .tar.gz)
-- **API call tracking**: Every REST API call with HTTP status and response size
-- **Detailed timing**: Duration of each API call and search operation
+
+- **Console output**: Color-coded messages by category (API, SEARCH, TIMING, ERROR, WARN, AUTH)
+- **Debug log file**: `_export_debug.log` inside the archive
+- **API call tracking**: Every REST API call with endpoint, HTTP status, response size, and duration
+- **Auth tracing**: Token probe responses and final header format
+- **Search jobs**: SID dispatch, poll states, completion time
 
 ---
 
-## Enterprise Resilience Features
+## Enterprise Resilience Configuration
 
-**NEW in v4.0.0**: The Cloud script now includes the same enterprise-scale features as the Enterprise script for environments with 4000+ dashboards and 10K+ alerts.
+The Cloud scripts include enterprise-scale features for environments with 4000+ dashboards and 10K+ alerts.
 
-### Default Settings (Enterprise-Ready)
+### Default Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `BATCH_SIZE` | 100 | Items per API request |
-| `API_TIMEOUT` | 120s | Per-request timeout (2 min) |
-| `MAX_TOTAL_TIME` | 43200s | Max runtime (12 hours) |
+| `BATCH_SIZE` | 250 | Items per API request |
+| `API_DELAY` | 50ms | Delay between API calls |
+| `API_TIMEOUT` | 120s | Per-request timeout |
+| `CONNECT_TIMEOUT` | 30s | Initial connection timeout |
+| `MAX_TOTAL_TIME` | 43200s (12 hours) | Maximum total script runtime |
 | `MAX_RETRIES` | 3 | Retry attempts with exponential backoff |
-| `RATE_LIMIT_DELAY` | 0.1s | Delay between API calls (100ms) |
 | `CHECKPOINT_ENABLED` | true | Enable checkpoint/resume capability |
-| `RESUME_COLLECT` | (none) | Path to previous .tar.gz for resume collection **(NEW v4.3.0)** |
-
-### Checkpoint/Resume Capability
-
-If the export is interrupted (timeout, network error, Ctrl+C), you can resume:
-
-```bash
-# Script detects previous incomplete export
-./dma-splunk-cloud-export.sh
-
-# Output:
-# Found checkpoint from 2025-01-06 14:30:00
-# Would you like to resume? (Y/n): Y
-# Resuming from: Dashboards (offset 500)...
-```
-
-### Export Timing Statistics
-
-At completion, the script shows detailed timing:
-
-```
-╔══════════════════════════════════════════════════════════════════════════╗
-║                    EXPORT TIMING STATISTICS                              ║
-╠══════════════════════════════════════════════════════════════════════════╣
-║  Total Duration:        5 minutes 4 seconds                              ║
-║  API Calls:             347                                              ║
-║  API Retries:           2                                                ║
-║  API Failures:          0                                                ║
-║  Rate Limit Hits:       0                                                ║
-║  Batches Completed:     52                                               ║
-╚══════════════════════════════════════════════════════════════════════════╝
-```
 
 ### Environment Variable Overrides
 
-For very large Splunk Cloud environments, tune via environment variables:
+For very large environments, tune via environment variables:
 
 ```bash
-# Large environment (5000+ dashboards)
-export BATCH_SIZE=50
-export API_TIMEOUT=180
-./dma-splunk-cloud-export.sh
-
-# Or inline
-BATCH_SIZE=50 API_TIMEOUT=180 ./dma-splunk-cloud-export.sh
+# Large environment (5000+ dashboards) — smaller batches, longer timeout
+BATCH_SIZE=50 API_TIMEOUT=180 ./dma-splunk-cloud-export.sh \
+  --stack acme-corp.splunkcloud.com \
+  --token "$TOKEN"
 ```
-
----
-
-## PowerShell Edition
-
-The `dma-splunk-cloud-export.ps1` script provides the same functionality as the Bash script for Windows environments. It is written in pure PowerShell with zero external dependencies -- no Python, curl, jq, or any other tools are required.
-
-### Supported PowerShell Versions
-
-| Version | Platform | Notes |
-|---------|----------|-------|
-| PowerShell 5.1 | Windows PowerShell (built into Windows 10/11) | Most common |
-| PowerShell 7+ | Cross-platform (Windows, macOS, Linux) | Recommended for non-Windows |
-
-### Parameter Equivalence (Bash to PowerShell)
-
-| Bash Flag | PowerShell Parameter | Example |
-|-----------|---------------------|---------|
-| `--stack` | `-Stack` | `-Stack "acme.splunkcloud.com"` |
-| `--token` | `-Token` | `-Token "xxxxx"` |
-| `--user` | `-User` | `-User "admin"` |
-| `--password` | `-Password` | `-Password "xxx"` |
-| `--apps` | `-Apps` | `-Apps "search,myapp"` |
-| `--all-apps` | `-AllApps` | `-AllApps` |
-| `--quick` | `-Quick` | `-Quick` |
-| `--scoped` | `-Scoped` | `-Scoped` |
-| `--rbac` | `-Rbac` | `-Rbac` |
-| `--usage` | `-Usage` | `-Usage` |
-| `--no-usage` | `-NoUsage` | `-NoUsage` |
-| `--resume-collect` | `-ResumeCollect` | `-ResumeCollect ".\previous.tar.gz"` |
-| `--proxy` | `-Proxy` | `-Proxy "http://proxy:8080"` |
-| `--output` | `-Output` | `-Output "C:\exports"` |
-| `--debug` | `-Debug` | `-Debug` |
-| `--help` | `-Help` or `Get-Help` | `Get-Help .\dma-splunk-cloud-export.ps1` |
-
-### Example Commands
-
-```powershell
-# Interactive mode (prompts for all inputs)
-.\dma-splunk-cloud-export.ps1
-
-# Non-interactive full export
-.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -AllApps
-
-# Export specific apps with RBAC and usage
-.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -Apps "search,security_app" -Rbac -Usage
-
-# Resume a previous incomplete export
-.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $env:SPLUNK_TOKEN -ResumeCollect ".\previous_export.tar.gz"
-```
-
-### Key Differences from Bash
-
-- **Zero external dependencies**: Uses `Invoke-RestMethod` instead of curl, native JSON handling instead of Python/jq
-- **Windows-native tar**: Uses `tar.exe` built into Windows 10 1803+ for archive creation
-- **PowerShell parameter style**: Uses `-ParameterName` instead of `--flag-name`
-- **Environment variables**: Use `$env:SPLUNK_CLOUD_TOKEN` instead of `$SPLUNK_CLOUD_TOKEN`
 
 ---
 
 ## Troubleshooting
 
-### Connection Refused
+### Common Issues
 
-```
-Error: curl: (7) Failed to connect to acme-corp.splunkcloud.com port 8089
-```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `No applications found!` | Token lacks `admin_all_objects` | Use `sc_admin` role, or add capability to the user's role |
+| `Token authentication failed` | Wrong token, expired, or revoked | Regenerate the token in Splunk Cloud under Settings > Tokens |
+| Export completes but Explorer shows no usage data | `_audit` / `_internal` access denied | Run `--test-access` to confirm; request index access from Splunk admin |
+| Analytics searches timeout | Very large `_audit` index | Reduce `--analytics-period 7d`; or use `--apps "app1,app2" --scoped` |
+| `Rate limited (429)` | Too many API calls in sequence | Script auto-retries with exponential backoff — no action needed |
+| `_audit` / `_internal` access denied | Splunk Cloud restricts these indexes by default | Use `--skip-internal` to collect what you can |
+| Export takes hours | Large environment with `--usage` | Scope to key apps: `--apps "app1,app2" --scoped` |
+| PowerShell: `Execution Policy` error | Script execution disabled | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first |
 
-**Solutions**:
-1. Check if you're on VPN (if required)
-2. Verify the stack URL is correct
-3. Check corporate firewall rules
-4. Verify Splunk Cloud IP allowlist includes your IP
+### Connection Errors
 
-### Authentication Failed (401)
-
-```
-Error: HTTP 401 Unauthorized
-```
-
-**Solutions**:
-1. Verify credentials are correct
-2. Check if token has expired
-3. Try creating a new token
-4. Verify user account is active
-
-### Forbidden (403)
-
-```
-Error: HTTP 403 Forbidden for /services/authentication/users
-```
-
-**Solutions**:
-1. User/token lacks required capabilities
-2. Add `admin_all_objects` capability
-3. Check role assignments
-4. Some Cloud stacks restrict certain APIs
-
-### Rate Limited (429)
-
-```
-Error: HTTP 429 Too Many Requests
-```
-
-**Solutions**:
-1. Script will automatically back off and retry
-2. If persistent, wait 5 minutes and try again
-3. Contact Splunk Cloud support for limit increases
-
-### SSL Certificate Error
-
-```
-Error: SSL certificate problem: unable to get local issuer certificate
-```
-
-**Solutions**:
-1. Update CA certificates: `update-ca-certificates`
-2. Script uses `-k` flag as fallback (warns user)
-3. Download Splunk Cloud CA cert and specify
+| Error | Solutions |
+|-------|----------|
+| `curl: (7) Failed to connect ... port 8089` | Check VPN, verify stack URL, check firewall rules, verify Splunk Cloud IP allowlist |
+| `HTTP 401 Unauthorized` | Verify credentials, check if token expired, create a new token |
+| `HTTP 403 Forbidden` | User/token lacks required capabilities — add `admin_all_objects`, check role |
+| `HTTP 429 Too Many Requests` | Script retries automatically; if persistent, wait 5 minutes |
+| `SSL certificate problem` | Update CA certificates; script uses `-k` flag as fallback |
 
 ---
 
@@ -857,641 +851,66 @@ Error: SSL certificate problem: unable to get local issuer certificate
 
 ### Token Security
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      TOKEN SECURITY CHECKLIST                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ✓ Use API tokens instead of passwords                                  │
-│  ✓ Set appropriate token expiration (7-30 days)                         │
-│  ✓ Don't share tokens in chat, email, or tickets                       │
-│  ✓ Use environment variables, not command-line args                    │
-│  ✓ Delete token after export is complete                               │
-│  ✓ Don't commit tokens to version control                              │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+- Use API tokens instead of passwords
+- Set appropriate token expiration (7-30 days)
+- Do not share tokens in chat, email, or tickets
+- Use environment variables instead of command-line arguments when possible:
+  ```bash
+  export SPLUNK_TOKEN="your-token"
+  ./dma-splunk-cloud-export.sh --stack acme.splunkcloud.com --token "$SPLUNK_TOKEN"
+  ```
+- Delete the token after the export is complete
+- Do not commit tokens to version control
 
 ### Export File Security
 
+- The export contains sensitive metadata (dashboard definitions, alert logic, user names)
+- Transfer securely (SCP, SFTP, or encrypted channel)
+- Use the `_masked` archive when sharing outside your organization
+- Delete local copies after uploading to the DMA Server
+
+---
+
+## FAQ
+
+**Q: Can I run this on my laptop?**
+Yes. The Cloud scripts are designed to run from any machine with network access to your Splunk Cloud instance.
+
+**Q: Do I need SSH access to anything?**
+No. The Cloud scripts are 100% REST API based. No SSH required. (SSH is only needed for the Enterprise on-prem script.)
+
+**Q: Will this work with MFA enabled?**
+Use an API token. MFA typically does not apply to API token authentication.
+
+**Q: How long does the export take?**
+5-60 minutes depending on environment size and whether usage analytics is enabled. Very large environments with `--usage` may take 1-3 hours.
+
+**Q: Can I schedule this to run automatically?**
+Yes. Use non-interactive mode:
 ```bash
-# Export file contains sensitive metadata
-# Handle with appropriate care
-
-# Secure transfer
-scp export.tar.gz user@secure-server:/path/
-
-# Delete after upload to DMA
-rm export.tar.gz
+./dma-splunk-cloud-export.sh --stack acme.splunkcloud.com --token "$TOKEN" --output /exports/
 ```
+
+**Q: My previous export timed out. Do I need to start over?**
+No. Use `--resume-collect` to pass your previous `.tar.gz`. The script detects what was already collected and fills in the gaps.
+
+**Q: What if I have multiple Splunk Cloud stacks?**
+Run the script once per stack. Each export is labeled with the stack name.
+
+**Q: Can I run this on Windows?**
+Yes. Use `dma-splunk-cloud-export.ps1` which requires only PowerShell 5.1+ and has zero external dependencies.
 
 ---
 
-## What Gets Exported
+## Where to Upload the Archive
 
-The export creates a `.tar.gz` file compatible with DMA containing:
+After the export completes, upload the `.tar.gz` archive:
 
-```
-dma_cloud_export_[stack]_[timestamp]/
-├── dma-env-summary.md      # Summary report
-├── manifest.json                   # Export metadata (schema v4.0)
-├── _systeminfo/                    # Server info
-├── _rbac/                         # Users and roles
-├── _configs/                      # Reconstructed configs
-├── _usage_analytics/              # Usage data
-└── [app_name]/                    # Per-app data (v2 app-centric structure)
-    ├── dashboards/                 # v2: App-scoped dashboards (v4.2.0+)
-    │   ├── classic/               # Classic XML dashboards for this app
-    │   └── studio/                # Dashboard Studio JSON for this app
-    ├── savedsearches.json
-    └── macros.json
-```
+- **DMA Curator Server** — migration planning, reporting, and team collaboration (recommended for all exports)
+- **DMA Splunk App** — ad-hoc migration analysis (suitable for smaller archives)
+
+Use the `_masked` variant when sharing outside your organization.
 
 ---
 
-## Comparison with Enterprise Export
-
-| Feature | Enterprise Export | Cloud Export |
-|---------|------------------|--------------|
-| Dashboards | ✅ Complete | ✅ Complete |
-| Alerts | ✅ Complete | ✅ Complete |
-| Users/RBAC | ✅ Complete | ✅ Complete |
-| Props/Transforms | ✅ File-based | ⚠️ REST reconstruction |
-| Usage Analytics | ✅ Audit log + search | ⚠️ Search only |
-| Index Stats | ✅ Complete | ⚠️ Limited |
-| Lookup Contents | ✅ Direct file | ✅ REST download |
-| Custom Scripts | ✅ bin/ directory | ❌ Not accessible |
-| Export Format | .tar.gz | .tar.gz (compatible) |
-
----
-
-## Frequently Asked Questions
-
-### Q: Can I run this on my laptop?
-
-**A: Yes!** That's exactly where you should run it. You just need network access to your Splunk Cloud instance.
-
-### Q: Do I need SSH access to anything?
-
-**A: No.** This script is 100% REST API based. No SSH required.
-
-### Q: Will this work with MFA enabled?
-
-**A: Use an API token.** MFA typically doesn't apply to API token authentication.
-
-### Q: How long does the export take?
-
-**A: 5-30 minutes** depending on the size of your environment and network speed. Large environments with many dashboards may take longer.
-
-### Q: Can I schedule this to run automatically?
-
-**A: Yes.** Use the non-interactive mode with environment variables:
-```bash
-export SPLUNK_CLOUD_STACK="your-stack.splunkcloud.com"
-export SPLUNK_CLOUD_TOKEN="your-token"
-./dma-splunk-cloud-export.sh --all-apps --output /exports/
-```
-
-### Q: Can I run this on Windows?
-
-**A: Yes!** Use `dma-splunk-cloud-export.ps1` which requires only PowerShell 5.1+ and has zero external dependencies. See the [PowerShell Edition](#powershell-edition) section for details.
-
-### Q: My previous export timed out. Do I need to start over?
-
-**A: No!** Use `--resume-collect` (Bash) or `-ResumeCollect` (PowerShell) to pass your previous `.tar.gz`. The script will detect what has already been collected and fill in the gaps, creating a new versioned archive (e.g., `-v1`).
-
-```bash
-# Bash
-./dma-splunk-cloud-export.sh --stack acme.splunkcloud.com --token "$TOKEN" --resume-collect ./previous_export.tar.gz
-
-# PowerShell
-.\dma-splunk-cloud-export.ps1 -Stack "acme.splunkcloud.com" -Token $TOKEN -ResumeCollect ".\previous_export.tar.gz"
-```
-
-### Q: What if I have multiple Splunk Cloud stacks?
-
-**A: Run the script once per stack.** Each export will be labeled with the stack name.
-
----
-
-## Support
-
-If you encounter issues:
-
-1. Check the troubleshooting section above
-2. Review the export log file generated during the run
-3. Contact the DMA team with:
-   - Error messages
-   - Stack URL (without credentials)
-   - Splunk Cloud type (Classic/Victoria)
-
----
-
-## What to Expect: Step-by-Step Walkthrough
-
-This section shows exactly what you'll see when running the script successfully.
-
-### Step 1: Launch and Welcome Screen
-
-When you run `./dma-splunk-cloud-export.sh`, you'll see:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                                ║
-║  ██████╗ ██╗   ██╗███╗   ██╗ █████╗ ██████╗ ██████╗ ██╗██████╗  ██████╗ ███████╗ ║
-║  ██╔══██╗╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝ ██╔════╝ ║
-║  ██║  ██║ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝██████╔╝██║██║  ██║██║  ███╗█████╗   ║
-║  ██║  ██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝   ║
-║  ██████╔╝   ██║   ██║ ╚████║██║  ██║██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗ ║
-║  ╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝ ║
-║                                                                                ║
-║                   ☁️  SPLUNK CLOUD EXPORT SCRIPT  ☁️                         ║
-║                                                                                ║
-║          Complete REST API-Based Data Collection for Migration              ║
-║                        Version 4.5.8                                    ║
-║                                                                                ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-Do you want to continue? (Y/n):
-```
-
-**Action**: Press `Y` or Enter to continue.
-
-### Step 2: Pre-Flight Checklist
-
-After confirming, you'll see a checklist and system verification:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                     PRE-FLIGHT CHECKLIST                                    ║
-║         Please confirm you have the following before continuing            ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  SPLUNK CLOUD ACCESS:                                                      ║
-║    □  Splunk Cloud stack URL (e.g., your-company.splunkcloud.com)          ║
-║    □  Splunk username with admin privileges                                ║
-║    □  Splunk password OR API token (sc_admin role recommended)             ║
-║                                                                              ║
-║  🔒 DATA PRIVACY & SECURITY:                                                ║
-║                                                                              ║
-║  We do NOT collect or export:                                              ║
-║    ✗  User passwords or password hashes                                    ║
-║    ✗  API tokens or session keys                                           ║
-║    ✗  Private keys or certificates                                         ║
-║    ✗  Your actual log data (only metadata/structure)                       ║
-║                                                                              ║
-║  We automatically REDACT:                                                  ║
-║    ✓  password = [REDACTED] in all .conf files                             ║
-║    ✓  secret = [REDACTED] in outputs.conf                                  ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-  Quick System Check:
-    ✓ bash: 5.2.15(1)-release
-    ✓ curl: 8.1.2
-    ✓ jq: jq-1.6
-    ✓ tar: available
-
-Ready to proceed? (Y/n):
-```
-
-**Action**: Press `Y` if all checks pass.
-
-### Step 3: Enter Splunk Cloud Stack URL
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 1: SPLUNK CLOUD CONNECTION                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  Your Splunk Cloud stack URL looks like:
-    https://your-company.splunkcloud.com
-
-  Enter your Splunk Cloud stack URL: acme-corp.splunkcloud.com
-
-◐ Testing connection to https://acme-corp.splunkcloud.com:8089...
-✓ Connection successful
-```
-
-**Action**: Enter your stack URL (without `https://` prefix).
-
-### Step 4: Authentication
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 2: AUTHENTICATION                                                      │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  Required Permissions:
-    • admin_all_objects - Access all knowledge objects
-    • list_users, list_roles - Access RBAC data
-    • search - Run analytics queries
-
-  🔒 Security: Your credentials are used locally only and are NEVER stored,
-     logged, or transmitted outside of this session. They are cleared on exit.
-
-  Choose authentication method:
-
-    1) API Token (recommended)
-    2) Username/Password
-
-  Select option [1]: 1
-
-  Enter API token: ••••••••••••••••••••••••••••••••
-
-◐ Testing authentication...
-✓ Token authentication successful (user: admin)
-```
-
-**Action**: Choose auth method and enter credentials.
-
-### Step 5: Select Data Categories
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 5: DATA CATEGORIES                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  Select data categories to collect:
-
-    [✓] 1. Configurations (via REST - reconstructed from API)
-    [✓] 2. Dashboards (Classic + Dashboard Studio)
-    [✓] 3. Alerts & Saved Searches
-    [✓] 4. Users & RBAC (usernames & roles only - NO passwords)
-    [✓] 5. Usage Analytics (via search on _audit)
-    [✓] 6. Index Statistics
-    [✓] 7. Lookup Contents (may be large)
-    [ ] 8. Anonymize Data (emails→fake, hosts→fake, IPs→redacted)
-
-  🔒 Privacy: User data includes names/roles only. Passwords are NEVER collected.
-  💡 Tip: Enable option 8 when sharing export with third parties.
-
-  Accept defaults? (Y/n): Y
-```
-
-**Action**: Press `Y` to accept defaults or `n` to customize.
-
-### Step 6: Data Collection Progress
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ COLLECTING DATA                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  [1/7] Collecting system information...
-✓ Server info collected
-✓ Installed apps collected
-
-  [2/7] Collecting configurations via REST API...
-✓ Props configuration collected
-✓ Transforms configuration collected
-✓ Indexes configuration collected
-
-  [3/7] Collecting dashboards...
-[████████████████████████████████████████] 100% security_app/security_overview
-✓ Collected 47 Classic dashboards
-✓ Collected 12 Dashboard Studio dashboards
-
-  [4/7] Collecting alerts and saved searches...
-✓ Collected 89 saved searches (34 alerts)
-
-  [5/7] Collecting users and roles...
-✓ Collected 23 users
-✓ Collected 8 roles
-
-  [6/7] Collecting usage analytics...
-◐ Running search: Dashboard views (last 7 days)...
-✓ Dashboard usage collected
-◐ Running search: User activity...
-✓ User activity collected
-
-  [7/7] Collecting index statistics...
-✓ Index stats collected for 15 indexes
-```
-
-### Step 7: Export Complete
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                         EXPORT COMPLETE!                                     ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  Export Archive:                                                             ║
-║    📦 dma_cloud_export_acme-corp_20241203_143052.tar.gz               ║
-║                                                                              ║
-║  Summary:                                                                    ║
-║    • Dashboards:        59 (47 Classic + 12 Studio)                          ║
-║    • Alerts:            34                                                   ║
-║    • Saved Searches:    89                                                   ║
-║    • Users:             23                                                   ║
-║    • Roles:             8                                                    ║
-║    • Apps:              12                                                   ║
-║    • Indexes:           15                                                   ║
-║                                                                              ║
-║  Duration: 4 minutes 23 seconds                                              ║
-║  Archive Size: 2.3 MB                                                        ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  NEXT STEPS:                                                                 ║
-║                                                                              ║
-║  1. Upload to DMA:                                                           ║
-║     Open Dynatrace Migration Assistant app → Data Sources → Upload Export    ║
-║                                                                              ║
-║  2. Review the summary report:                                               ║
-║     cat dma_cloud_export_acme-corp_20241203_143052/                   ║
-║         dma-env-summary.md                                            ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-```
-
-### What Success Looks Like
-
-After a successful export, you'll have a `.tar.gz` file. Extract it to see:
-
-```bash
-$ tar -tzf dma_cloud_export_acme-corp_20241203_143052.tar.gz | head -20
-
-dma_cloud_export_acme-corp_20241203_143052/
-dma_cloud_export_acme-corp_20241203_143052/manifest.json
-dma_cloud_export_acme-corp_20241203_143052/dma-env-summary.md
-dma_cloud_export_acme-corp_20241203_143052/_export.log
-dma_cloud_export_acme-corp_20241203_143052/_systeminfo/
-dma_cloud_export_acme-corp_20241203_143052/_systeminfo/server_info.json
-dma_cloud_export_acme-corp_20241203_143052/_systeminfo/installed_apps.json
-dma_cloud_export_acme-corp_20241203_143052/_rbac/
-dma_cloud_export_acme-corp_20241203_143052/_rbac/users.json
-dma_cloud_export_acme-corp_20241203_143052/_rbac/roles.json
-dma_cloud_export_acme-corp_20241203_143052/_usage_analytics/
-dma_cloud_export_acme-corp_20241203_143052/_usage_analytics/dashboard_views.json
-dma_cloud_export_acme-corp_20241203_143052/_usage_analytics/users_most_active.json
-dma_cloud_export_acme-corp_20241203_143052/security_app/
-dma_cloud_export_acme-corp_20241203_143052/security_app/dashboards/
-dma_cloud_export_acme-corp_20241203_143052/security_app/savedsearches.json
-```
-
-### If Something Goes Wrong
-
-If errors occur, you'll see a warning box:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  ⚠️  EXPORT COMPLETED WITH 3 ERRORS                                          ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  Some data could not be collected. See details below:                        ║
-║                                                                              ║
-║  Errors:                                                                     ║
-║    • HTTP 403: Access denied to /services/data/lookup-table-files           ║
-║    • Search timeout: Usage analytics query exceeded 5 minutes               ║
-║    • HTTP 429: Rate limited - some data may be incomplete                   ║
-║                                                                              ║
-║  A troubleshooting report has been generated:                                ║
-║    📄 TROUBLESHOOTING.md                                                      ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-```
-
-Review `TROUBLESHOOTING.md` in the export directory for specific remediation steps.
-
----
-
-## Sample Output Files
-
-### Example: dma-env-summary.md
-
-This human-readable summary report is generated in the export directory:
-
-```markdown
-# DMA Splunk Cloud Environment Summary
-
-**Export Date**: 2025-12-03 14:30:52 EST
-**Export Script Version**: 4.5.8
-**Export Type**: Splunk Cloud (REST API)
-
----
-
-## Environment Overview
-
-| Property | Value |
-|----------|-------|
-| **Stack URL** | acme-corp.splunkcloud.com |
-| **Cloud Type** | Victoria Experience |
-| **Splunk Version** | 9.1.3 |
-| **Server GUID** | 8F4A2B1C-3D5E-6F7A-8B9C-0D1E2F3A4B5C |
-
----
-
-## Collection Summary
-
-| Category | Count | Status |
-|----------|-------|--------|
-| **Applications** | 12 | ✅ Collected |
-| **Dashboards** | 59 | ✅ Collected |
-| **Alerts** | 34 | ✅ Collected |
-| **Users** | 23 | ✅ Collected |
-| **Indexes** | 15 | ✅ Collected |
-
----
-
-## Collection Statistics
-
-| Metric | Value |
-|--------|-------|
-| **API Calls Made** | 347 |
-| **Rate Limit Hits** | 2 |
-| **Errors** | 0 |
-| **Warnings** | 1 |
-
----
-
-## Data Categories Collected
-
-- ✅ Configurations (via REST API reconstruction)
-- ✅ Dashboards (Classic and Dashboard Studio)
-- ✅ Alerts and Saved Searches
-- ✅ Users, Roles, and RBAC
-- ✅ Usage Analytics (last 7d)
-- ✅ Index Statistics
-- ⏭️ Lookup Contents (skipped)
-- ⏭️ Data Anonymization (available - enable with option 8)
-
----
-
-## Applications Exported
-
-- search
-- security_app
-- itsi
-- splunk_app_for_aws
-- enterprise_security
-- phantom
-- dashboard_studio
-- user-prefs
-- learned
-- introspection_generator_addon
-- alert_manager
-- monitoring_console
-
----
-
-## Cloud Export Notes
-
-This export was collected via REST API from Splunk Cloud. Some differences from Enterprise exports:
-
-1. **Configuration Files**: Reconstructed from REST API endpoints (not direct file access)
-2. **Usage Analytics**: Collected via search queries on _audit and _internal indexes
-3. **Index Statistics**: Limited to what's available via REST API
-4. **No File System Access**: Cannot access raw bucket data, audit logs, etc.
-
----
-
-## Errors and Warnings
-
-### Errors (0)
-No errors occurred.
-
-### Warnings (1)
-- Rate limit approached on dashboard collection; added 2s delay
-
----
-
-## Next Steps
-
-1. **Upload to DMA**: Upload the `.tar.gz` file to DMA in Dynatrace
-2. **Review Dashboards**: Check the dashboard conversion preview
-3. **Review Alerts**: Check alert conversion recommendations
-4. **Plan Data Ingestion**: Use OpenPipeline templates for log ingestion
-
----
-
-*Generated by DMA Splunk Cloud Export Script v4.0.0*
-```
-
-### Example: manifest.json (Schema)
-
-This machine-readable manifest is used by DMA to process your export:
-
-```json
-{
-  "schema_version": "3.3",
-  "export_tool": "dma-splunk-cloud-export",
-  "export_tool_version": "4.0.0",
-  "export_timestamp": "2025-12-03T19:30:52Z",
-  "export_duration_seconds": 263,
-
-  "source": {
-    "hostname": "acme-corp.splunkcloud.com",
-    "fqdn": "acme-corp.splunkcloud.com",
-    "platform": "Splunk Cloud",
-    "platform_version": "Victoria Experience"
-  },
-
-  "splunk": {
-    "home": "cloud",
-    "version": "9.1.3",
-    "build": "cloud",
-    "flavor": "cloud",
-    "role": "search_head",
-    "architecture": "cloud",
-    "is_cloud": true,
-    "cloud_type": "Victoria Experience",
-    "server_guid": "8F4A2B1C-3D5E-6F7A-8B9C-0D1E2F3A4B5C"
-  },
-
-  "collection": {
-    "configs": true,
-    "dashboards": true,
-    "alerts": true,
-    "rbac": true,
-    "usage_analytics": true,
-    "usage_period": "7d",
-    "indexes": true,
-    "lookups": false
-  },
-
-  "statistics": {
-    "apps_exported": 12,
-    "dashboards_classic": 47,
-    "dashboards_studio": 12,
-    "dashboards_total": 59,
-    "alerts": 34,
-    "saved_searches": 89,
-    "users": 23,
-    "roles": 8,
-    "indexes": 15,
-    "api_calls_made": 347,
-    "rate_limit_hits": 2,
-    "errors": 0,
-    "warnings": 1,
-    "total_files": 234,
-    "total_size_bytes": 2411724
-  },
-
-  "apps": [
-    {
-      "name": "security_app",
-      "dashboards": 15,
-      "alerts": 12,
-      "saved_searches": 28
-    },
-    {
-      "name": "itsi",
-      "dashboards": 8,
-      "alerts": 6,
-      "saved_searches": 14
-    }
-  ],
-
-  "usage_intelligence": {
-    "summary": {
-      "dashboards_never_viewed": 12,
-      "alerts_never_fired": 8,
-      "users_inactive": 5,
-      "alerts_with_failures": 2
-    },
-    "volume": {
-      "avg_daily_gb": 45.7,
-      "peak_daily_gb": 78.3,
-      "total_period_gb": 1371.2,
-      "top_indexes_by_volume": [
-        {"index": "main", "total_gb": 456.2},
-        {"index": "security", "total_gb": 312.8},
-        {"index": "web_logs", "total_gb": 198.4}
-      ],
-      "top_sourcetypes_by_volume": [
-        {"sourcetype": "access_combined", "total_gb": 234.5},
-        {"sourcetype": "syslog", "total_gb": 187.3}
-      ]
-    },
-    "prioritization": {
-      "top_dashboards": [
-        {"dashboard": "security_overview", "views": 1523},
-        {"dashboard": "executive_summary", "views": 892}
-      ],
-      "top_users": [
-        {"user": "admin", "searches": 4521},
-        {"user": "analyst1", "searches": 2134}
-      ],
-      "top_alerts": [
-        {"alert": "High CPU Alert", "fires": 234},
-        {"alert": "Failed Login", "fires": 156}
-      ]
-    },
-    "elimination_candidates": {
-      "dashboards_never_viewed_count": 12,
-      "alerts_never_fired_count": 8,
-      "note": "See _usage_analytics/ for full lists of candidates"
-    }
-  }
-}
-```
-
-This manifest enables DMA to:
-- **Prioritize migration** based on actual usage data
-- **Identify elimination candidates** (unused dashboards/alerts)
-- **Estimate data volume** for Dynatrace ingestion planning
-- **Map applications** to their respective assets
-
----
-
-*For Splunk Enterprise (on-premises), use `dma-splunk-export.sh` instead.*
+*For Splunk Enterprise (on-premises), see [README-SPLUNK-ENTERPRISE.md](README-SPLUNK-ENTERPRISE.md) and use `dma-splunk-export.sh` instead.*

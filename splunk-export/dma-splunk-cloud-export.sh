@@ -9,7 +9,19 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.5.8
+#  DMA Splunk Cloud Export Script v4.6.0
+#
+#  v4.6.0 Changes:
+#    - saved_searches_all.json: uses f= field selection (was 256MB+ raw REST dump on large envs)
+#    - alert_ownership.json: uses f= field selection (was duplicate 256MB+ REST dump)
+#    - dashboard_ownership.json: uses f= field selection (reduces dashboard XML bloat)
+#    - Alert firing: added | fields before | stats (reduces indexer memory)
+#    - Default USAGE_PERIOD changed to 30d (was 7d) for comprehensive migration planning
+#    - Interactive period prompt defaults to 30d (option 2) instead of 7d
+#    - Usage collection ON by default (was false — use --no-usage to disable)
+#    - --resume-collect + usage active: clears usage checkpoints to force re-collection
+#    - Dynamic daily_avg_gb calculation uses actual USAGE_PERIOD days (was hardcoded /7)
+#    - Aligned version with Enterprise script at v4.6.0
 #
 #  v4.5.8 Changes:
 #    - Fix token auth: api_call now uses AUTH_HEADER set by authenticate() instead of
@@ -136,7 +148,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.3.0"
+SCRIPT_VERSION="4.6.0"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -194,13 +206,13 @@ COLLECT_CONFIGS=true
 COLLECT_DASHBOARDS=true
 COLLECT_ALERTS=true
 COLLECT_RBAC=false        # OFF by default - global user/role data rarely needed for app migration
-COLLECT_USAGE=false       # OFF by default - requires _audit/_internal index access (blocked in most Splunk Cloud)
+COLLECT_USAGE=true        # ON by default - use --no-usage to disable
 COLLECT_INDEXES=true
 COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
-USAGE_PERIOD="7d"
-SCRIPT_VERSION="4.5.8"
+USAGE_PERIOD="30d"
+SCRIPT_VERSION="4.6.0"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -2536,20 +2548,20 @@ select_data_categories() {
     echo ""
     echo -e "  ${BOLD}Usage Analytics Period:${NC}"
     echo ""
-    echo -e "    ${GREEN}1${NC}) Last 7 days ${DIM}(recommended — fast, sufficient for migration planning)${NC}"
-    echo -e "    ${GREEN}2${NC}) Last 30 days"
+    echo -e "    ${GREEN}1${NC}) Last 7 days"
+    echo -e "    ${GREEN}2${NC}) Last 30 days ${DIM}(recommended — comprehensive migration planning)${NC}"
     echo -e "    ${GREEN}3${NC}) Last 90 days"
     echo -e "    ${GREEN}4${NC}) Last 365 days"
     echo ""
-    echo -ne "  ${YELLOW}Select period [1]: ${NC}"
+    echo -ne "  ${YELLOW}Select period [2]: ${NC}"
     read -r period_choice
 
-    case "${period_choice:-1}" in
+    case "${period_choice:-2}" in
       1) USAGE_PERIOD="7d" ;;
       2) USAGE_PERIOD="30d" ;;
       3) USAGE_PERIOD="90d" ;;
       4) USAGE_PERIOD="365d" ;;
-      *) USAGE_PERIOD="7d" ;;
+      *) USAGE_PERIOD="30d" ;;
     esac
 
     info "Usage analytics will cover the last $USAGE_PERIOD"
@@ -3212,7 +3224,7 @@ get_app_where_clause() {
 # =============================================================================
 
 # =============================================================================
-# GLOBAL ANALYTICS COLLECTION (v4.5.0)
+# GLOBAL ANALYTICS COLLECTION (v4.6.0)
 # =============================================================================
 # CRITICAL FIX: Replaced per-app analytics (N×7 = 2100+ search jobs) with
 # ~6 global aggregate queries that each include "by app" grouping.
@@ -3245,8 +3257,13 @@ collect_app_analytics() {
     log "  App-scoped analytics: filtering to ${#SELECTED_APPS[@]} apps"
   fi
 
+  # Compute numeric days from USAGE_PERIOD for daily average calculations
+  local usage_days
+  usage_days=$(echo "$USAGE_PERIOD" | sed 's/d$//')
+  [ -z "$usage_days" ] || ! [[ "$usage_days" =~ ^[0-9]+$ ]] && usage_days=30
+
   local analytics_start=$(date +%s)
-  progress "Running global analytics queries (v4.5.0 — async dispatch)..."
+  progress "Running global analytics queries (v4.6.0 — async dispatch)..."
   echo ""
   echo -e "    ${DIM}Analytics period: ${USAGE_PERIOD} | Dispatch: async (max 1h per query)${NC}"
   echo -e "    ${DIM}Queries use verified field names: provenance, sourcetype=audittrail${NC}"
@@ -3312,7 +3329,7 @@ collect_app_analytics() {
     local q4_file="$analytics_dir/index_volume_summary.json"
     if [ "$SKIP_INTERNAL" != "true" ]; then
       run_analytics_search \
-        "search index=_internal source=*license_usage.log type=Usage earliest=-${USAGE_PERIOD} | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/7, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event" \
+        "search index=_internal source=*license_usage.log type=Usage earliest=-${USAGE_PERIOD} | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/${usage_days}, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event" \
         "$q4_file" \
         "Daily ingestion volume (license_usage.log)" \
         600
@@ -3341,7 +3358,7 @@ collect_app_analytics() {
     local q5_file="$analytics_dir/alert_firing_global.json"
     if [ "$SKIP_INTERNAL" != "true" ]; then
       run_analytics_search \
-        "search index=_internal sourcetype=scheduler status=* ${app_filter} earliest=-${USAGE_PERIOD} | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
+        "search index=_internal sourcetype=scheduler ${app_filter} earliest=-${USAGE_PERIOD} | fields _time, app, savedsearch_name, status | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
         "$q5_file" \
         "Alert firing stats (global)" \
         3600
@@ -3380,7 +3397,7 @@ collect_app_analytics() {
 }
 
 # =============================================================================
-# USAGE ANALYTICS — SUPPLEMENTARY DATA (v4.5.0)
+# USAGE ANALYTICS — SUPPLEMENTARY DATA (v4.6.0)
 # =============================================================================
 # The CORE analytics queries (dashboard views, user activity, search patterns,
 # volume, alert firing) have moved to collect_app_analytics() as global
@@ -3416,7 +3433,10 @@ collect_usage_analytics() {
   # Saved search metadata (REST API — no search job needed)
   # Filtered to selected apps when in scoped mode.
   # -------------------------------------------------------------------------
-  api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0" \
+  # FIXED v4.5.1: Use f= to request only metadata fields, NOT the full search SPL.
+  # Without f=, this dumps ALL fields including the raw SPL for every saved search
+  # (256MB+ on large environments like Cigna's 19,426 saved searches).
+  api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0&f=title&f=eai:acl&f=is_scheduled&f=disabled&f=cron_schedule&f=alert.track&f=alert.severity&f=actions&f=next_scheduled_time&f=dispatch.earliest_time&f=dispatch.latest_time" \
     > "$analytics_dir/saved_searches_all.json" 2>/dev/null
 
   # Post-filter saved searches to selected apps in scoped mode
@@ -3455,7 +3475,7 @@ collect_usage_analytics() {
   success "Ownership mapping collected"
 
   # =========================================================================
-  # GENERATE USAGE INTELLIGENCE SUMMARY (v4.5.0)
+  # GENERATE USAGE INTELLIGENCE SUMMARY (v4.6.0)
   # =========================================================================
   echo ""
   progress "Generating usage intelligence summary..."
@@ -3463,13 +3483,13 @@ collect_usage_analytics() {
   local summary_file="$analytics_dir/USAGE_INTELLIGENCE_SUMMARY.md"
 
   cat > "$summary_file" << 'USAGE_V445_EOF'
-# Usage Intelligence Summary (v4.5.0)
+# Usage Intelligence Summary (v4.6.0)
 
 ## Migration Prioritization Framework
 
 This export includes comprehensive usage analytics to help prioritize your migration to Dynatrace.
 
-### What's Collected (v4.5.0 Global Queries)
+### What's Collected (v4.6.0 Global Queries)
 
 | File | Purpose | Use For |
 |------|---------|---------|
@@ -3480,7 +3500,7 @@ This export includes comprehensive usage analytics to help prioritize your migra
 | `index_event_counts_daily.json` | Event counts per index per day | Volume trending |
 | `alert_firing_global.json` | Alert execution stats | Critical alerts to migrate |
 
-### Key Improvements in v4.5.0
+### Key Improvements in v4.6.0
 
 - **Dashboard views now use the `provenance` field** (not `search_type=dashboard` which was broken)
 - **View session de-duplication**: Counts page loads, not individual panel searches
@@ -3505,7 +3525,7 @@ This export includes comprehensive usage analytics to help prioritize your migra
 4. **Phase 4**: Review never-used items with stakeholders
 
 ---
-*Generated by DMA Splunk Cloud Export v4.5.0*
+*Generated by DMA Splunk Cloud Export v4.6.0*
 USAGE_V445_EOF
 
   success "Usage intelligence summary generated"
@@ -3513,7 +3533,7 @@ USAGE_V445_EOF
 }
 
 # =============================================================================
-# ASYNC SEARCH DISPATCH (v4.5.0)
+# ASYNC SEARCH DISPATCH (v4.6.0)
 # Uses exec_mode=normal + polling instead of exec_mode=blocking.
 # exec_mode=blocking has a hard ~300s limit (max_time_per_process in limits.conf)
 # which kills any search taking longer than 5 minutes. Async dispatch lets
@@ -3730,7 +3750,8 @@ collect_dashboard_ownership_rest() {
   info "Collecting dashboard ownership via REST API (fallback)..."
 
   local response
-  response=$(api_call "/servicesNS/-/-/data/ui/views" "GET" "output_mode=json&count=0" 2>&1)
+  # Use f= to request only ownership fields (not full dashboard XML)
+  response=$(api_call "/servicesNS/-/-/data/ui/views" "GET" "output_mode=json&count=0&f=title&f=eai:acl" 2>&1)
 
   if [ $? -eq 0 ] && [ -n "$response" ]; then
     # Transform REST API response to match expected format
@@ -3777,7 +3798,9 @@ collect_alert_ownership_rest() {
   info "Collecting alert ownership via REST API (fallback)..."
 
   local response
-  response=$(api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0" 2>&1)
+  # FIXED v4.5.1: Use f= to request only ownership fields, NOT the full search SPL.
+  # Without f=, this dumps ALL fields (256MB+ on large environments) into $response.
+  response=$(api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0&f=title&f=eai:acl&f=is_scheduled&f=alert.track" 2>&1)
 
   if [ $? -eq 0 ] && [ -n "$response" ]; then
     # Transform REST API response to match expected format
@@ -4387,84 +4410,19 @@ if os.path.isdir(usage_dir):
             return results[0].get(field, default)
         return default
 
-    top_dashboards = get_results_slice(os.path.join(usage_dir, 'dashboard_views_top100.json'))
-    top_users = get_results_slice(os.path.join(usage_dir, 'users_most_active.json'))
-    top_alerts = get_results_slice(os.path.join(usage_dir, 'alerts_most_fired.json'))
-    never_viewed_count = get_results_len(os.path.join(usage_dir, 'dashboards_never_viewed.json'))
-    never_fired_count = get_results_len(os.path.join(usage_dir, 'alerts_never_fired.json'))
-    inactive_users_count = get_results_len(os.path.join(usage_dir, 'users_inactive.json'))
-    failed_alerts_count = get_results_len(os.path.join(usage_dir, 'alerts_failed.json'))
-    top_sourcetypes = get_results_slice(os.path.join(usage_dir, 'sourcetypes_searched.json'))
-    top_indexes = get_results_slice(os.path.join(usage_dir, 'indexes_searched.json'))
-
-    avg_daily_gb = get_result_field(os.path.join(usage_dir, 'daily_volume_summary.json'), 'avg_daily_gb', 0)
-    peak_daily_gb = get_result_field(os.path.join(usage_dir, 'daily_volume_summary.json'), 'peak_daily_gb', 0)
-    total_30d_gb = get_result_field(os.path.join(usage_dir, 'daily_volume_summary.json'), 'total_30d_gb', 0)
-
-    top_indexes_by_volume = get_results_slice(os.path.join(usage_dir, 'top_indexes_by_volume.json'))
-    top_sourcetypes_by_volume = get_results_slice(os.path.join(usage_dir, 'top_sourcetypes_by_volume.json'))
-    top_hosts_by_volume = get_results_slice(os.path.join(usage_dir, 'top_hosts_by_volume.json'))
-
-    # Ingestion infrastructure
-    infra_dir = os.path.join(usage_dir, 'ingestion_infrastructure')
-    total_forwarding_hosts = get_result_field(os.path.join(infra_dir, 'summary.json'), 'total_forwarding_hosts', 0)
-    ingestion_daily_gb = get_result_field(os.path.join(infra_dir, 'summary.json'), 'daily_avg_gb', 0)
-    hec_daily_gb = get_result_field(os.path.join(infra_dir, 'hec_usage.json'), 'daily_avg_gb', 0)
-    hec_token_count = get_result_field(os.path.join(infra_dir, 'hec_usage.json'), 'token_count', 0)
-    hec_enabled = str(hec_token_count) != '0' and hec_token_count is not None
-
-    by_connection_type = read_json(os.path.join(infra_dir, 'by_connection_type.json')).get('results', [])
-    by_input_method = read_json(os.path.join(infra_dir, 'by_input_method.json')).get('results', [])
-    by_sourcetype_category = read_json(os.path.join(infra_dir, 'by_sourcetype_category.json')).get('results', [])
-
-    # Coerce numeric strings to numbers
-    def to_num(v):
-        try:
-            f = float(v)
-            return int(f) if f == int(f) else f
-        except (ValueError, TypeError):
-            return 0
-
+    # v4.6.0: Reference global aggregate files only
     usage_intel = {
-        'summary': {
-            'dashboards_never_viewed': never_viewed_count,
-            'alerts_never_fired': never_fired_count,
-            'users_inactive_30d': inactive_users_count,
-            'alerts_with_failures': failed_alerts_count
+        'prioritization': {
+            'top_dashboards': get_results_slice(os.path.join(usage_dir, 'dashboard_views_global.json')),
+            'top_alerts': get_results_slice(os.path.join(usage_dir, 'alert_firing_global.json')),
+            'top_users': get_results_slice(os.path.join(usage_dir, 'user_activity_global.json'))
         },
         'volume': {
-            'avg_daily_gb': to_num(avg_daily_gb),
-            'peak_daily_gb': to_num(peak_daily_gb),
-            'total_30d_gb': to_num(total_30d_gb),
-            'top_indexes_by_volume': top_indexes_by_volume,
-            'top_sourcetypes_by_volume': top_sourcetypes_by_volume,
-            'top_hosts_by_volume': top_hosts_by_volume,
-            'note': 'See _usage_analytics/daily_volume_*.json for full daily breakdown'
+            'index_volume': get_results_slice(os.path.join(usage_dir, 'index_volume_summary.json'), 50),
+            'index_events': get_results_slice(os.path.join(usage_dir, 'index_event_counts_daily.json')),
+            'note': 'See index_volume_summary.json for per-index daily ingestion'
         },
-        'ingestion_infrastructure': {
-            'summary': {
-                'total_forwarding_hosts': to_num(total_forwarding_hosts),
-                'daily_ingestion_gb': to_num(ingestion_daily_gb),
-                'hec_enabled': hec_enabled,
-                'hec_daily_gb': to_num(hec_daily_gb)
-            },
-            'by_connection_type': by_connection_type,
-            'by_input_method': by_input_method,
-            'by_sourcetype_category': by_sourcetype_category,
-            'note': 'See _usage_analytics/ingestion_infrastructure/ for detailed breakdown'
-        },
-        'prioritization': {
-            'top_dashboards': top_dashboards,
-            'top_users': top_users,
-            'top_alerts': top_alerts,
-            'top_sourcetypes': top_sourcetypes,
-            'top_indexes': top_indexes
-        },
-        'elimination_candidates': {
-            'dashboards_never_viewed_count': never_viewed_count,
-            'alerts_never_fired_count': never_fired_count,
-            'note': 'See _usage_analytics/ for full lists of candidates'
-        }
+        'search_patterns': get_results_slice(os.path.join(usage_dir, 'search_patterns_global.json'))
     }
 
 # Output as two-line JSON: apps_json then usage_intel_json
@@ -5789,17 +5747,23 @@ run_collection() {
     ((collected++))
   fi
 
+  # When COLLECT_USAGE is active and we're in resume mode, clear all usage-
+  # related analytics checkpoints so queries always re-run fresh. Previous
+  # data may be from broken/timed-out queries that wrote error JSON.
+  if [ "$COLLECT_USAGE" = "true" ] && [ "$RESUME_MODE" = "true" ] && [ -f "$EXPORT_DIR/.analytics_checkpoint" ]; then
+    info "Usage collection active in resume mode — clearing usage checkpoints to force re-collection"
+    sed -i.bak '/^dashboard_views$/d;/^user_activity$/d;/^search_patterns$/d;/^index_volume$/d;/^alert_firing$/d;/^alerts_inventory$/d' "$EXPORT_DIR/.analytics_checkpoint"
+    rm -f "$EXPORT_DIR/.analytics_checkpoint.bak"
+  fi
+
   # App-scoped analytics (global aggregate queries — v4.5.0)
   ((current_step++))
-  # v4.5.0: When --usage is explicitly passed, ALWAYS re-collect analytics
-  # (prior data may be from broken queries using search_type=dashboard)
   if [ "$RESUME_MODE" = "true" ] && has_collected_data "app_analytics" && [ "$COLLECT_USAGE" != "true" ]; then
     echo -e "  [${current_step}/${total_steps}] App-scoped analytics... ${GREEN}SKIP (already collected)${NC}"
     ((skipped++))
   else
     echo -e "  [${current_step}/${total_steps}] Collecting app analytics (global aggregate queries)..."
     if [ "$COLLECT_USAGE" = "true" ]; then
-      # v4.5.0: Single call — runs 6 global queries instead of per-app loops
       collect_app_analytics
       success "Global analytics collected (see dma_analytics/usage_analytics/)"
     fi
@@ -5808,7 +5772,6 @@ run_collection() {
 
   # Global/infrastructure usage analytics
   ((current_step++))
-  # v4.5.0: When --usage is explicitly passed, ALWAYS re-collect
   if [ "$RESUME_MODE" = "true" ] && has_collected_data "usage_analytics" && [ "$COLLECT_USAGE" != "true" ]; then
     echo -e "  [${current_step}/${total_steps}] Global usage analytics... ${GREEN}SKIP (already collected)${NC}"
     ((skipped++))

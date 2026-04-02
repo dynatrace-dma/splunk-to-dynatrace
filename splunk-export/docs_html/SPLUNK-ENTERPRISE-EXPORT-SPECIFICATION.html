@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DMA Splunk Enterprise Export - Specification | Dynatrace Migration Assistant</title>
+    <title>Enterprise Export Technical
+Specification | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -249,8 +250,9 @@
                 <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
-            <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DMA Splunk Enterprise Export - Specification</h2></div>
+            <span class="version-badge"><span class="dot"></span>Version 4.6.0</span>
+            <div class="doc-title"><h2>Enterprise Export Technical
+Specification</h2></div>
         </div>
     </header>
 
@@ -262,2153 +264,2090 @@
             <a href="SPLUNK-CLOUD-EXPORT-SPECIFICATION.html">Cloud Spec</a>
             <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics Reference</a>
             <a href="EXPORT-SCHEMA.html">Export Schema</a>
+            <a href="INTERACTIVE-WALKTHROUGH.html">Walkthrough</a>
+            <a href="SPLUNK-ENTERPRISE-CHANGELOG.html">Changelog</a>
         </div>
     </nav>
 
     <main class="content">
-<h1>DMA Splunk Enterprise Export Script - Comprehensive Specification</h1>
-<h2>Version 4.2.4 | Complete Data Collection Framework</h2>
-<p>
-<strong>Last Updated</strong>: February 2026
-<strong>Related Documents</strong>: <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated Analytics Reference</a> | <a href="README-SPLUNK-ENTERPRISE.md">Enterprise README</a> | <a href="EXPORT-SCHEMA.md">Export Schema</a>
-</p>
-<hr>
-<blockquote><p><strong>Developed for Dynatrace One by Enterprise Solutions & Architecture</strong></p></blockquote>
-<blockquote><p><em>An ACE Services Division of Dynatrace</em></p></blockquote>
-<hr>
-<h2>Executive Summary</h2>
-<p>
-This specification defines the complete requirements for a Splunk data collection script that supports <strong>all Splunk deployment types</strong> and collects <strong>comprehensive migration intelligence</strong> including:
-</p>
+<h1 id="dma-splunk-enterprise-export-script-technical-specification">DMA
+Splunk Enterprise Export Script – Technical Specification</h1>
+<h2 id="version-4.6.0">Version 4.6.0</h2>
+<p><strong>Last Updated</strong>: April 2026 <strong>Related
+Documents</strong>: <a
+href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated
+Analytics Reference</a> | <a
+href="README-SPLUNK-ENTERPRISE.md">Enterprise README</a> | <a
+href="EXPORT-SCHEMA.md">Export Schema</a></p>
+<hr />
+<blockquote>
+<p><strong>Developed for Dynatrace One by Enterprise Solutions &amp;
+Architecture</strong> <em>An ACE Services Division of Dynatrace</em></p>
+</blockquote>
+<hr />
+<h2 id="executive-summary">Executive Summary</h2>
+<p><code>dma-splunk-export.sh</code> is an Enterprise-specific Bash
+script that collects migration intelligence from on-premises Splunk
+deployments. It combines <strong>filesystem reads</strong> of
+<code>$SPLUNK_HOME/etc/apps/</code> configuration files with
+<strong>REST API calls</strong> and <strong>SPL search jobs</strong> to
+produce a self-contained <code>.tar.gz</code> archive for import into
+the DMA Server.</p>
+<p>Key characteristics of the Enterprise script (vs. the Cloud
+script):</p>
 <ul>
-<li><strong>All Splunk Flavors</strong>: Enterprise (standalone, distributed), Cloud, Universal Forwarder, Heavy Forwarder, Search Head Cluster, Indexer Cluster, Deployment Server</li>
-<li><strong>Ownership & RBAC</strong>: Users, groups, roles, capabilities, object ownership</li>
-<li><strong>Usage Analytics</strong>: Query frequency, dashboard views, alert triggers, index volume trends</li>
-<li><strong>Migration Prioritization</strong>: Scoring of high-value assets worth migrating</li>
+<li>Reads configuration files directly from
+<code>$SPLUNK_HOME/etc/apps/&lt;app&gt;/default/</code> and
+<code>local/</code> on the filesystem</li>
+<li>Detects <code>SPLUNK_HOME</code> automatically from environment
+variables and common installation paths</li>
+<li>Detects Search Head Cluster membership via REST API + filesystem
+checks for <code>[shclustering]</code> in <code>server.conf</code></li>
+<li>RBAC collection (<code>COLLECT_RBAC</code>) and usage analytics
+(<code>COLLECT_USAGE</code>) are <strong>ON by default</strong></li>
+<li>Produces two archives when anonymization is enabled: original +
+<code>_masked</code></li>
 </ul>
-<blockquote><p><strong>Note</strong>: For Splunk Cloud environments, dedicated Cloud export scripts are available: <code>dma-splunk-cloud-export.sh</code> (Bash) and <code>dma-splunk-cloud-export.ps1</code> (PowerShell). See <a href="README-SPLUNK-CLOUD.md">README-SPLUNK-CLOUD.md</a> for details.</p></blockquote>
-<hr>
-<h2>What's New in v4.2.4</h2>
-<h3>Two-Archive Anonymization (Preserves Original Data)</h3>
-<p>
-When anonymization is enabled, the script now creates <strong>TWO separate archives</strong>:
-</p>
-<ul>
-<li><code>{export_name}.tar.gz</code> - <strong>Original, untouched data</strong> (keep for your records)</li>
-<li><code>{export<em>name}</em>masked.tar.gz</code> - <strong>Anonymized copy</strong> (safe to share with third parties)</li>
-</ul>
-<p>
-This preserves the original data in case anonymization corrupts files. Users can re-run anonymization on the original without re-running the entire export.
-</p>
-<h3>Performance Optimizations</h3>
-<ul>
-<li><strong>RBAC/Users collection now OFF by default</strong> - Use <code>--rbac</code> flag to enable</li>
-<li><strong>Usage analytics now OFF by default</strong> - Use <code>--usage</code> flag to enable</li>
-<li><strong>Faster defaults</strong>: Batch size 250 (was 100), API delay 50ms (was 250ms)</li>
-<li><strong>Optimized queries</strong>: Sampling for expensive regex extractions, <code>max()</code> instead of <code>latest()</code> for faster aggregations</li>
-<li><strong>Savedsearches ACL fix</strong>: Now correctly filters searches by app ownership</li>
-</ul>
-<hr>
-<h2>What's New in v4.2.0</h2>
-<h3>App-Centric Dashboard Structure (v2)</h3>
-<ul>
-<li><strong>No more flat folders</strong>: Dashboards are now saved to <code>{AppName}/dashboards/classic/</code> and <code>{AppName}/dashboards/studio/</code> instead of root-level <code>dashboards<em>classic/</code> and <code>dashboards</em>studio/</code></li>
-<li><strong>Prevents name collisions</strong>: Multiple apps can now have dashboards with the same name without data loss</li>
-<li><strong>Manifest Schema v4.0</strong>: Added <code>archive<em>structure</em>version: "v2"</code> for DMA to detect and process the new structure</li>
-</ul>
-<hr>
-<h2>What Was New in v4.1.0</h2>
-<h3>App-Scoped Export Mode</h3>
-<ul>
-<li><strong><code>--apps</code> flag</strong>: Export specific apps only (e.g., <code>--apps "search,myapp,security"</code>)</li>
-<li><strong><code>--quick</code> mode</strong>: Skip global analytics for fastest possible export (<strong>TESTING ONLY</strong>)</li>
-<li><strong><code>--scoped</code> mode</strong>: Scope RBAC/usage collection to selected apps only</li>
-<li><strong>Auto-scoped</strong>: When <code>--apps</code> is specified, collections automatically scope to those apps</li>
-</ul>
-<blockquote><p><strong>⚠️ WARNING</strong>: <code>--quick</code> is for <strong>testing/validation only</strong>. It eliminates usage analytics, user data, and RBAC information critical for migration analysis. Always use full or <code>--scoped</code> export for actual migration planning.</p></blockquote>
-<h3>Debug Mode</h3>
-<ul>
-<li><strong><code>--debug</code> flag</strong>: Enable verbose logging for troubleshooting</li>
-<li><strong>Debug log file</strong>: <code>export_debug.log</code> with detailed API/search lifecycle</li>
-<li><strong>Color-coded console output</strong>: ERROR (red), WARN (yellow), API (cyan), SEARCH (magenta), TIMING (blue)</li>
-<li><strong>Sensitive data redaction</strong>: Passwords and tokens automatically redacted in debug output</li>
-</ul>
-<h3>Skip Collection Options</h3>
-<ul>
-<li><strong><code>--no-usage</code></strong>: Skip usage analytics collection</li>
-<li><strong><code>--no-rbac</code></strong>: Skip RBAC/user collection</li>
-</ul>
-<h3>Performance Improvements</h3>
-<ul>
-<li><strong>App-filtered queries</strong>: RBAC and usage searches now filter by selected apps</li>
-<li><strong>Reduced scope</strong>: Quick mode can complete in minutes vs hours for large environments</li>
-</ul>
-<hr>
-<h2>What's New in v4.0.1</h2>
-<h3>Container Compatibility Improvements</h3>
-<ul>
-<li><strong>Container-friendly progress display</strong>: Progress bars now use newlines at 5% intervals instead of carriage returns, ensuring clean output in kubectl exec, Docker exec, and other containerized environments</li>
-<li><strong>Improved output formatting</strong>: Progress updates print cleanly without overlapping lines in non-TTY environments</li>
-</ul>
-<hr>
-<h2>What's New in v4.0.0</h2>
-<h3>Enterprise-Ready Defaults</h3>
-<ul>
-<li><strong>Zero-configuration reliability</strong>: Defaults tuned for environments with 4000+ dashboards and 10K+ alerts</li>
-<li><strong>Extended timeouts</strong>: <code>API<em>TIMEOUT=120s</code>, <code>MAX</em>TOTAL<em>TIME=43200s</code> (12 hours), search <code>max</em>wait=300s</code></li>
-<li><strong>Optimized rate limiting</strong>: <code>RATE<em>LIMIT</em>DELAY=0.1s</code> - fast but polite API calls</li>
-</ul>
-<h3>Enterprise Resilience Features</h3>
-<ul>
-<li><strong>Paginated API calls</strong>: <code>splunk<em>api</em>call<em>paginated</code> with configurable <code>BATCH</em>SIZE</code> (default: 250)</li>
-<li><strong>Checkpoint/resume</strong>: Automatic detection of incomplete exports with resume capability</li>
-<li><strong>SHC Captain detection</strong>: Warning when running on Search Head Cluster Captain</li>
-<li><strong>Export timing statistics</strong>: Detailed timing report at completion</li>
-</ul>
-<h3>Enhanced Features (from v4.0.0)</h3>
-<ul>
-<li><strong>Python-based JSON processing</strong>: Uses Splunk's bundled Python or system Python for all JSON operations</li>
-<li><strong>Container compatibility</strong>: Multiple hostname fallbacks for Docker/Kubernetes environments</li>
-<li><strong>Progress bars</strong>: Visual feedback during long operations like dashboard exports</li>
-<li><strong>Scale warnings</strong>: Alerts when exporting large environments (200+ dashboards, 500+ alerts, etc.)</li>
-<li><strong>Dashboard Studio JSON extraction</strong>: Automatically extracts JSON definitions from CDATA blocks</li>
-</ul>
-<h3>Bug Fixes</h3>
-<ul>
-<li>Fixed progress bar showing >100% in Usage Intelligence section</li>
-<li>Improved error handling for REST API failures</li>
-<li>Better handling of special characters in dashboard names</li>
-</ul>
-<hr>
-<h2>Table of Contents</h2>
-<ol>
-<li><a href="#1-splunk-deployment-types">Splunk Deployment Types</a></li>
-<li><a href="#2-detection--environment-profiling">Detection & Environment Profiling</a></li>
-<li><a href="#3-data-collection-categories">Data Collection Categories</a></li>
-<li><a href="#4-users-groups--rbac-collection">Users, Groups & RBAC Collection</a></li>
-<li><a href="#5-usage-analytics-collection">Usage Analytics Collection</a></li>
-<li><a href="#6-output-structure--summary-file">Output Structure & Summary File</a></li>
-<li><a href="#7-script-flow--interactive-prompts">Script Flow & Interactive Prompts</a></li>
-<li><a href="#8-api-endpoints-reference">API Endpoints Reference</a></li>
-<li><a href="#9-error-handling--fallbacks">Error Handling & Fallbacks</a></li>
-<li><a href="#10-security-considerations">Security Considerations</a></li>
+<blockquote>
+<p><strong>Note</strong>: For Splunk Cloud environments, use the
+dedicated Cloud export scripts: <code>dma-splunk-cloud-export.sh</code>
+(Bash) and <code>dma-splunk-cloud-export.ps1</code> (PowerShell). See <a
+href="README-SPLUNK-CLOUD.md">README-SPLUNK-CLOUD.md</a>.</p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents</h2>
+<ol type="1">
+<li><a href="#1-whats-new-in-v460">What’s New in v4.6.0</a></li>
+<li><a href="#2-global-defaults-and-tunables">Global Defaults and
+Tunables</a></li>
+<li><a href="#3-splunk_home-detection">SPLUNK_HOME Detection</a></li>
+<li><a href="#4-environment-detection-and-shc-awareness">Environment
+Detection and SHC Awareness</a></li>
+<li><a href="#5-authentication">Authentication</a></li>
+<li><a href="#6-collection-phases">Collection Phases</a></li>
+<li><a href="#7-configuration-file-collection-filesystem">Configuration
+File Collection (Filesystem)</a></li>
+<li><a href="#8-dashboard-collection">Dashboard Collection</a></li>
+<li><a href="#9-alert-and-saved-search-collection">Alert and Saved
+Search Collection</a></li>
+<li><a href="#10-rbac-collection">RBAC Collection</a></li>
+<li><a href="#11-app-analytics----6-global-queries">App Analytics – 6
+Global Queries</a></li>
+<li><a href="#12-usage-analytics-stripped-in-v460">Usage Analytics
+(Stripped in v4.6.0)</a></li>
+<li><a href="#13-index-and-data-statistics">Index and Data
+Statistics</a></li>
+<li><a href="#14-system-configuration-collection">System Configuration
+Collection</a></li>
+<li><a href="#15-async-search-dispatch-run_usage_search">Async Search
+Dispatch (run_usage_search)</a></li>
+<li><a href="#16-checkpointing-and-resume">Checkpointing and
+Resume</a></li>
+<li><a href="#17-export-directory-structure">Export Directory
+Structure</a></li>
+<li><a href="#18-archive-creation-and-anonymization">Archive Creation
+and Anonymization</a></li>
+<li><a href="#19-cli-flags-reference">CLI Flags Reference</a></li>
+<li><a href="#20-test-access-mode">Test-Access Mode</a></li>
+<li><a href="#21-error-handling">Error Handling</a></li>
+<li><a href="#22-api-endpoints-reference">API Endpoints
+Reference</a></li>
+<li><a href="#23-security-considerations">Security
+Considerations</a></li>
 </ol>
-<hr>
-<h2>1. Splunk Deployment Types</h2>
-<h3>1.1 Splunk Flavors Matrix</h3>
+<hr />
+<h2 id="whats-new-in-v4.6.0">1. What’s New in v4.6.0</h2>
+<h3 id="stripped-usage-analytics">Stripped Usage Analytics</h3>
+<p>The <code>collect_usage_analytics()</code> function has been reduced
+to:</p>
+<ul>
+<li><strong>3 search jobs</strong> for ownership mapping (dashboard
+ownership, alert/saved-search ownership, ownership summary by user) –
+all using <code>| rest</code> SPL queries</li>
+<li><strong>3 REST API calls</strong> for supplementary metadata (saved
+searches metadata, recent search jobs, KV store stats)</li>
+<li><strong>1 summary markdown</strong> file
+(<code>USAGE_INTELLIGENCE_SUMMARY.md</code>)</li>
+</ul>
+<p>The ~40 detailed per-category SPL search jobs that previously ran in
+<code>collect_usage_analytics()</code> have been removed. All
+substantive usage data is now produced by the 6 global queries in
+<code>collect_app_analytics()</code>.</p>
+<h3 id="checkpoint-clearing">Checkpoint Clearing</h3>
+<p>In resume mode (<code>--resume-collect</code>), only the
+<code>usage_ownership</code> checkpoint remains relevant. The old
+detailed per-query checkpoints (e.g.,
+<code>usage_dashboard_views</code>, <code>usage_search_frequency</code>,
+etc.) no longer exist in the script.</p>
+<h3 id="default-changes">Default Changes</h3>
 <table>
+<colgroup>
+<col style="width: 36%" />
+<col style="width: 32%" />
+<col style="width: 32%" />
+</colgroup>
 <thead>
-<tr><th>Flavor</th><th>Description</th><th>Has Local Data?</th><th>Has REST API?</th><th>Typical Role</th></tr>
+<tr>
+<th>Setting</th>
+<th>v4.4.0</th>
+<th>v4.6.0</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Enterprise Standalone</strong></td><td>Single-server deployment</td><td>Yes</td><td>Yes</td><td>Full stack</td></tr>
-<tr><td><strong>Enterprise Search Head</strong></td><td>Search & UI tier</td><td>Limited</td><td>Yes</td><td>Search, dashboards</td></tr>
-<tr><td><strong>Enterprise Indexer</strong></td><td>Data storage tier</td><td>Yes</td><td>Yes</td><td>Indexing, storage</td></tr>
-<tr><td><strong>Search Head Cluster (SHC)</strong></td><td>Clustered search tier</td><td>Limited</td><td>Yes</td><td>HA search</td></tr>
-<tr><td><strong>Indexer Cluster (IDX)</strong></td><td>Clustered indexer tier</td><td>Yes</td><td>Yes</td><td>HA storage</td></tr>
-<tr><td><strong>Heavy Forwarder (HF)</strong></td><td>Parsing forwarder</td><td>Transit only</td><td>Yes</td><td>Data routing</td></tr>
-<tr><td><strong>Universal Forwarder (UF)</strong></td><td>Lightweight forwarder</td><td>Transit only</td><td>Limited</td><td>Data collection</td></tr>
-<tr><td><strong>Deployment Server (DS)</strong></td><td>Configuration manager</td><td>No</td><td>Yes</td><td>Config distribution</td></tr>
-<tr><td><strong>License Master (LM)</strong></td><td>License management</td><td>No</td><td>Yes</td><td>Licensing</td></tr>
-<tr><td><strong>Cluster Master/Manager</strong></td><td>Cluster coordination</td><td>No</td><td>Yes</td><td>Cluster management</td></tr>
-<tr><td><strong>Splunk Cloud</strong></td><td>SaaS deployment</td><td>Yes (managed)</td><td>Yes</td><td>Full stack</td></tr>
-<tr><td><strong>Splunk Cloud Gateway</strong></td><td>Hybrid connector</td><td>No</td><td>Yes</td><td>Cloud bridge</td></tr>
+<tr>
+<td><code>MAX_TOTAL_TIME</code></td>
+<td><code>43200</code> (12 hours)</td>
+<td><code>14400</code> (4 hours)</td>
+</tr>
+<tr>
+<td><code>COLLECT_RBAC</code></td>
+<td>ON by default</td>
+<td>ON by default (unchanged)</td>
+</tr>
+<tr>
+<td><code>COLLECT_USAGE</code></td>
+<td>ON by default</td>
+<td>ON by default (unchanged)</td>
+</tr>
+<tr>
+<td><code>USAGE_PERIOD</code></td>
+<td><code>30d</code></td>
+<td><code>30d</code> (unchanged)</td>
+</tr>
+<tr>
+<td>Usage analytics jobs</td>
+<td>~40 SPL queries</td>
+<td>3 ownership <code>\| rest</code> queries + 3 curl calls</td>
+</tr>
 </tbody>
 </table>
-<h3>1.2 Detection Signatures</h3>
-<pre><code class="language-bash"># Detection logic for each flavor
-
-# Universal Forwarder Detection
-- Binary: splunkd (smaller footprint)
-- Path: /opt/splunkforwarder
-- No web UI (port 8000)
-- File: $SPLUNK_HOME/etc/splunk-launch.conf contains SPLUNK_ROLE=universalforwarder
-
-# Heavy Forwarder Detection
-- Has parsing capability (props.conf processing)
-- No local indexes (or minimal)
-- File: outputs.conf routes all data externally
-- Often has: TCP/UDP inputs defined
-
-# Search Head Detection
-- Has web UI (port 8000)
-- distributed_search.conf with distsearch enabled
-- search peers configured
-- Limited or no local indexes
-
-# Search Head Cluster Member Detection
-- File: $SPLUNK_HOME/etc/system/local/server.conf contains [shclustering]
-- shcluster_label defined
-- Has captain/member role
-
-# Indexer Detection
-- Large local indexes (data/db directories)
-- inputs.conf with TCP receiving (splunktcp://)
-- File: indexes.conf with hot/warm/cold paths defined
-
-# Indexer Cluster Peer Detection
-- File: server.conf contains [clustering] with mode = slave
-- master_uri configured
-- replication_factor &gt; 0
-
-# Cluster Master/Manager Detection
-- File: server.conf contains [clustering] with mode = master
-- Manages multiple cluster peers
-
-# Deployment Server Detection
-- File: serverclass.conf exists
-- deployment-apps/ directory with apps
-- Manages forwarder configurations
-
-# License Master Detection
-- File: server.conf contains [license] section
-- license_master_uri = self
-
-# Splunk Cloud Detection
-- Domain: *.splunkcloud.com
-- Cloud-specific REST endpoints
-- Managed infrastructure indicators</code></pre>
-<h3>1.3 Flavor-Specific Collection Paths</h3>
-<table>
-<thead>
-<tr><th>Flavor</th><th>Configuration</th><th>Dashboards</th><th>Alerts</th><th>Indexes</th><th>Usage Stats</th><th>Users/RBAC</th></tr>
-</thead>
-<tbody>
-<tr><td>Standalone</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td></tr>
-<tr><td>Search Head</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>⚠️ Limited</td><td>✅ Full</td><td>✅ Full</td></tr>
-<tr><td>SHC Member</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>⚠️ Limited</td><td>✅ Full</td><td>✅ Via Captain</td></tr>
-<tr><td>Indexer</td><td>✅ Limited</td><td>❌ None</td><td>❌ None</td><td>✅ Full</td><td>⚠️ Index only</td><td>⚠️ Limited</td></tr>
-<tr><td>IDX Cluster</td><td>✅ Limited</td><td>❌ None</td><td>❌ None</td><td>✅ Full</td><td>⚠️ Index only</td><td>⚠️ Limited</td></tr>
-<tr><td>Heavy Forwarder</td><td>✅ Routing</td><td>❌ None</td><td>❌ None</td><td>❌ None</td><td>⚠️ Throughput</td><td>⚠️ Limited</td></tr>
-<tr><td>Universal Forwarder</td><td>✅ Inputs</td><td>❌ None</td><td>❌ None</td><td>❌ None</td><td>⚠️ Throughput</td><td>❌ None</td></tr>
-<tr><td>Deployment Server</td><td>✅ Deployed</td><td>❌ None</td><td>❌ None</td><td>❌ None</td><td>❌ None</td><td>⚠️ Limited</td></tr>
-<tr><td>Cloud</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td><td>✅ Full</td></tr>
-</tbody>
-</table>
-<hr>
-<h2>2. Detection & Environment Profiling</h2>
-<h3>2.1 Environment Detection Workflow</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────┐
-│                     START DETECTION                         │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 1: Locate SPLUNK_HOME                                  │
-│   - Check $SPLUNK_HOME env variable                         │
-│   - Check /opt/splunk, /opt/splunkforwarder                 │
-│   - Check /Applications/Splunk (macOS)                      │
-│   - Prompt user if not found                                │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 2: Determine Splunk Product Type                       │
-│   - Check splunk-launch.conf for SPLUNK_ROLE                │
-│   - Check binary size/footprint                             │
-│   - Check for web.conf (UI capability)                      │
-│   - Result: Enterprise, Universal Forwarder, Heavy Forwarder│
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 3: Detect Deployment Architecture                      │
-│   - Check server.conf [clustering] section                  │
-│   - Check server.conf [shclustering] section                │
-│   - Check distsearch.conf for search peers                  │
-│   - Check for deployment-apps/ directory                    │
-│   - Result: Standalone, Cluster, SHC, Deployment Server     │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 4: Determine Node Role                                 │
-│   - Search Head vs Indexer vs Forwarder                     │
-│   - Master/Captain vs Member/Peer                           │
-│   - License Master detection                                │
-│   - Result: Specific role classification                    │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 5: Check Splunk Cloud Indicators                       │
-│   - Check server.conf for cloud settings                    │
-│   - Check for *.splunkcloud.com in configs                  │
-│   - Check for cloud-specific apps                           │
-│   - Result: On-prem vs Cloud vs Hybrid                      │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Step 6: Generate Environment Profile                        │
-│   {                                                         │
-│     &quot;product&quot;: &quot;enterprise|uf|hf&quot;,                          │
-│     &quot;architecture&quot;: &quot;standalone|distributed|cloud&quot;,         │
-│     &quot;role&quot;: &quot;search_head|indexer|forwarder|...&quot;,           │
-│     &quot;clustering&quot;: { &quot;type&quot;: &quot;none|shc|idx&quot;, ... },         │
-│     &quot;capabilities&quot;: [&quot;search&quot;, &quot;index&quot;, &quot;forward&quot;, ...]    │
-│   }                                                         │
-└─────────────────────────────────────────────────────────────┘</code></pre>
-<h3>2.2 Environment Profile Schema</h3>
-<pre><code class="language-json">{
-  &quot;environmentProfile&quot;: {
-    &quot;detectionTimestamp&quot;: &quot;2025-12-03T10:30:00Z&quot;,
-    &quot;hostname&quot;: &quot;splunk-sh-01.company.com&quot;,
-    &quot;splunkHome&quot;: &quot;/opt/splunk&quot;,
-
-    &quot;product&quot;: {
-      &quot;type&quot;: &quot;enterprise&quot;,
-      &quot;version&quot;: &quot;9.1.2&quot;,
-      &quot;build&quot;: &quot;12345abc&quot;,
-      &quot;edition&quot;: &quot;enterprise&quot;,
-      &quot;platform&quot;: &quot;linux-x86_64&quot;
-    },
-
-    &quot;architecture&quot;: {
-      &quot;type&quot;: &quot;distributed&quot;,
-      &quot;isCloud&quot;: false,
-      &quot;isHybrid&quot;: false
-    },
-
-    &quot;role&quot;: {
-      &quot;primary&quot;: &quot;search_head&quot;,
-      &quot;isClusterMember&quot;: true,
-      &quot;clusterType&quot;: &quot;shc&quot;,
-      &quot;clusterRole&quot;: &quot;member&quot;,
-      &quot;captainUri&quot;: &quot;https://shc-captain:8089&quot;,
-      &quot;clusterLabel&quot;: &quot;production_shc&quot;
-    },
-
-    &quot;capabilities&quot;: {
-      &quot;hasWebUI&quot;: true,
-      &quot;hasSearchCapability&quot;: true,
-      &quot;hasIndexCapability&quot;: false,
-      &quot;hasForwardingCapability&quot;: false,
-      &quot;hasDeploymentServer&quot;: false,
-      &quot;hasLicenseMaster&quot;: false
-    },
-
-    &quot;connectedComponents&quot;: {
-      &quot;searchPeers&quot;: [&quot;idx1:8089&quot;, &quot;idx2:8089&quot;, &quot;idx3:8089&quot;],
-      &quot;deploymentServer&quot;: &quot;ds.company.com:8089&quot;,
-      &quot;licenseMaster&quot;: &quot;lm.company.com:8089&quot;,
-      &quot;clusterMaster&quot;: null
-    },
-
-    &quot;recommendedCollectionPath&quot;: &quot;search_head_full&quot;
-  }
-}</code></pre>
-<hr>
-<h2>3. Data Collection Categories</h2>
-<h3>3.1 Configuration Files</h3>
-<h4>Core Configuration Files (All Flavors)</h4>
-<table>
-<thead>
-<tr><th>File</th><th>Purpose</th><th>Priority</th><th>Notes</th></tr>
-</thead>
-<tbody>
-<tr><td><code>server.conf</code></td><td>Server identity, clustering</td><td>Critical</td><td>Reveals architecture</td></tr>
-<tr><td><code>inputs.conf</code></td><td>Data inputs</td><td>Critical</td><td>All input definitions</td></tr>
-<tr><td><code>outputs.conf</code></td><td>Data routing</td><td>Critical</td><td>Forwarding topology</td></tr>
-<tr><td><code>props.conf</code></td><td>Field extraction, parsing</td><td>Critical</td><td>Data transformation</td></tr>
-<tr><td><code>transforms.conf</code></td><td>Transformations, routing</td><td>Critical</td><td>Data processing</td></tr>
-<tr><td><code>indexes.conf</code></td><td>Index definitions</td><td>Critical</td><td>Storage configuration</td></tr>
-<tr><td><code>authentication.conf</code></td><td>Auth configuration</td><td>High</td><td>LDAP, SAML, etc.</td></tr>
-<tr><td><code>authorize.conf</code></td><td>Role definitions</td><td>High</td><td>RBAC policies</td></tr>
-</tbody>
-</table>
-<h4>Search & UI Configuration (Search Heads Only)</h4>
-<table>
-<thead>
-<tr><th>File</th><th>Purpose</th><th>Priority</th><th>Notes</th></tr>
-</thead>
-<tbody>
-<tr><td><code>savedsearches.conf</code></td><td>Alerts, scheduled searches</td><td>Critical</td><td>Alert migration</td></tr>
-<tr><td><code>macros.conf</code></td><td>Search macros</td><td>High</td><td>Query dependencies</td></tr>
-<tr><td><code>eventtypes.conf</code></td><td>Event classification</td><td>Medium</td><td>Semantic layer</td></tr>
-<tr><td><code>tags.conf</code></td><td>Tag assignments</td><td>Medium</td><td>Semantic layer</td></tr>
-<tr><td><code>workflow_actions.conf</code></td><td>UI workflows</td><td>Low</td><td>UI customization</td></tr>
-<tr><td><code>commands.conf</code></td><td>Custom commands</td><td>Medium</td><td>Custom SPL</td></tr>
-<tr><td><code>views.xml</code></td><td>Dashboard definitions</td><td>Critical</td><td>Classic dashboards</td></tr>
-<tr><td><code>panels.xml</code></td><td>Panel definitions</td><td>Medium</td><td>Reusable panels</td></tr>
-<tr><td><code>nav.xml</code></td><td>Navigation menu</td><td>Low</td><td>UI customization</td></tr>
-</tbody>
-</table>
-<h4>Forwarder-Specific Configuration</h4>
-<table>
-<thead>
-<tr><th>File</th><th>Purpose</th><th>Priority</th><th>Notes</th></tr>
-</thead>
-<tbody>
-<tr><td><code>deploymentclient.conf</code></td><td>Deployment client config</td><td>High</td><td>DS relationship</td></tr>
-<tr><td><code>serverclass.conf</code></td><td>Server classes (DS only)</td><td>High</td><td>App deployment</td></tr>
-<tr><td><code>limits.conf</code></td><td>Resource limits</td><td>Medium</td><td>Performance tuning</td></tr>
-</tbody>
-</table>
-<h3>3.2 Collection Locations</h3>
-<pre><code>$SPLUNK_HOME/
-├── etc/
-│   ├── system/
-│   │   ├── default/    # Factory defaults (reference only)
-│   │   └── local/      # System-level customizations ✅ COLLECT
-│   │
-│   ├── apps/
-│   │   └── [app_name]/
-│   │       ├── default/    # App defaults ✅ COLLECT
-│   │       ├── local/      # App customizations ✅ COLLECT
-│   │       ├── lookups/    # Lookup tables ✅ COLLECT
-│   │       ├── bin/        # Custom scripts ⚠️ OPTIONAL
-│   │       └── static/     # Static assets ⚠️ OPTIONAL
-│   │
-│   ├── users/
-│   │   └── [username]/
-│   │       └── [app]/
-│   │           └── local/  # User-level objects ✅ COLLECT
-│   │
-│   ├── deployment-apps/    # (Deployment Server only)
-│   │   └── [app_name]/     ✅ COLLECT
-│   │
-│   └── shcluster/          # (SHC members only)
-│       └── apps/
-│           └── [app_name]/ ✅ COLLECT
-│
-└── var/
-    ├── lib/splunk/
-    │   └── kvstore/        # KV Store data ⚠️ OPTIONAL
-    │
-    └── log/splunk/
-        └── audit.log       # Audit trail ✅ COLLECT (usage stats)</code></pre>
-<hr>
-<h2>4. Users, Groups & RBAC Collection</h2>
-<h3>4.1 Authentication & Authorization Data</h3>
-<h4>4.1.1 User Collection</h4>
-<pre><code class="language-bash"># REST API Endpoint
-GET /services/authentication/users
-GET /services/authentication/users/{username}
-
-# Collect for each user:
-{
-  &quot;username&quot;: &quot;splunk_user&quot;,
-  &quot;realname&quot;: &quot;Sample User&quot;,
-  &quot;email&quot;: &quot;splunk_user@company.com&quot;,
-  &quot;roles&quot;: [&quot;admin&quot;, &quot;power_user&quot;],
-  &quot;defaultApp&quot;: &quot;search&quot;,
-  &quot;type&quot;: &quot;Splunk&quot;,           # Splunk, LDAP, SAML, etc.
-  &quot;lastLoginTime&quot;: &quot;2025-12-03T08:30:00Z&quot;,
-  &quot;createdAt&quot;: &quot;2023-06-01T00:00:00Z&quot;,
-  &quot;capabilities&quot;: [&quot;admin_all_objects&quot;, &quot;edit_tcp&quot;, ...],
-  &quot;searchFilter&quot;: null
-}</code></pre>
-<h4>4.1.2 Role Collection</h4>
-<pre><code class="language-bash"># REST API Endpoint
-GET /services/authorization/roles
-GET /services/authorization/roles/{rolename}
-
-# Collect for each role:
-{
-  &quot;roleName&quot;: &quot;power_user&quot;,
-  &quot;importedRoles&quot;: [&quot;user&quot;],
-  &quot;capabilities&quot;: [
-    &quot;accelerate_datamodel&quot;,
-    &quot;edit_modinput_*&quot;,
-    &quot;schedule_search&quot;,
-    ...
-  ],
-  &quot;srchIndexesAllowed&quot;: [&quot;main&quot;, &quot;security&quot;, &quot;_*&quot;],
-  &quot;srchIndexesDefault&quot;: [&quot;main&quot;],
-  &quot;srchFilter&quot;: null,
-  &quot;srchTimeWin&quot;: -1,
-  &quot;rtSrchJobsQuota&quot;: 6,
-  &quot;srchJobsQuota&quot;: 10,
-  &quot;srchDiskQuota&quot;: 100
-}</code></pre>
-<h4>4.1.3 Group Collection (LDAP/SAML)</h4>
-<pre><code class="language-bash"># REST API Endpoint (if LDAP configured)
-GET /services/authentication/providers/LDAP
-
-# LDAP Group Mapping
-{
-  &quot;groupName&quot;: &quot;splunk_admins&quot;,
-  &quot;mappedRoles&quot;: [&quot;admin&quot;],
-  &quot;memberCount&quot;: 5,
-  &quot;ldapBaseDN&quot;: &quot;CN=splunk_admins,OU=Groups,DC=company,DC=com&quot;
-}
-
-# SAML Group Mapping
-GET /services/authentication/providers/SAML
-{
-  &quot;groupName&quot;: &quot;SSO_Splunk_PowerUsers&quot;,
-  &quot;mappedRoles&quot;: [&quot;power_user&quot;],
-  &quot;attributeName&quot;: &quot;groups&quot;
-}</code></pre>
-<h3>4.2 Object Ownership Mapping</h3>
-<h4>4.2.1 Dashboard Ownership</h4>
-<pre><code class="language-bash"># REST API for each dashboard
-GET /servicesNS/{owner}/{app}/data/ui/views/{dashboard_name}
-
-# Extract ownership:
-{
-  &quot;dashboardName&quot;: &quot;security_overview&quot;,
-  &quot;app&quot;: &quot;security_app&quot;,
-  &quot;owner&quot;: &quot;splunk_user&quot;,
-  &quot;sharing&quot;: &quot;app&quot;,              # user, app, global
-  &quot;permissions&quot;: {
-    &quot;read&quot;: [&quot;*&quot;],
-    &quot;write&quot;: [&quot;admin&quot;, &quot;power_user&quot;]
-  },
-  &quot;lastModifiedBy&quot;: &quot;splunk_user&quot;,
-  &quot;lastModifiedTime&quot;: &quot;2024-01-10T14:30:00Z&quot;
-}</code></pre>
-<h4>4.2.2 Alert Ownership</h4>
-<pre><code class="language-bash"># REST API for saved searches
-GET /servicesNS/{owner}/{app}/saved/searches/{search_name}
-
-# Extract ownership:
-{
-  &quot;alertName&quot;: &quot;critical_security_alert&quot;,
-  &quot;app&quot;: &quot;security_app&quot;,
-  &quot;owner&quot;: &quot;security_team&quot;,
-  &quot;sharing&quot;: &quot;app&quot;,
-  &quot;permissions&quot;: {
-    &quot;read&quot;: [&quot;*&quot;],
-    &quot;write&quot;: [&quot;security_admins&quot;]
-  },
-  &quot;isScheduled&quot;: true,
-  &quot;actions&quot;: [&quot;email&quot;, &quot;webhook&quot;],
-  &quot;lastRunTime&quot;: &quot;2024-01-15T10:00:00Z&quot;,
-  &quot;lastModifiedBy&quot;: &quot;mwilson&quot;,
-  &quot;lastModifiedTime&quot;: &quot;2024-01-05T09:00:00Z&quot;
-}</code></pre>
-<h4>4.2.3 Saved Search Ownership</h4>
-<pre><code class="language-bash"># Same as alerts - saved searches include:
-# - Ad-hoc saved searches (isScheduled: false)
-# - Reports (isScheduled: true, actions: [])
-# - Alerts (isScheduled: true, actions: [...])</code></pre>
-<h3>4.3 RBAC Summary Output</h3>
-<pre><code class="language-json">{
-  &quot;rbacSummary&quot;: {
-    &quot;collectionTimestamp&quot;: &quot;2025-12-03T10:30:00Z&quot;,
-
-    &quot;users&quot;: {
-      &quot;total&quot;: 150,
-      &quot;byType&quot;: {
-        &quot;Splunk&quot;: 25,
-        &quot;LDAP&quot;: 120,
-        &quot;SAML&quot;: 5
-      },
-      &quot;activeInLast30Days&quot;: 87,
-      &quot;activeInLast90Days&quot;: 142
-    },
-
-    &quot;roles&quot;: {
-      &quot;total&quot;: 15,
-      &quot;custom&quot;: 8,
-      &quot;builtin&quot;: 7,
-      &quot;list&quot;: [&quot;admin&quot;, &quot;power_user&quot;, &quot;user&quot;, &quot;security_analyst&quot;, ...]
-    },
-
-    &quot;groups&quot;: {
-      &quot;total&quot;: 12,
-      &quot;ldapGroups&quot;: 10,
-      &quot;samlGroups&quot;: 2,
-      &quot;mappings&quot;: [
-        {&quot;group&quot;: &quot;splunk_admins&quot;, &quot;roles&quot;: [&quot;admin&quot;]},
-        {&quot;group&quot;: &quot;security_team&quot;, &quot;roles&quot;: [&quot;security_analyst&quot;, &quot;power_user&quot;]}
-      ]
-    },
-
-    &quot;ownership&quot;: {
-      &quot;dashboards&quot;: {
-        &quot;total&quot;: 245,
-        &quot;byOwner&quot;: [
-          {&quot;owner&quot;: &quot;splunk_user&quot;, &quot;count&quot;: 45},
-          {&quot;owner&quot;: &quot;security_team&quot;, &quot;count&quot;: 32},
-          ...
-        ],
-        &quot;byApp&quot;: [
-          {&quot;app&quot;: &quot;search&quot;, &quot;count&quot;: 89},
-          {&quot;app&quot;: &quot;security_app&quot;, &quot;count&quot;: 56},
-          ...
-        ]
-      },
-      &quot;alerts&quot;: {
-        &quot;total&quot;: 187,
-        &quot;byOwner&quot;: [...],
-        &quot;byApp&quot;: [...]
-      },
-      &quot;savedSearches&quot;: {
-        &quot;total&quot;: 523,
-        &quot;byOwner&quot;: [...],
-        &quot;byApp&quot;: [...]
-      }
-    }
-  }
-}</code></pre>
-<hr>
-<h2>5. Usage Analytics Collection</h2>
-<h3>5.1 Search & Query Analytics</h3>
-<h4>5.1.1 Audit Log Analysis</h4>
-<pre><code class="language-bash"># Primary source: $SPLUNK_HOME/var/log/splunk/audit.log
-# Contains: All search activity, user logins, configuration changes
-
-# Parse audit.log for search activity:
-# - action=search
-# - action=savedsearch_dispatch
-# - action=alert_fired
-
-# Extract metrics:
-{
-  &quot;searchActivity&quot;: {
-    &quot;period&quot;: &quot;last_30_days&quot;,
-    &quot;totalSearches&quot;: 45678,
-    &quot;uniqueUsers&quot;: 87,
-    &quot;searchesByType&quot;: {
-      &quot;adhoc&quot;: 32456,
-      &quot;scheduled&quot;: 12000,
-      &quot;alertTriggered&quot;: 1222
-    }
-  }
-}</code></pre>
-<h4>5.1.2 Search Frequency Analysis</h4>
-<pre><code class="language-bash"># REST API for scheduled search history
-GET /services/search/jobs
-
-# Internal index query (requires search capability)
-index=_audit action=search
-| stats count by user, savedsearch_name, search
-| sort -count
-
-# Output:
-{
-  &quot;topSearches&quot;: [
-    {
-      &quot;searchName&quot;: &quot;Security - Failed Logins&quot;,
-      &quot;type&quot;: &quot;scheduled&quot;,
-      &quot;executionCount30Days&quot;: 2880,
-      &quot;avgRuntimeSeconds&quot;: 12.5,
-      &quot;owner&quot;: &quot;security_team&quot;,
-      &quot;app&quot;: &quot;security_app&quot;
-    },
-    ...
-  ],
-  &quot;topAdhocSearchPatterns&quot;: [
-    {
-      &quot;pattern&quot;: &quot;index=main sourcetype=access_*&quot;,
-      &quot;count&quot;: 1234,
-      &quot;uniqueUsers&quot;: 15
-    },
-    ...
-  ]
-}</code></pre>
-<h3>5.2 Dashboard Usage Analytics</h3>
-<h4>5.2.1 Dashboard View Metrics</h4>
-<pre><code class="language-bash"># Internal index query
-index=_internal sourcetype=splunk_web_access uri=&quot;*/app/*/[dashboard]*&quot;
-| stats count as views, dc(user) as unique_users by uri
-| sort -views
-
-# REST API approach (if internal indexes not accessible)
-GET /services/search/jobs
-# Run: | rest /servicesNS/-/-/data/ui/views | stats count by title
-
-# Output:
-{
-  &quot;dashboardUsage&quot;: {
-    &quot;period&quot;: &quot;last_30_days&quot;,
-    &quot;totalViews&quot;: 12345,
-    &quot;uniqueViewers&quot;: 78,
-    &quot;dashboards&quot;: [
-      {
-        &quot;name&quot;: &quot;security_overview&quot;,
-        &quot;app&quot;: &quot;security_app&quot;,
-        &quot;views&quot;: 2345,
-        &quot;uniqueViewers&quot;: 45,
-        &quot;avgSessionDuration&quot;: 180,
-        &quot;owner&quot;: &quot;splunk_user&quot;,
-        &quot;lastViewed&quot;: &quot;2024-01-15T09:30:00Z&quot;
-      },
-      ...
-    ]
-  }
-}</code></pre>
-<h4>5.2.2 Dashboard Interactivity</h4>
-<pre><code class="language-bash"># Track dashboard drilldowns, filter changes
-index=_internal sourcetype=splunk_web_access uri=&quot;*/app/*&quot; method=POST
-| stats count by uri_path
-
-# Output:
-{
-  &quot;dashboardInteractions&quot;: {
-    &quot;drilldowns&quot;: 5678,
-    &quot;filterChanges&quot;: 8901,
-    &quot;timeRangeChanges&quot;: 2345,
-    &quot;panelRefreshes&quot;: 12345
-  }
-}</code></pre>
-<h3>5.3 Alert Usage Analytics</h3>
-<h4>5.3.1 Alert Trigger Metrics</h4>
-<pre><code class="language-bash"># From audit.log or _audit index
-index=_audit action=alert_fired
-| stats count as triggers,
-        values(severity) as severities,
-        avg(result_count) as avg_results
-  by savedsearch_name, app
-
-# Output:
-{
-  &quot;alertMetrics&quot;: {
-    &quot;period&quot;: &quot;last_30_days&quot;,
-    &quot;totalTriggers&quot;: 4567,
-    &quot;uniqueAlerts&quot;: 87,
-    &quot;alerts&quot;: [
-      {
-        &quot;name&quot;: &quot;Critical - System Down&quot;,
-        &quot;app&quot;: &quot;infrastructure&quot;,
-        &quot;triggers&quot;: 234,
-        &quot;suppressedCount&quot;: 45,
-        &quot;avgResultCount&quot;: 3.2,
-        &quot;severity&quot;: 5,
-        &quot;actions&quot;: [&quot;email&quot;, &quot;pagerduty&quot;],
-        &quot;owner&quot;: &quot;ops_team&quot;
-      },
-      ...
-    ]
-  }
-}</code></pre>
-<h4>5.3.2 Alert Action Analytics</h4>
-<pre><code class="language-bash"># Track which alert actions are used
-index=_internal sourcetype=scheduler action=*
-| stats count by alert_actions
-
-# Output:
-{
-  &quot;alertActions&quot;: {
-    &quot;email&quot;: 12345,
-    &quot;webhook&quot;: 5678,
-    &quot;slack&quot;: 2345,
-    &quot;pagerduty&quot;: 1234,
-    &quot;script&quot;: 567,
-    &quot;summary_index&quot;: 8901
-  }
-}</code></pre>
-<h3>5.4 Index Usage Analytics</h3>
-<h4>5.4.1 Index Volume Metrics</h4>
-<pre><code class="language-bash"># REST API for index statistics
-GET /services/data/indexes-extended
-
-# Or via search
-| dbinspect index=*
-| stats sum(sizeOnDiskMB) as size_mb, sum(eventCount) as events by index
-
-# Output:
-{
-  &quot;indexMetrics&quot;: {
-    &quot;collectionTimestamp&quot;: &quot;2025-12-03T10:30:00Z&quot;,
-    &quot;indexes&quot;: [
-      {
-        &quot;name&quot;: &quot;main&quot;,
-        &quot;sizeOnDiskGB&quot;: 1234.5,
-        &quot;totalEventCount&quot;: 12345678901,
-        &quot;earliestEvent&quot;: &quot;2023-01-01T00:00:00Z&quot;,
-        &quot;latestEvent&quot;: &quot;2024-01-15T10:30:00Z&quot;,
-        &quot;retentionDays&quot;: 365,
-        &quot;replicationFactor&quot;: 3,
-        &quot;searchFactor&quot;: 2,
-        &quot;buckets&quot;: {
-          &quot;hot&quot;: 5,
-          &quot;warm&quot;: 120,
-          &quot;cold&quot;: 890
-        },
-        &quot;ingestionRate&quot;: {
-          &quot;last24h_GB&quot;: 45.6,
-          &quot;last7d_avgDaily_GB&quot;: 42.3,
-          &quot;last30d_avgDaily_GB&quot;: 40.1
-        }
-      },
-      ...
-    ],
-    &quot;totals&quot;: {
-      &quot;totalIndexes&quot;: 45,
-      &quot;totalSizeGB&quot;: 12345.6,
-      &quot;totalEvents&quot;: 987654321012,
-      &quot;dailyIngestionGB&quot;: 456.7
-    }
-  }
-}</code></pre>
-<h4>5.4.2 Index Access Patterns</h4>
-<pre><code class="language-bash"># From audit log - which indexes are searched most
-index=_audit action=search
-| rex field=search &quot;index=(?&lt;searched_index&gt;\w+)&quot;
-| stats count by searched_index
-| sort -count
-
-# Output:
-{
-  &quot;indexAccessPatterns&quot;: {
-    &quot;period&quot;: &quot;last_30_days&quot;,
-    &quot;bySearchCount&quot;: [
-      {&quot;index&quot;: &quot;main&quot;, &quot;searchCount&quot;: 45678},
-      {&quot;index&quot;: &quot;security&quot;, &quot;searchCount&quot;: 34567},
-      {&quot;index&quot;: &quot;_internal&quot;, &quot;searchCount&quot;: 12345},
-      ...
-    ]
-  }
-}</code></pre>
-<h3>5.5 Sourcetype Analytics</h3>
-<pre><code class="language-bash"># Sourcetype volume and usage
-| tstats count where index=* by index, sourcetype
-| stats sum(count) as events by sourcetype
-
-# Output:
-{
-  &quot;sourcetypeMetrics&quot;: {
-    &quot;sourcetypes&quot;: [
-      {
-        &quot;name&quot;: &quot;access_combined&quot;,
-        &quot;eventCount&quot;: 12345678,
-        &quot;indexes&quot;: [&quot;main&quot;, &quot;web&quot;],
-        &quot;searchFrequency&quot;: 1234,
-        &quot;usedInDashboards&quot;: 12,
-        &quot;usedInAlerts&quot;: 5
-      },
-      ...
-    ]
-  }
-}</code></pre>
-<h3>5.6 User Activity Analytics</h3>
-<pre><code class="language-bash"># User login and activity patterns
-index=_audit action=login OR action=search
-| stats count as actions,
-        min(_time) as first_activity,
-        max(_time) as last_activity,
-        dc(action) as action_types
-  by user
-| sort -actions
-
-# Output:
-{
-  &quot;userActivity&quot;: {
-    &quot;period&quot;: &quot;last_30_days&quot;,
-    &quot;users&quot;: [
-      {
-        &quot;username&quot;: &quot;splunk_user&quot;,
-        &quot;totalActions&quot;: 12345,
-        &quot;searchCount&quot;: 5678,
-        &quot;loginCount&quot;: 45,
-        &quot;lastActivity&quot;: &quot;2024-01-15T10:25:00Z&quot;,
-        &quot;primaryApp&quot;: &quot;security_app&quot;,
-        &quot;roles&quot;: [&quot;admin&quot;, &quot;power_user&quot;]
-      },
-      ...
-    ],
-    &quot;summary&quot;: {
-      &quot;totalLogins&quot;: 4567,
-      &quot;uniqueActiveUsers&quot;: 87,
-      &quot;avgSearchesPerUser&quot;: 156,
-      &quot;peakHour&quot;: 14
-    }
-  }
-}</code></pre>
-<hr>
-<h2>6. Output Structure & Summary File</h2>
-<h3>6.1 Export Directory Structure</h3>
-<pre><code>splunk_export_[env_name]_[timestamp]/
-│
-├── manifest.json                       # 📋 STANDARDIZED METADATA (v3.5.0)
-├── dma-env-summary.md           # 📊 MASTER SUMMARY FILE
-├── _metadata.json                      # Export metadata
-├── _environment_profile.json           # Detected environment profile
-│
-├── _systeminfo/                        # System infrastructure
-│   ├── server_info.json
-│   ├── installed_apps.json
-│   ├── search_peers.json
-│   ├── license_info.json
-│   ├── cluster_info.json
-│   └── deployment_info.json
-│
-├── _rbac/                              # Users, Groups, Roles
-│   ├── users.json                      # All users
-│   ├── roles.json                      # All roles with capabilities
-│   ├── groups.json                     # LDAP/SAML groups
-│   ├── authentication.conf             # Auth configuration
-│   ├── authorize.conf                  # Authorization config
-│   └── ownership_map.json              # Object → Owner mapping
-│
-├── _usage_analytics/                   # Usage statistics
-│   ├── search_activity.json            # Search frequency, patterns
-│   ├── dashboard_usage.json            # Dashboard views, interactions
-│   ├── alert_metrics.json              # Alert triggers, actions
-│   ├── index_usage.json                # Index access patterns
-│   ├── sourcetype_usage.json           # Sourcetype popularity
-│   ├── user_activity.json              # User engagement
-│   ├── dashboard_ownership.json        # Dashboard → owner mapping (v3.5.0)
-│   ├── alert_ownership.json            # Alert → owner mapping (v3.5.0)
-│   ├── ownership_summary.json          # Ownership by user (v3.5.0)
-│   ├── top_indexes_by_volume.json      # Volume analysis (v3.5.0)
-│   ├── top_sourcetypes_by_volume.json  # Sourcetype volume (v3.5.0)
-│   ├── top_hosts_by_volume.json        # Host volume data (v3.5.0)
-│   ├── zero_view_dashboards.json       # Elimination candidates (v3.5.0)
-│   ├── never_fired_alerts.json         # Elimination candidates (v3.5.0)
-│   └── migration_priority_scores.json  # Computed priority rankings
-│
-├── _indexes/                           # Index configurations
-│   ├── indexes.conf                    # Index definitions
-│   ├── indexes_detailed.json           # Full index metadata
-│   └── index_volumes.json              # Size and volume data
-│
-├── _system/                            # System-level configs
-│   └── local/
-│       ├── inputs.conf
-│       ├── outputs.conf
-│       ├── server.conf
-│       └── web.conf
-│
-├── [app_name]/                         # Per-app exports (v2 app-centric structure)
-│   ├── dashboards/                     # v2: App-scoped dashboards (v4.2.0+)
-│   │   ├── classic/                    # Classic XML dashboards for this app
-│   │   │   └── *.xml
-│   │   └── studio/                     # Dashboard Studio JSON for this app
-│   │       └── *.json
-│   ├── default/
-│   │   ├── props.conf
-│   │   ├── transforms.conf
-│   │   ├── savedsearches.conf
-│   │   ├── macros.conf
-│   │   ├── eventtypes.conf
-│   │   ├── tags.conf
-│   │   └── data/
-│   │       └── ui/
-│   │           ├── views/              # Legacy location (v1 archives only)
-│   │           ├── panels/             # Prebuilt panels
-│   │           └── nav/                # Navigation
-│   ├── local/
-│   │   └── [same structure as default]
-│   └── lookups/
-│       └── *.csv
-│
-└── _audit_sample/                      # Sample audit data (optional)
-    └── audit_sample.log                # Last 10000 audit entries</code></pre>
-<h3>6.2 manifest.json Schema (v4.2.0)</h3>
-<p>
-The script generates a standardized <code>manifest.json</code> with guaranteed schema for DMA:
-</p>
-<pre><code class="language-json">{
-  &quot;schemaVersion&quot;: &quot;4.0&quot;,
-  &quot;exportType&quot;: &quot;splunk_enterprise&quot;,
-  &quot;exportTimestamp&quot;: &quot;2025-12-03T10:30:00Z&quot;,
-  &quot;scriptVersion&quot;: &quot;4.2.0&quot;,
-  &quot;archive_structure&quot;: {
-    &quot;version&quot;: &quot;v2&quot;,
-    &quot;dashboard_organization&quot;: &quot;app_scoped&quot;
-  },
-
-  &quot;environment&quot;: {
-    &quot;hostname&quot;: &quot;splunk-sh-01.company.com&quot;,
-    &quot;splunkHome&quot;: &quot;/opt/splunk&quot;,
-    &quot;splunkVersion&quot;: &quot;9.1.2&quot;,
-    &quot;splunkFlavor&quot;: &quot;enterprise&quot;,
-    &quot;architecture&quot;: &quot;distributed&quot;,
-    &quot;role&quot;: &quot;search_head&quot;
-  },
-
-  &quot;collection&quot;: {
-    &quot;apps&quot;: 45,
-    &quot;dashboards&quot;: 245,
-    &quot;alerts&quot;: 187,
-    &quot;users&quot;: 150,
-    &quot;indexes&quot;: 32,
-    &quot;errors&quot;: 0,
-    &quot;warnings&quot;: 5
-  },
-
-  &quot;usageIntelligence&quot;: {
-    &quot;analysisPeriod&quot;: &quot;30d&quot;,
-    &quot;totalSearches&quot;: 45678,
-    &quot;totalDashboardViews&quot;: 12345,
-    &quot;totalAlertTriggers&quot;: 4567,
-    &quot;topIndexesByVolume&quot;: [...],
-    &quot;topSourcetypesByVolume&quot;: [...],
-    &quot;topHostsByVolume&quot;: [...],
-    &quot;elimination_candidates&quot;: {
-      &quot;zeroDashboards&quot;: 12,
-      &quot;neverFiredAlerts&quot;: 23
-    }
-  },
-
-  &quot;exportDuration&quot;: {
-    &quot;startTime&quot;: &quot;2025-12-03T10:25:00Z&quot;,
-    &quot;endTime&quot;: &quot;2025-12-03T10:32:45Z&quot;,
-    &quot;durationSeconds&quot;: 465
-  }
-}</code></pre>
-<h3>6.3 Master Summary File: dma-env-summary.md</h3>
-<pre><code class="language-markdown"># DynaSplunk Environment Summary
-
-**Export Date**: 2025-12-03T10:30:00Z
-**Splunk Version**: 9.1.2
-**Environment ID**: PROD-SH-CLUSTER-01
-**Export Tool Version**: 4.1.0
-
----
-
-## 🏗️ Environment Overview
-
-### Deployment Architecture
-
-| Attribute | Value |
-|-----------|-------|
-| **Deployment Type** | Distributed (Search Head Cluster + Indexer Cluster) |
-| **Product Edition** | Splunk Enterprise |
-| **Role** | Search Head (SHC Member) |
-| **Cluster Label** | production_shc |
-| **Search Peers** | 6 indexers |
-| **Total Indexed Data** | 45.6 TB |
-| **Daily Ingestion Rate** | 456 GB/day |
-| **License Type** | Enterprise Term License |
-| **License Daily Quota** | 500 GB |
-
-### Connected Components
-
-| Component | Endpoint | Status |
-|-----------|----------|--------|
-| SHC Captain | shc-captain.company.com:8089 | Active |
-| Indexer Cluster Master | cm.company.com:8089 | Active |
-| License Master | lm.company.com:8089 | Active |
-| Deployment Server | ds.company.com:8089 | Active |
-
----
-
-## 👥 Users &amp; Access Summary
-
-### User Statistics
-
-| Metric | Value |
-|--------|-------|
-| **Total Users** | 150 |
-| **Active (30 days)** | 87 (58%) |
-| **Active (90 days)** | 142 (95%) |
-| **LDAP Users** | 120 (80%) |
-| **Local Users** | 25 (17%) |
-| **SAML Users** | 5 (3%) |
-
-### Role Distribution
-
-| Role | Users | Capabilities |
-|------|-------|--------------|
-| admin | 5 | Full admin access |
-| power_user | 23 | Schedule searches, create alerts |
-| security_analyst | 15 | Security app access |
-| user | 107 | Basic search access |
-
-### Top Asset Owners
-
-| Owner | Dashboards | Alerts | Saved Searches |
-|-------|------------|--------|----------------|
-| security_team | 32 | 45 | 89 |
-| splunk_user | 28 | 12 | 34 |
-| ops_team | 24 | 38 | 67 |
-| network_admin | 18 | 22 | 45 |
-| mwilson | 15 | 8 | 23 |
-
----
-
-## 📊 Usage Analytics (Last 30 Days)
-
-### Search Activity
-
-| Metric | Value |
-|--------|-------|
-| **Total Searches** | 45,678 |
-| **Unique Users** | 87 |
-| **Scheduled Searches** | 12,000 (26%) |
-| **Ad-hoc Searches** | 32,456 (71%) |
-| **Alert-Triggered** | 1,222 (3%) |
-| **Avg Search Runtime** | 8.5 seconds |
-| **Peak Hour** | 2:00 PM (14:00) |
-
-### Top 10 Most Executed Searches
-
-| Rank | Search Name | Type | Executions | Avg Runtime | Owner |
-|------|-------------|------|------------|-------------|-------|
-| 1 | Security - Failed Logins | Scheduled | 2,880 | 12.5s | security_team |
-| 2 | Infrastructure Health Check | Scheduled | 2,880 | 8.2s | ops_team |
-| 3 | Application Error Monitor | Scheduled | 2,016 | 15.3s | dev_team |
-| 4 | Network Traffic Analysis | Scheduled | 1,440 | 45.2s | network_admin |
-| 5 | User Activity Report | Scheduled | 720 | 23.1s | compliance |
-| ... | ... | ... | ... | ... | ... |
-
-### Dashboard Usage
-
-| Metric | Value |
-|--------|-------|
-| **Total Dashboard Views** | 12,345 |
-| **Unique Viewers** | 78 |
-| **Avg Session Duration** | 3.5 minutes |
-| **Most Popular Hour** | 10:00 AM |
-
-### Top 10 Most Viewed Dashboards
-
-| Rank | Dashboard | App | Views | Unique Users | Owner |
-|------|-----------|-----|-------|--------------|-------|
-| 1 | Security Overview | security_app | 2,345 | 45 | security_team |
-| 2 | Infrastructure Status | ops_app | 1,890 | 38 | ops_team |
-| 3 | Application Performance | apm_app | 1,567 | 32 | dev_team |
-| 4 | Network Dashboard | network_app | 1,234 | 28 | network_admin |
-| 5 | Compliance Report | compliance | 987 | 15 | compliance |
-| ... | ... | ... | ... | ... | ... |
-
-### Alert Statistics
-
-| Metric | Value |
-|--------|-------|
-| **Total Alert Triggers** | 4,567 |
-| **Unique Alerts Fired** | 87 |
-| **Suppressed Alerts** | 1,234 |
-| **Avg Results per Trigger** | 3.2 |
-
-### Top 10 Most Triggered Alerts
-
-| Rank | Alert Name | Triggers | Severity | Actions | Owner |
-|------|------------|----------|----------|---------|-------|
-| 1 | Failed Login Threshold | 456 | High | email, pagerduty | security_team |
-| 2 | Disk Space Warning | 345 | Medium | email | ops_team |
-| 3 | Application Error Spike | 234 | High | slack, pagerduty | dev_team |
-| 4 | Network Latency Alert | 189 | Medium | email | network_admin |
-| 5 | Unauthorized Access | 156 | Critical | email, pagerduty, script | security_team |
-| ... | ... | ... | ... | ... | ... |
-
----
-
-## 💾 Index Statistics
-
-### Index Summary
-
-| Metric | Value |
-|--------|-------|
-| **Total Indexes** | 45 |
-| **Total Size** | 45.6 TB |
-| **Total Events** | 987.6 billion |
-| **Daily Ingestion** | 456 GB |
-
-### Top 10 Indexes by Size
-
-| Rank | Index | Size (TB) | Events | Retention | Search Freq |
-|------|-------|-----------|--------|-----------|-------------|
-| 1 | main | 12.3 | 234.5B | 365 days | 45,678 |
-| 2 | security | 8.9 | 178.2B | 365 days | 34,567 |
-| 3 | network | 7.2 | 145.8B | 180 days | 23,456 |
-| 4 | application | 5.6 | 112.3B | 90 days | 12,345 |
-| 5 | infrastructure | 4.3 | 89.4B | 90 days | 8,901 |
-| ... | ... | ... | ... | ... | ... |
-
-### Top 10 Sourcetypes by Volume
-
-| Rank | Sourcetype | Events | Indexes | Search Freq | Dashboards | Alerts |
-|------|------------|--------|---------|-------------|------------|--------|
-| 1 | access_combined | 89.5B | main, web | 12,345 | 23 | 12 |
-| 2 | syslog | 78.3B | main, security | 23,456 | 18 | 8 |
-| 3 | WinEventLog:Security | 56.7B | security | 34,567 | 32 | 24 |
-| 4 | cisco:asa | 45.6B | network | 8,901 | 15 | 6 |
-| 5 | linux_secure | 34.5B | security | 5,678 | 8 | 4 |
-| ... | ... | ... | ... | ... | ... | ... |
-
----
-
-## 🎯 Migration Priority Scoring
-
-### Priority Calculation Methodology
-
-Assets are scored on a scale of 0-100 based on:
-- **Usage Frequency** (40%): How often the asset is used
-- **User Reach** (25%): How many users interact with it
-- **Business Criticality** (20%): Severity, ownership, app context
-- **Data Volume** (15%): Size and ingestion rate
-
-### High Priority Assets (Score &gt; 75)
-
-#### Dashboards to Migrate First
-
-| Priority | Dashboard | Score | Views/30d | Users | Owner | Notes |
-|----------|-----------|-------|-----------|-------|-------|-------|
-| 1 | Security Overview | 95 | 2,345 | 45 | security_team | Critical security visibility |
-| 2 | Infrastructure Status | 92 | 1,890 | 38 | ops_team | Operations essential |
-| 3 | Compliance Report | 88 | 987 | 15 | compliance | Regulatory requirement |
-| 4 | Application Performance | 85 | 1,567 | 32 | dev_team | High user engagement |
-| 5 | Executive Summary | 82 | 567 | 12 | leadership | C-level visibility |
-
-#### Alerts to Migrate First
-
-| Priority | Alert | Score | Triggers/30d | Severity | Owner | Notes |
-|----------|-------|-------|--------------|----------|-------|-------|
-| 1 | Unauthorized Access | 98 | 156 | Critical | security_team | Security-critical |
-| 2 | System Down | 96 | 34 | Critical | ops_team | Availability |
-| 3 | Failed Login Threshold | 94 | 456 | High | security_team | Security |
-| 4 | Data Exfiltration | 92 | 23 | Critical | security_team | DLP |
-| 5 | Application Error Spike | 88 | 234 | High | dev_team | App health |
-
-#### Indexes to Migrate First
-
-| Priority | Index | Score | Size | Search Freq | Sourcetypes | Notes |
-|----------|-------|-------|------|-------------|-------------|-------|
-| 1 | security | 97 | 8.9 TB | 34,567 | 15 | Security operations |
-| 2 | main | 95 | 12.3 TB | 45,678 | 45 | Primary data store |
-| 3 | infrastructure | 89 | 4.3 TB | 8,901 | 12 | Ops monitoring |
-| 4 | application | 85 | 5.6 TB | 12,345 | 23 | App logs |
-| 5 | compliance | 82 | 2.1 TB | 3,456 | 8 | Audit requirements |
-
-### Medium Priority Assets (Score 50-75)
-
-| Asset Type | Count | Top Examples |
-|------------|-------|--------------|
-| Dashboards | 45 | Network Overview, DB Performance, API Metrics |
-| Alerts | 32 | Warning thresholds, capacity alerts |
-| Saved Searches | 89 | Reporting queries, analysis searches |
-| Indexes | 12 | Development, testing, archive |
-
-### Low Priority Assets (Score &lt; 50)
-
-| Asset Type | Count | Recommendation |
-|------------|-------|----------------|
-| Dashboards | 78 | Review for archival |
-| Alerts | 45 | Consolidate or retire |
-| Saved Searches | 234 | Evaluate necessity |
-| Indexes | 18 | Consider retention policy |
-
----
-
-## 📦 App Inventory
-
-### Installed Apps Summary
-
-| App | Version | Dashboards | Alerts | Owner | Migration Priority |
-|-----|---------|------------|--------|-------|-------------------|
-| security_app | 4.2.1 | 32 | 45 | security_team | High |
-| ops_app | 2.1.0 | 24 | 38 | ops_team | High |
-| network_app | 3.0.2 | 15 | 22 | network_admin | Medium |
-| compliance | 1.5.0 | 8 | 12 | compliance | High |
-| dev_tools | 2.0.0 | 12 | 8 | dev_team | Medium |
-| ... | ... | ... | ... | ... | ... |
-
----
-
-## 🔄 Data Flow Summary
-
-### Input Types
-
-| Input Type | Count | Volume/Day |
-|------------|-------|------------|
-| File monitoring | 234 | 45 GB |
-| TCP/UDP receivers | 56 | 123 GB |
-| HTTP Event Collector | 89 | 78 GB |
-| Scripted inputs | 34 | 12 GB |
-| Modular inputs | 45 | 89 GB |
-| Database inputs | 12 | 34 GB |
-| Cloud inputs | 23 | 56 GB |
-
-### Output Destinations
-
-| Destination | Type | Volume/Day |
-|-------------|------|------------|
-| Local indexers | Indexer cluster | 456 GB |
-| AWS S3 (archive) | Smartstore | 234 GB |
-| Summary index | Internal | 12 GB |
-
----
-
-## ⚠️ Migration Considerations
-
-### Potential Challenges
-
-1. **Custom Commands**: 12 custom SPL commands detected - require manual conversion
-2. **Lookup Tables**: 45 CSV lookups (234 MB total) - need data migration strategy
-3. **Complex Alerts**: 23 alerts with multi-step actions - review automation needs
-4. **Heavy Macros**: 15 macros with nested dependencies - test thoroughly
-5. **Custom Visualizations**: 8 custom viz used in dashboards - need alternatives
-
-### Data Gaps
-
-| Category | Issue | Impact | Recommendation |
-|----------|-------|--------|----------------|
-| Orphaned Dashboards | 12 dashboards with no owner | Medium | Assign ownership |
-| Unused Alerts | 23 alerts never triggered | Low | Consider removal |
-| Empty Indexes | 5 indexes with no data | Low | Remove or repurpose |
-| Duplicate Searches | 34 similar saved searches | Medium | Consolidate |
-
-### Recommended Migration Order
-
-1. **Phase 1 (Critical)**: Security dashboards, critical alerts, main indexes
-2. **Phase 2 (High)**: Operations dashboards, infrastructure monitoring
-3. **Phase 3 (Medium)**: Application monitoring, development tools
-4. **Phase 4 (Low)**: Archive data, deprecated assets
-
----
-
-## 📋 Export Manifest
-
-### Files Included
-
-| Category | Count | Size |
-|----------|-------|------|
-| Configuration files | 234 | 12 MB |
-| Dashboard definitions | 245 | 45 MB |
-| Alert configurations | 187 | 8 MB |
-| Lookup tables | 45 | 234 MB |
-| Audit samples | 1 | 50 MB |
-| System info | 12 | 5 MB |
-| RBAC data | 6 | 2 MB |
-| Usage analytics | 8 | 15 MB |
-
-**Total Export Size**: 371 MB
-
----
-
-*Generated by DMA Splunk Export Tool v4.0.0*</code></pre>
-<hr>
-<h2>7. Script Flow & Interactive Prompts</h2>
-<h3>7.0 Verbosity & User Guidance Philosophy</h3>
-<p>
-<strong>CRITICAL REQUIREMENT</strong>: Every prompt in this script MUST include:
-</p>
-<ol>
-<li><strong>Context Explanation</strong>: Why we're asking this question</li>
-<li><strong>Impact Statement</strong>: What happens with each choice</li>
-<li><strong>Recommendation</strong>: What we suggest for most users</li>
-<li><strong>Data Justification</strong>: What data will be collected and why it matters for migration</li>
+<hr />
+<h2 id="global-defaults-and-tunables">2. Global Defaults and
+Tunables</h2>
+<p>All defaults are defined near the top of the script (lines ~155-259)
+and can be overridden via environment variables.</p>
+<pre><code>SPLUNK_HOST      = &quot;localhost&quot;
+SPLUNK_PORT      = &quot;8089&quot;
+
+BATCH_SIZE       = 250          # Items per paginated API request
+RATE_LIMIT_DELAY = 0.05         # 50ms between API calls
+API_DELAY_SECONDS= 0.05         # Alias used in collection loops
+
+API_TIMEOUT      = 120          # Per-request curl timeout (seconds)
+CONNECT_TIMEOUT  = 10           # curl --connect-timeout (seconds)
+MAX_TOTAL_TIME   = 14400        # 4 hours maximum total runtime
+
+MAX_RETRIES      = 3            # Retry attempts for failed API requests
+RETRY_DELAY      = 2            # Initial retry delay (exponential backoff)
+
+COLLECT_RBAC     = true         # ON by default (use --no-rbac to disable)
+COLLECT_USAGE    = true         # ON by default (use --no-usage to disable)
+COLLECT_DASHBOARDS = true
+COLLECT_ALERTS   = true
+COLLECT_INDEXES  = true
+COLLECT_LOOKUPS  = false        # OFF by default (use --apps with lookups dir)
+COLLECT_AUDIT    = false
+
+ANONYMIZE_DATA   = true         # Two-archive anonymization (original + _masked)
+USAGE_PERIOD     = &quot;30d&quot;        # Analytics time window (override: --analytics-period)</code></pre>
+<p>Override example:</p>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="va">BATCH_SIZE</span><span class="op">=</span>50 <span class="va">MAX_TOTAL_TIME</span><span class="op">=</span>7200 <span class="ex">./dma-splunk-export.sh</span> <span class="at">-u</span> admin <span class="at">-p</span> pass</span></code></pre></div>
+<hr />
+<h2 id="splunk_home-detection">3. SPLUNK_HOME Detection</h2>
+<p>The <code>detect_splunk_home()</code> function (lines ~2461-2519)
+locates the Splunk installation directory. This is required because the
+Enterprise script reads configuration files directly from the
+filesystem.</p>
+<h3 id="detection-order">Detection Order</h3>
+<ol type="1">
+<li><strong><code>$SPLUNK_HOME</code> environment variable</strong> – if
+set and the directory exists, use it immediately</li>
+<li><strong>Common installation paths</strong> – scanned in order:
+<ul>
+<li><code>/opt/splunk</code></li>
+<li><code>/opt/splunkforwarder</code></li>
+<li><code>/Applications/Splunk</code></li>
+<li><code>/Applications/SplunkForwarder</code></li>
+<li><code>$HOME/splunk</code></li>
+<li><code>$HOME/splunkforwarder</code></li>
+<li><code>/usr/local/splunk</code></li>
+</ul></li>
+<li><strong>User prompt</strong> – if no path is found, the script
+prompts interactively (unless <code>--splunk-home</code> was provided
+via CLI)</li>
 </ol>
-<p>
-The script should feel like a guided conversation with an expert, not a terse command-line interrogation.
-</p>
-<h3>7.1 Complete Script Flow</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────────────┐
-│                         SCRIPT START                                 │
-│                                                                      │
-│  Display banner and version information                              │
-│  Check prerequisites (bash version, curl, permissions)               │
-│  Display pre-flight checklist and requirements                       │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 1: ENVIRONMENT DETECTION                                       │
-│                                                                      │
-│ 1.1 Detect SPLUNK_HOME                                              │
-│     - Auto-detect: /opt/splunk, /opt/splunkforwarder, etc.          │
-│     - Prompt if not found                                           │
-│                                                                      │
-│ 1.2 Detect Splunk Flavor                                            │
-│     → Universal Forwarder detected! Limited export available.       │
-│     → Enterprise detected! Full export available.                   │
-│                                                                      │
-│ 1.3 Detect Architecture (standalone/distributed/cloud)              │
-│                                                                      │
-│ 1.4 Display Environment Profile                                     │
-│     ┌────────────────────────────────────────────────────┐          │
-│     │ Detected Environment:                               │          │
-│     │   Product: Splunk Enterprise 9.1.2                 │          │
-│     │   Role: Search Head (SHC Member)                   │          │
-│     │   Architecture: Distributed                         │          │
-│     │   Cluster: production_shc                          │          │
-│     │   Search Peers: 6 indexers                         │          │
-│     └────────────────────────────────────────────────────┘          │
-│                                                                      │
-│ [PROMPT] Is this correct? (Y/n)                                     │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 2: APPLICATION SELECTION                                       │
-│                                                                      │
-│ ╔════════════════════════════════════════════════════════════════╗  │
-│ ║  APPLICATION SELECTION                                          ║  │
-│ ╠════════════════════════════════════════════════════════════════╣  │
-│ ║                                                                 ║  │
-│ ║  WHY WE ASK:                                                    ║  │
-│ ║  Splunk organizes content into &quot;Apps&quot; - containers that hold    ║  │
-│ ║  dashboards, alerts, saved searches, and configurations.        ║  │
-│ ║  We need to know which apps contain the content you want to     ║  │
-│ ║  migrate to Dynatrace.                                          ║  │
-│ ║                                                                 ║  │
-│ ║  WHAT WE COLLECT FROM EACH APP:                                 ║  │
-│ ║  • Dashboards (Classic XML and Dashboard Studio JSON)           ║  │
-│ ║  • Alerts and Scheduled Searches (savedsearches.conf)           ║  │
-│ ║  • Field Extractions (props.conf, transforms.conf)              ║  │
-│ ║  • Lookup Tables (.csv files)                                   ║  │
-│ ║  • Search Macros (macros.conf)                                  ║  │
-│ ║  • Event Classifications (eventtypes.conf, tags.conf)           ║  │
-│ ║                                                                 ║  │
-│ ║  RECOMMENDATION:                                                ║  │
-│ ║  For a complete migration assessment, we recommend exporting    ║  │
-│ ║  ALL apps. This gives DMA the full picture of your              ║  │
-│ ║  Splunk environment and enables accurate migration planning.    ║  │
-│ ║                                                                 ║  │
-│ ╚════════════════════════════════════════════════════════════════╝  │
-│                                                                      │
-│ Discovered Applications (45 total):                                  │
-│ ┌────────────────────────────────────────────────────────────────┐  │
-│ │  #  │ App Name          │ Dashboards │ Alerts │ Size    │      │  │
-│ │ ────┼───────────────────┼────────────┼────────┼─────────┤      │  │
-│ │  1  │ search            │ 12         │ 0      │ 2.3 MB  │      │  │
-│ │  2  │ security_app      │ 32         │ 45     │ 15.6 MB │      │  │
-│ │  3  │ ops_monitoring    │ 24         │ 38     │ 8.9 MB  │      │  │
-│ │  4  │ network_app       │ 15         │ 22     │ 5.2 MB  │      │  │
-│ │  5  │ compliance        │ 8          │ 12     │ 3.1 MB  │      │  │
-│ │ ... │ (40 more apps)    │            │        │         │      │  │
-│ └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│ [PROMPT] How would you like to select applications?                  │
-│                                                                      │
-│   1. Export ALL applications (Recommended for full migration)        │
-│      → Includes all 45 apps with their complete configurations       │
-│      → Best for comprehensive migration assessment                   │
-│      → Estimated export size: ~150 MB                                │
-│                                                                      │
-│   2. Enter specific app names (comma-separated)                      │
-│      → Example: security_app, ops_monitoring, compliance             │
-│      → Use this if you know exactly which apps to migrate            │
-│      → Faster export, smaller file size                              │
-│                                                                      │
-│   3. Select from numbered list                                       │
-│      → Enter numbers like: 1,2,5,7-10                                │
-│      → Interactive selection for browsing apps                       │
-│                                                                      │
-│   4. Export system configurations only (no apps)                     │
-│      → Only collects indexes, inputs, system-level configs           │
-│      → Use for infrastructure-only assessment                        │
-│                                                                      │
-│ Enter choice [1]:                                                    │
-│                                                                      │
-│ ── If option 2 selected ──────────────────────────────────────────  │
-│                                                                      │
-│ Enter app names (comma-separated):                                   │
-│ &gt; security_app, ops_monitoring, compliance                           │
-│                                                                      │
-│ Validating app names...                                              │
-│ ✓ security_app - Found (32 dashboards, 45 alerts)                   │
-│ ✓ ops_monitoring - Found (24 dashboards, 38 alerts)                 │
-│ ✓ compliance - Found (8 dashboards, 12 alerts)                      │
-│                                                                      │
-│ Total: 3 apps selected (64 dashboards, 95 alerts)                   │
-│                                                                      │
-│ [PROMPT] Proceed with these 3 apps? (Y/n)                           │
-│                                                                      │
-│ ── If option 3 selected ──────────────────────────────────────────  │
-│                                                                      │
-│ Enter app numbers (e.g., 1,2,5 or 1-5,8,10):                        │
-│ &gt; 2,3,5                                                              │
-│                                                                      │
-│ Selected apps:                                                       │
-│ ✓ security_app (32 dashboards, 45 alerts)                           │
-│ ✓ ops_monitoring (24 dashboards, 38 alerts)                         │
-│ ✓ compliance (8 dashboards, 12 alerts)                              │
-│                                                                      │
-│ [PROMPT] Proceed with these 3 apps? (Y/n)                           │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 3: DATA CATEGORY SELECTION                                     │
-│                                                                      │
-│ ╔════════════════════════════════════════════════════════════════╗  │
-│ ║  DATA CATEGORIES TO COLLECT                                     ║  │
-│ ╠════════════════════════════════════════════════════════════════╣  │
-│ ║                                                                 ║  │
-│ ║  WHY WE ASK:                                                    ║  │
-│ ║  Different migration scenarios require different data. For     ║  │
-│ ║  example, if you only want to migrate dashboards, you might    ║  │
-│ ║  skip collecting user activity data. However, for a complete   ║  │
-│ ║  migration assessment, we recommend collecting everything.     ║  │
-│ ║                                                                 ║  │
-│ ╚════════════════════════════════════════════════════════════════╝  │
-│                                                                      │
-│ Select data categories to collect:                                   │
-│                                                                      │
-│ [✓] 1. Configuration Files (props, transforms, indexes, inputs)     │
-│        → Required for understanding data pipeline                    │
-│        → Maps how Splunk processes and stores data                   │
-│                                                                      │
-│ [✓] 2. Dashboards (Classic XML + Dashboard Studio JSON)             │
-│        → Visual content for conversion to Dynatrace apps            │
-│        → Includes all panels, queries, and layouts                   │
-│                                                                      │
-│ [✓] 3. Alerts &amp; Saved Searches (savedsearches.conf)                 │
-│        → Critical for operational continuity                         │
-│        → Includes schedules, triggers, and actions                   │
-│                                                                      │
-│ [✓] 4. Users, Roles &amp; Groups (RBAC data)                            │
-│        → Essential for ownership mapping                             │
-│        → Identifies who owns which dashboards/alerts                 │
-│        → Helps prioritize migration by team                          │
-│                                                                      │
-│ [✓] 5. Usage Analytics (search frequency, dashboard views)          │
-│        → Identifies high-value assets worth migrating                │
-│        → Shows which content is actively used                        │
-│        → Enables data-driven migration prioritization                │
-│                                                                      │
-│ [✓] 6. Index &amp; Data Statistics                                       │
-│        → Volume metrics for capacity planning                        │
-│        → Retention settings for Dynatrace bucket config              │
-│        → Sourcetype mapping for OpenPipeline                         │
-│                                                                      │
-│ [ ] 7. Lookup Tables (.csv files)                                    │
-│        → Reference data used in searches                             │
-│        → May contain sensitive data - review before including        │
-│                                                                      │
-│ [ ] 8. Audit Log Sample (last 10,000 entries)                        │
-│        → Detailed search patterns for analysis                       │
-│        → May contain sensitive query content                         │
-│                                                                      │
-│ Enter categories to toggle (e.g., 7,8 to add) or press Enter:       │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 3: AUTHENTICATION                                              │
-│                                                                      │
-│ [PROMPT] Enter Splunk admin credentials for REST API access:        │
-│   Username [admin]:                                                  │
-│   Password: ********                                                 │
-│                                                                      │
-│ Testing authentication...                                            │
-│ ✓ Authentication successful                                         │
-│                                                                      │
-│ Checking capabilities...                                             │
-│ ✓ admin_all_objects: YES                                            │
-│ ✓ list_users: YES                                                   │
-│ ✓ list_roles: YES                                                   │
-│ ⚠ audit_read: NO (usage analytics will be limited)                  │
-│                                                                      │
-│ [PROMPT] Continue with limited capabilities? (Y/n)                  │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 4: USAGE ANALYTICS OPTIONS                                     │
-│                                                                      │
-│ [PROMPT] Usage analytics collection period:                         │
-│   1. Last 7 days                                                    │
-│   2. Last 30 days (Recommended)                                     │
-│   3. Last 90 days                                                   │
-│   4. Last 365 days                                                  │
-│   5. Skip usage analytics                                           │
-│                                                                      │
-│ [PROMPT] Collect audit log sample? (y/N)                            │
-│   This helps identify search patterns but may contain sensitive data│
-│   Max sample size: 10,000 entries                                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 5: DATA COLLECTION                                             │
-│                                                                      │
-│ Progress display with stages:                                        │
-│                                                                      │
-│ [1/10] Collecting system information...                    ✓        │
-│ [2/10] Collecting installed apps...                        ✓        │
-│ [3/10] Collecting configuration files...                   ⏳ 45%   │
-│        └─ security_app/default/props.conf                           │
-│        └─ security_app/local/savedsearches.conf                     │
-│ [4/10] Collecting dashboards (Classic XML)...              ○        │
-│ [5/10] Collecting dashboards (Dashboard Studio)...         ○        │
-│ [6/10] Collecting users and roles...                       ○        │
-│ [7/10] Collecting LDAP/SAML groups...                      ○        │
-│ [8/10] Collecting usage analytics...                       ○        │
-│ [9/10] Collecting index statistics...                      ○        │
-│ [10/10] Generating summary report...                        ○        │
-│                                                                      │
-│ Current: props.conf (45 stanzas)                                    │
-│ Elapsed: 00:02:34 | Estimated remaining: 00:05:12                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 6: SUMMARY GENERATION                                          │
-│                                                                      │
-│ Calculating migration priority scores...                             │
-│ Generating dma-env-summary.md...                             │
-│                                                                      │
-│ Summary Preview:                                                     │
-│ ┌────────────────────────────────────────────────────────┐          │
-│ │ Environment: PROD-SH-CLUSTER-01                        │          │
-│ │ Total Dashboards: 245 (High priority: 23)              │          │
-│ │ Total Alerts: 187 (High priority: 15)                  │          │
-│ │ Total Users: 150 (Active: 87)                          │          │
-│ │ Total Data: 45.6 TB across 45 indexes                  │          │
-│ │                                                        │          │
-│ │ Migration Complexity Score: 72/100 (Medium-High)       │          │
-│ └────────────────────────────────────────────────────────┘          │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 7: ARCHIVE CREATION                                            │
-│                                                                      │
-│ Creating compressed archive...                                       │
-│ ✓ Archive created: /tmp/splunk_export_PROD_20240115_103000.tar.gz  │
-│ ✓ Size: 371 MB                                                      │
-│ ✓ Files: 567                                                        │
-│                                                                      │
-│ SHA256: a1b2c3d4e5f6...                                             │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 8: COMPLETION                                                   │
-│                                                                      │
-│ ╔════════════════════════════════════════════════════════════════╗  │
-│ ║                    EXPORT COMPLETE!                             ║  │
-│ ╚════════════════════════════════════════════════════════════════╝  │
-│                                                                      │
-│ Export file: /tmp/splunk_export_PROD_20240115_103000.tar.gz         │
-│ Size: 371 MB                                                        │
-│ Duration: 00:07:45                                                  │
-│                                                                      │
-│ NEXT STEPS:                                                         │
-│ 1. Download the export file                                         │
-│ 2. Open DMA in Dynatrace                                            │
-│ 3. Upload the .tar.gz file                                          │
-│                                                                      │
-│ The dma-env-summary.md file contains:                        │
-│ • Environment overview                                              │
-│ • User and access summary                                           │
-│ • Usage analytics for last 30 days                                  │
-│ • Migration priority rankings                                       │
-│ • Recommended migration phases                                      │
-└─────────────────────────────────────────────────────────────────────┘</code></pre>
-<h3>7.2 Flavor-Specific Prompts</h3>
-<h4>Universal Forwarder Detected</h4>
-<pre><code>┌─────────────────────────────────────────────────────────────────────┐
-│ ⚠️  UNIVERSAL FORWARDER DETECTED                                    │
-│                                                                      │
-│ This is a Universal Forwarder installation.                          │
-│ Universal Forwarders have limited data available for export:        │
-│                                                                      │
-│ Available:                                                           │
-│   ✓ inputs.conf (data sources)                                      │
-│   ✓ outputs.conf (forwarding config)                                │
-│   ✓ props.conf (if any local parsing)                               │
-│   ✓ deploymentclient.conf (if managed by DS)                        │
-│                                                                      │
-│ NOT Available:                                                       │
-│   ✗ Dashboards (no search capability)                               │
-│   ✗ Alerts (no search capability)                                   │
-│   ✗ Users/RBAC (minimal)                                            │
-│   ✗ Usage analytics (no searches)                                   │
-│                                                                      │
-│ For full export, run this script on:                                │
-│   • Search Head                                                     │
-│   • Deployment Server (for deployed configs)                        │
-│                                                                      │
-│ [PROMPT] Continue with forwarder export? (Y/n)                      │
-└─────────────────────────────────────────────────────────────────────┘</code></pre>
-<h4>Search Head Cluster Detected</h4>
-<pre><code>┌─────────────────────────────────────────────────────────────────────┐
-│ 🔷 SEARCH HEAD CLUSTER MEMBER DETECTED                              │
-│                                                                      │
-│ This node is part of a Search Head Cluster.                         │
-│                                                                      │
-│ Cluster Details:                                                    │
-│   Cluster Label: production_shc                                     │
-│   This Node: shc-member-02.company.com                              │
-│   Captain: shc-captain.company.com                                  │
-│   Members: 3                                                        │
-│                                                                      │
-│ For SHC environments, we recommend:                                  │
-│   • Run export from the CAPTAIN for most complete data              │
-│   • Use REST API (not file-based) for shared knowledge objects     │
-│                                                                      │
-│ [PROMPT] Collection options:                                        │
-│   1. Export from this member (may have incomplete shared objects)   │
-│   2. Connect to Captain and export from there (Recommended)         │
-│   3. Exit and run script on Captain node                            │
-│                                                                      │
-│ Select option [2]:                                                  │
-└─────────────────────────────────────────────────────────────────────┘</code></pre>
-<h4>Splunk Cloud Detected</h4>
-<pre><code>┌─────────────────────────────────────────────────────────────────────┐
-│ ☁️  SPLUNK CLOUD ENVIRONMENT DETECTED                               │
-│                                                                      │
-│ This appears to be a Splunk Cloud deployment.                       │
-│                                                                      │
-│ Cloud Stack: production.splunkcloud.com                             │
-│ Region: us-west-2                                                   │
-│                                                                      │
-│ For Splunk Cloud exports:                                           │
-│   • File system access is limited                                   │
-│   • All collection will use REST API                                │
-│   • Some internal indexes may not be accessible                     │
-│                                                                      │
-│ Required: Splunk Cloud admin credentials                            │
-│                                                                      │
-│ [PROMPT] Enter Splunk Cloud admin username:                         │
-│ [PROMPT] Enter Splunk Cloud admin password:                         │
-│                                                                      │
-│ Testing connection to production.splunkcloud.com:8089...            │
-└─────────────────────────────────────────────────────────────────────┘</code></pre>
-<hr>
-<h2>8. API Endpoints Reference</h2>
-<h3>8.1 Core REST API Endpoints</h3>
+<p>Validation: the path must contain an <code>etc/</code> subdirectory
+(<code>[ -d "$SPLUNK_HOME/etc" ]</code>).</p>
+<h3 id="python-detection">Python Detection</h3>
+<p>After <code>SPLUNK_HOME</code> is located, the script searches for
+Python 3 in this order:</p>
+<ol type="1">
+<li><code>$SPLUNK_HOME/bin/python3</code> (Splunk’s bundled Python)</li>
+<li>System <code>python3</code></li>
+<li>System <code>python</code> (only if version 3)</li>
+</ol>
+<p>Python is required for all JSON processing throughout the script.</p>
+<hr />
+<h2 id="environment-detection-and-shc-awareness">4. Environment
+Detection and SHC Awareness</h2>
+<h3 id="filesystem-based-detection-lines-2560-2630">Filesystem-Based
+Detection (lines ~2560-2630)</h3>
+<p>After authentication, the script reads
+<code>$SPLUNK_HOME/etc/system/local/server.conf</code> to classify the
+deployment:</p>
 <table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 46%" />
+<col style="width: 28%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Check</th>
+<th>File/Section</th>
+<th>Result</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Server Info</strong></td><td><code>/services/server/info</code></td><td>GET</td><td>Version, OS, platform</td></tr>
-<tr><td><strong>Server Settings</strong></td><td><code>/services/server/settings</code></td><td>GET</td><td>Server configuration</td></tr>
-<tr><td><strong>Apps</strong></td><td><code>/services/apps/local</code></td><td>GET</td><td>Installed apps list</td></tr>
-<tr><td><strong>Indexes</strong></td><td><code>/services/data/indexes</code></td><td>GET</td><td>Index list and metadata</td></tr>
-<tr><td><strong>Indexes Extended</strong></td><td><code>/services/data/indexes-extended</code></td><td>GET</td><td>Detailed index stats</td></tr>
-<tr><td><strong>Inputs</strong></td><td><code>/services/data/inputs/all</code></td><td>GET</td><td>All data inputs</td></tr>
+<tr>
+<td><code>[shclustering]</code> present</td>
+<td><code>server.conf</code></td>
+<td><code>IS_SHC_MEMBER=true</code>, architecture=distributed</td>
+</tr>
+<tr>
+<td><code>mode=captain</code> under <code>[shclustering]</code></td>
+<td><code>server.conf</code></td>
+<td><code>IS_SHC_CAPTAIN=true</code>, role=<code>shc_captain</code></td>
+</tr>
+<tr>
+<td><code>mode</code> not captain</td>
+<td><code>server.conf</code></td>
+<td>role=<code>shc_member</code></td>
+</tr>
+<tr>
+<td><code>[clustering]</code> present</td>
+<td><code>server.conf</code></td>
+<td><code>IS_IDX_CLUSTER=true</code>, architecture=distributed</td>
+</tr>
+<tr>
+<td><code>mode=master</code> under <code>[clustering]</code></td>
+<td><code>server.conf</code></td>
+<td>role=<code>cluster_master</code></td>
+</tr>
+<tr>
+<td><code>mode=slave</code> under <code>[clustering]</code></td>
+<td><code>server.conf</code></td>
+<td>role=<code>indexer_peer</code></td>
+</tr>
+<tr>
+<td><code>distsearch.conf</code> has <code>servers</code></td>
+<td><code>distsearch.conf</code></td>
+<td>architecture=distributed, role=<code>search_head</code></td>
+</tr>
+<tr>
+<td><code>outputs.conf</code> exists + few local indexes</td>
+<td>filesystem</td>
+<td>flavor=<code>hf</code>, role=<code>heavy_forwarder</code></td>
+</tr>
+<tr>
+<td><code>deployment-apps/</code> has contents</td>
+<td>filesystem</td>
+<td>role=<code>deployment_server</code></td>
+</tr>
 </tbody>
 </table>
-<h3>8.2 User & RBAC Endpoints</h3>
+<h3 id="rest-api-shc-detection-lines-1770-1830">REST API SHC Detection
+(lines ~1770-1830)</h3>
+<p>The <code>detect_shc_role()</code> function makes REST calls when
+<code>AUTH_HEADER</code> is available:</p>
+<pre><code>GET /services/shcluster/member/info?output_mode=json</code></pre>
+<p>Checks <code>is_registered</code> in the response. If true, reads
+<code>status</code> to determine captain vs. member. Then:</p>
+<pre><code>GET /services/shcluster/member/members?output_mode=json</code></pre>
+<p>Retrieves the SHC member count. When running on the captain, the
+script warns the user and recommends running from a member instead (to
+avoid impacting the captain’s workload).</p>
+<h3 id="detection-variables-set">Detection Variables Set</h3>
+<pre><code>SPLUNK_FLAVOR        = &quot;enterprise&quot; | &quot;uf&quot; | &quot;hf&quot;
+SPLUNK_ARCHITECTURE  = &quot;standalone&quot; | &quot;distributed&quot;
+SPLUNK_ROLE          = &quot;search_head&quot; | &quot;shc_captain&quot; | &quot;shc_member&quot; |
+                       &quot;cluster_master&quot; | &quot;indexer_peer&quot; |
+                       &quot;heavy_forwarder&quot; | &quot;deployment_server&quot;
+IS_SHC_MEMBER        = true | false
+IS_SHC_CAPTAIN       = true | false
+IS_IDX_CLUSTER       = true | false</code></pre>
+<hr />
+<h2 id="authentication">5. Authentication</h2>
+<h3 id="methods">Methods</h3>
 <table>
+<colgroup>
+<col style="width: 32%" />
+<col style="width: 24%" />
+<col style="width: 44%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Method</th>
+<th>Flag</th>
+<th>Mechanism</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Users</strong></td><td><code>/services/authentication/users</code></td><td>GET</td><td>All users</td></tr>
-<tr><td><strong>Roles</strong></td><td><code>/services/authorization/roles</code></td><td>GET</td><td>All roles</td></tr>
-<tr><td><strong>Capabilities</strong></td><td><code>/services/authorization/capabilities</code></td><td>GET</td><td>All capabilities</td></tr>
-<tr><td><strong>Current User</strong></td><td><code>/services/authentication/current-context</code></td><td>GET</td><td>Current auth context</td></tr>
-<tr><td><strong>LDAP</strong></td><td><code>/services/authentication/providers/LDAP</code></td><td>GET</td><td>LDAP config</td></tr>
-<tr><td><strong>SAML</strong></td><td><code>/services/authentication/providers/SAML</code></td><td>GET</td><td>SAML config</td></tr>
+<tr>
+<td><strong>API Token</strong></td>
+<td><code>--token TOKEN</code></td>
+<td>Sets <code>AUTH_HEADER="Authorization: Bearer $TOKEN"</code>
+directly. Recommended for automation. Auto-enables non-interactive
+mode.</td>
+</tr>
+<tr>
+<td><strong>Username/Password</strong></td>
+<td><code>-u USER -p PASS</code></td>
+<td>Calls <code>POST /services/auth/login</code> to obtain a session
+key; constructs
+<code>AUTH_HEADER="Authorization: Splunk $SESSION_KEY"</code>.</td>
+</tr>
+<tr>
+<td><strong>Environment Variables</strong></td>
+<td><code>SPLUNK_USER</code>, <code>SPLUNK_PASSWORD</code></td>
+<td>Same as username/password but pre-set in environment (common in
+container deployments).</td>
+</tr>
+<tr>
+<td><strong>Interactive</strong></td>
+<td>(none)</td>
+<td>Prompts for username and password if not provided.</td>
+</tr>
 </tbody>
 </table>
-<h3>8.3 Knowledge Objects Endpoints</h3>
+<h3 id="password-encoding">Password Encoding</h3>
+<p>Passwords containing special characters (<code>$</code>, backticks,
+<code>"</code>, <code>\</code>) are URL-encoded via Python stdin to
+avoid shell escaping issues:</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">&quot;</span><span class="va">$password</span><span class="st">&quot;</span> <span class="kw">|</span> <span class="ex">python3</span> <span class="at">-c</span> <span class="st">&quot;import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read().strip(), safe=&#39;&#39;))&quot;</span></span></code></pre></div>
+<h3 id="session-key-flow">Session Key Flow</h3>
+<ol type="1">
+<li>POST to <code>/services/auth/login</code> with
+<code>username=</code> and <code>password=</code> (URL-encoded)</li>
+<li>Extract <code>sessionKey</code> from JSON response</li>
+<li>Construct
+<code>AUTH_HEADER="Authorization: Splunk $SESSION_KEY"</code></li>
+<li>All subsequent <code>curl</code> calls use
+<code>-H "$AUTH_HEADER"</code></li>
+</ol>
+<hr />
+<h2 id="collection-phases">6. Collection Phases</h2>
+<p>The script executes collection in this order. Each phase is guarded
+by feature flags and resume-mode checks.</p>
+<pre><code>Phase 1: System Information        (collect_system_info)
+Phase 2: System Macros             (collect_system_macros)
+Phase 3: App Configuration Files   (collect_app_configs -- per app, filesystem reads)
+Phase 4: Dashboards                (collect_dashboards -- REST API, app-scoped)
+Phase 5: RBAC                      (collect_rbac -- REST API + filesystem)
+Phase 6: App Analytics             (collect_app_analytics -- 6 global SPL queries)
+Phase 7: Usage Analytics           (collect_usage_analytics -- 3 ownership queries + 3 REST calls)
+Phase 8: Index Statistics           (collect_index_stats -- REST API + filesystem)
+Phase 9: Manifest Generation       (generate_manifest)
+Phase 10: Summary Generation       (generate_summary_markdown)
+Phase 11: Archive Creation         (create_tarball + optional anonymization)</code></pre>
+<h3 id="resume-guards">Resume Guards</h3>
+<p>The <code>has_collected_data()</code> function (lines ~7280-7290)
+checks for sentinel files to skip already-completed phases:</p>
 <table>
+<colgroup>
+<col style="width: 41%" />
+<col style="width: 58%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Category</th>
+<th>Sentinel File</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Saved Searches</strong></td><td><code>/servicesNS/-/-/saved/searches</code></td><td>GET</td><td>All saved searches/alerts</td></tr>
-<tr><td><strong>Dashboards</strong></td><td><code>/servicesNS/-/-/data/ui/views</code></td><td>GET</td><td>All dashboards</td></tr>
-<tr><td><strong>Panels</strong></td><td><code>/servicesNS/-/-/data/ui/panels</code></td><td>GET</td><td>All panels</td></tr>
-<tr><td><strong>Macros</strong></td><td><code>/servicesNS/-/-/admin/macros</code></td><td>GET</td><td>All macros</td></tr>
-<tr><td><strong>Eventtypes</strong></td><td><code>/servicesNS/-/-/saved/eventtypes</code></td><td>GET</td><td>All eventtypes</td></tr>
-<tr><td><strong>Tags</strong></td><td><code>/servicesNS/-/-/configs/conf-tags</code></td><td>GET</td><td>All tags</td></tr>
-<tr><td><strong>Lookups</strong></td><td><code>/servicesNS/-/-/data/lookup-table-files</code></td><td>GET</td><td>All lookup files</td></tr>
-<tr><td><strong>Transforms</strong></td><td><code>/servicesNS/-/-/data/transforms/extractions</code></td><td>GET</td><td>Field extractions</td></tr>
+<tr>
+<td><code>system_info</code></td>
+<td><code>dma_analytics/system_info/server_info.json</code></td>
+</tr>
+<tr>
+<td><code>rbac</code></td>
+<td><code>dma_analytics/rbac/users.json</code></td>
+</tr>
+<tr>
+<td><code>usage_analytics</code></td>
+<td><code>dma_analytics/usage_analytics/dashboard_ownership.json</code></td>
+</tr>
+<tr>
+<td><code>indexes</code></td>
+<td><code>dma_analytics/index_stats.json</code></td>
+</tr>
 </tbody>
 </table>
-<h3>8.4 Cluster & Distributed Endpoints</h3>
+<hr />
+<h2 id="configuration-file-collection-filesystem">7. Configuration File
+Collection (Filesystem)</h2>
+<h3 id="collect_app_configs-lines-3573-3664">collect_app_configs()
+(lines ~3573-3664)</h3>
+<p>For each selected app, the function reads from
+<code>$SPLUNK_HOME/etc/apps/&lt;app&gt;/</code>:</p>
+<p><strong>Configuration files read from both <code>default/</code> and
+<code>local/</code>:</strong></p>
 <table>
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 60%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Search Peers</strong></td><td><code>/services/search/distributed/peers</code></td><td>GET</td><td>Indexer peers</td></tr>
-<tr><td><strong>Cluster Master</strong></td><td><code>/services/cluster/master/info</code></td><td>GET</td><td>CM info</td></tr>
-<tr><td><strong>Cluster Peers</strong></td><td><code>/services/cluster/master/peers</code></td><td>GET</td><td>Cluster peer list</td></tr>
-<tr><td><strong>SHC Captain</strong></td><td><code>/services/shcluster/captain/info</code></td><td>GET</td><td>SHC captain info</td></tr>
-<tr><td><strong>SHC Members</strong></td><td><code>/services/shcluster/captain/members</code></td><td>GET</td><td>SHC member list</td></tr>
+<tr>
+<td><code>props.conf</code></td>
+<td>Field extractions, line breaking, timestamp parsing</td>
+</tr>
+<tr>
+<td><code>transforms.conf</code></td>
+<td>Lookup definitions, field transforms, routing rules</td>
+</tr>
+<tr>
+<td><code>eventtypes.conf</code></td>
+<td>Event classification definitions</td>
+</tr>
+<tr>
+<td><code>tags.conf</code></td>
+<td>Tag assignments to event types and field values</td>
+</tr>
+<tr>
+<td><code>indexes.conf</code></td>
+<td>Index definitions (app-level)</td>
+</tr>
+<tr>
+<td><code>macros.conf</code></td>
+<td>Search macros</td>
+</tr>
+<tr>
+<td><code>savedsearches.conf</code></td>
+<td>Saved searches, reports, alerts</td>
+</tr>
+<tr>
+<td><code>inputs.conf</code></td>
+<td>Data input definitions</td>
+</tr>
+<tr>
+<td><code>outputs.conf</code></td>
+<td>Data routing configuration</td>
+</tr>
+<tr>
+<td><code>collections.conf</code></td>
+<td>KV Store collection definitions</td>
+</tr>
+<tr>
+<td><code>fields.conf</code></td>
+<td>Field definitions and extraction overrides</td>
+</tr>
+<tr>
+<td><code>workflow_actions.conf</code></td>
+<td>UI workflow action definitions</td>
+</tr>
+<tr>
+<td><code>commands.conf</code></td>
+<td>Custom search command registrations</td>
+</tr>
 </tbody>
 </table>
-<h3>8.5 Usage Analytics Endpoints</h3>
+<p><strong>Additional filesystem reads per app:</strong></p>
 <table>
+<colgroup>
+<col style="width: 23%" />
+<col style="width: 42%" />
+<col style="width: 34%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Path</th>
+<th>Condition</th>
+<th>Purpose</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Search Jobs</strong></td><td><code>/services/search/jobs</code></td><td>GET</td><td>Recent search jobs</td></tr>
-<tr><td><strong>Introspection</strong></td><td><code>/services/server/introspection</code></td><td>GET</td><td>Internal metrics</td></tr>
-<tr><td><strong>Deployment Clients</strong></td><td><code>/services/deployment/server/clients</code></td><td>GET</td><td>Forwarder list</td></tr>
-<tr><td><strong>License Usage</strong></td><td><code>/services/licenser/usage</code></td><td>GET</td><td>License consumption</td></tr>
+<tr>
+<td><code>default/data/ui/views/*.xml</code></td>
+<td><code>COLLECT_DASHBOARDS=true</code></td>
+<td>Classic XML dashboards</td>
+</tr>
+<tr>
+<td><code>local/data/ui/views/*.xml</code></td>
+<td><code>COLLECT_DASHBOARDS=true</code></td>
+<td>Classic XML dashboards (local overrides)</td>
+</tr>
+<tr>
+<td><code>lookups/*.csv</code></td>
+<td><code>COLLECT_LOOKUPS=true</code></td>
+<td>Lookup table CSV files</td>
+</tr>
+<tr>
+<td><code>metadata/default.meta</code></td>
+<td>Always</td>
+<td>Macro export scope, sharing permissions</td>
+</tr>
+<tr>
+<td><code>metadata/local.meta</code></td>
+<td>Always</td>
+<td>Macro export scope, sharing permissions</td>
+</tr>
 </tbody>
 </table>
-<h3>8.6 Search-Based Analytics (Internal Indexes)</h3>
-<pre><code class="language-bash"># These require search capability and access to internal indexes
-
-# Search activity from audit index
-index=_audit action=search earliest=-30d
-| stats count by user, savedsearch_name
-
-# Dashboard views from web access logs
-index=_internal sourcetype=splunk_web_access uri=&quot;*/app/*&quot; earliest=-30d
-| stats count by uri_path
-
-# Alert triggers
-index=_audit action=alert_fired earliest=-30d
-| stats count by savedsearch_name, app
-
-# Index usage patterns
-index=_audit action=search earliest=-30d
-| rex field=search &quot;index=(?&lt;searched_index&gt;\w+)&quot;
-| stats count by searched_index</code></pre>
-<hr>
-<h2>9. Error Handling & Fallbacks</h2>
-<h3>9.1 Error Categories and Responses</h3>
+<h3 id="collect_system_macros-lines-3491-3571">collect_system_macros()
+(lines ~3491-3571)</h3>
+<p>Collects macros from system-level directories:</p>
 <table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 46%" />
+<col style="width: 25%" />
+</colgroup>
 <thead>
-<tr><th>Error Type</th><th>Detection</th><th>Fallback Strategy</th></tr>
+<tr>
+<th>Source</th>
+<th>Destination</th>
+<th>Notes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>No REST API access</strong></td><td>HTTP 401/403</td><td>File-based collection only</td></tr>
-<tr><td><strong>Limited capabilities</strong></td><td>Missing capabilities</td><td>Collect what's accessible, note gaps</td></tr>
-<tr><td><strong>File permission denied</strong></td><td>EACCES errors</td><td>Skip file, continue, report</td></tr>
-<tr><td><strong>Network timeout</strong></td><td>Connection timeout</td><td>Retry 3x, then skip</td></tr>
-<tr><td><strong>Large file</strong></td><td>File > 100MB</td><td>Sample or truncate</td></tr>
-<tr><td><strong>Missing directory</strong></td><td>ENOENT</td><td>Skip, continue</td></tr>
-<tr><td><strong>Corrupted config</strong></td><td>Parse error</td><td>Include raw, flag for review</td></tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/macros.conf</code></td>
+<td><code>_system/local/macros.conf</code></td>
+<td>Admin-created global macros</td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/default/macros.conf</code></td>
+<td><code>_system/default/macros.conf</code></td>
+<td>Splunk-provided reference macros</td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/metadata/*.meta</code></td>
+<td><code>_system/metadata/</code></td>
+<td>System-level metadata</td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/users/*/*/local/macros.conf</code></td>
+<td><code>_users/&lt;user&gt;/&lt;app&gt;/local/</code></td>
+<td>Only if <code>COLLECT_USER_MACROS=true</code> (off by default)</td>
+</tr>
 </tbody>
 </table>
-<h3>9.2 Fallback Collection Matrix</h3>
+<hr />
+<h2 id="dashboard-collection">8. Dashboard Collection</h2>
+<h3 id="filesystem-copy-within-collect_app_configs">Filesystem Copy
+(within collect_app_configs)</h3>
+<p>XML dashboards are copied directly from
+<code>$SPLUNK_HOME/etc/apps/&lt;app&gt;/default/data/ui/views/</code>
+and <code>local/data/ui/views/</code> using <code>cp *.xml</code> (glob,
+no <code>find</code> – container compatible). These are tracked as
+<code>STATS_DASHBOARDS_XML</code> but NOT counted in the main
+<code>STATS_DASHBOARDS</code> counter (to avoid double-counting with
+REST).</p>
+<h3 id="rest-api-collection-collect_dashboards-lines-3690-3988">REST API
+Collection (collect_dashboards, lines ~3690-3988)</h3>
+<h4 id="pass-1-discovery">Pass 1: Discovery</h4>
+<p>For each selected app (or all apps if
+<code>EXPORT_ALL_APPS=true</code>):</p>
+<pre><code>GET /servicesNS/-/&lt;app&gt;/data/ui/views?output_mode=json&amp;count=0</code></pre>
+<p>Extracts dashboard names from JSON response via grep.</p>
+<h4 id="pass-2-per-dashboard-fetch">Pass 2: Per-Dashboard Fetch</h4>
+<p>For each discovered dashboard:</p>
+<pre><code>GET /servicesNS/-/&lt;app&gt;/data/ui/views/&lt;dashboard_name&gt;?output_mode=json</code></pre>
+<p>The response is classified into Classic or Studio:</p>
 <table>
+<colgroup>
+<col style="width: 42%" />
+<col style="width: 57%" />
+</colgroup>
 <thead>
-<tr><th>Primary Method</th><th>Fallback 1</th><th>Fallback 2</th><th>Last Resort</th></tr>
+<tr>
+<th>Indicator</th>
+<th>Classification</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>REST API + Files</td><td>REST API only</td><td>Files only</td><td>Abort with partial</td></tr>
-<tr><td>Internal index search</td><td>Audit log parse</td><td>Skip analytics</td><td>Note in summary</td></tr>
-<tr><td>SHC Captain query</td><td>Local member data</td><td>REST API</td><td>Note limitations</td></tr>
-<tr><td>Cluster-wide stats</td><td>Local node only</td><td>Skip</td><td>Note limitations</td></tr>
+<tr>
+<td><code>version="2"</code> in <code>eai:data</code></td>
+<td>Dashboard Studio</td>
+</tr>
+<tr>
+<td><code>splunk-dashboard-studio</code> in response</td>
+<td>Dashboard Studio (template reference)</td>
+</tr>
+<tr>
+<td><code>eai:data</code> starts with <code>{</code></td>
+<td>Dashboard Studio (direct JSON)</td>
+</tr>
+<tr>
+<td>None of the above</td>
+<td>Classic XML</td>
+</tr>
 </tbody>
 </table>
-<h3>9.3 Error Reporting Format</h3>
-<pre><code class="language-json">{
-  &quot;errors&quot;: [
-    {
-      &quot;timestamp&quot;: &quot;2024-01-15T10:32:15Z&quot;,
-      &quot;stage&quot;: &quot;collect_users&quot;,
-      &quot;severity&quot;: &quot;warning&quot;,
-      &quot;message&quot;: &quot;Unable to access LDAP configuration&quot;,
-      &quot;endpoint&quot;: &quot;/services/authentication/providers/LDAP&quot;,
-      &quot;httpStatus&quot;: 403,
-      &quot;fallback&quot;: &quot;LDAP group mappings will not be included&quot;,
-      &quot;impactedData&quot;: [&quot;groups.json&quot;, &quot;rbacSummary.ldapGroups&quot;]
-    }
-  ],
-  &quot;warnings&quot;: [...],
-  &quot;skipped&quot;: [...]
-}</code></pre>
-<hr>
-<h2>10. Security Considerations</h2>
-<h3>10.1 Sensitive Data Handling</h3>
+<h4 id="output-paths-v2-app-scoped-structure">Output Paths (v2
+App-Scoped Structure)</h4>
+<pre><code>$EXPORT_DIR/&lt;app&gt;/dashboards/classic/&lt;name&gt;.json    # Classic dashboard REST response
+$EXPORT_DIR/&lt;app&gt;/dashboards/studio/&lt;name&gt;.json     # Studio dashboard REST response
+$EXPORT_DIR/&lt;app&gt;/dashboards/studio/&lt;name&gt;_definition.json  # Extracted Studio JSON definition</code></pre>
+<p>Studio dashboards with
+<code>&lt;definition&gt;&lt;![CDATA[{...}]]&gt;&lt;/definition&gt;</code>
+blocks have their JSON extracted into a separate
+<code>_definition.json</code> file using Python.</p>
+<h4 id="dashboard-studio-example-js-files">Dashboard Studio Example JS
+Files</h4>
+<p>If
+<code>$SPLUNK_HOME/etc/apps/splunk-dashboard-studio/appserver/static/build/examples/</code>
+exists, all <code>.js</code> files are copied to
+<code>$EXPORT_DIR/dashboards_studio_examples/</code>.</p>
+<hr />
+<h2 id="alert-and-saved-search-collection">9. Alert and Saved Search
+Collection</h2>
+<p>Alerts are collected in two ways:</p>
+<ol type="1">
+<li><strong>Filesystem</strong> – <code>savedsearches.conf</code> from
+each app’s <code>default/</code> and <code>local/</code> directories
+(via <code>collect_app_configs</code>)</li>
+<li><strong>REST API</strong> – The alerts inventory query (Query 6 in
+<code>collect_app_analytics</code>) uses:</li>
+</ol>
+<pre><code>| rest /servicesNS/-/&lt;app&gt;/saved/searches
+| where is_scheduled=1
+| table title, eai:acl.owner, ...</code></pre>
+<p>The saved searches REST metadata (with field filtering) is also
+collected in <code>collect_usage_analytics</code>:</p>
+<pre><code>GET /servicesNS/-/-/saved/searches?output_mode=json&amp;count=0
+    &amp;f=title&amp;f=eai:acl&amp;f=is_scheduled&amp;f=disabled&amp;f=cron_schedule
+    &amp;f=alert.track&amp;f=alert.severity&amp;f=actions&amp;f=next_scheduled_time
+    &amp;f=dispatch.earliest_time&amp;f=dispatch.latest_time</code></pre>
+<p>This uses the <code>f=</code> parameter to request only metadata
+fields, NOT the full search SPL (a v4.6.0 fix to reduce response
+size).</p>
+<hr />
+<h2 id="rbac-collection">10. RBAC Collection</h2>
+<p>Enabled by default (<code>COLLECT_RBAC=true</code>). Disable with
+<code>--no-rbac</code>.</p>
+<h3 id="rest-api-calls">REST API Calls</h3>
 <table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 43%" />
+<col style="width: 23%" />
+</colgroup>
 <thead>
-<tr><th>Data Type</th><th>Sensitivity</th><th>Handling</th></tr>
+<tr>
+<th>Endpoint</th>
+<th>Output File</th>
+<th>Notes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>User passwords</strong></td><td>Critical</td><td>NEVER collect</td></tr>
-<tr><td><strong>API tokens</strong></td><td>Critical</td><td>NEVER collect</td></tr>
-<tr><td><strong>LDAP bind passwords</strong></td><td>Critical</td><td>NEVER collect</td></tr>
-<tr><td><strong>Session tokens</strong></td><td>High</td><td>NEVER collect</td></tr>
-<tr><td><strong>User emails</strong></td><td>Medium</td><td>Collect, mark PII</td></tr>
-<tr><td><strong>Real names</strong></td><td>Medium</td><td>Collect, mark PII</td></tr>
-<tr><td><strong>IP addresses</strong></td><td>Low</td><td>Collect</td></tr>
-<tr><td><strong>Hostnames</strong></td><td>Low</td><td>Collect</td></tr>
+<tr>
+<td><code>GET /services/authentication/users?output_mode=json&amp;count=0</code></td>
+<td><code>dma_analytics/rbac/users.json</code></td>
+<td>All users with roles, type, default app</td>
+</tr>
+<tr>
+<td><code>GET /services/authorization/roles?output_mode=json&amp;count=0</code></td>
+<td><code>dma_analytics/rbac/roles.json</code></td>
+<td>All roles with capabilities, index access</td>
+</tr>
+<tr>
+<td><code>GET /services/authorization/capabilities?output_mode=json</code></td>
+<td><code>dma_analytics/rbac/capabilities.json</code></td>
+<td>System capabilities inventory</td>
+</tr>
+<tr>
+<td><code>GET /services/admin/SAML-groups?output_mode=json</code></td>
+<td><code>dma_analytics/rbac/saml_groups.json</code></td>
+<td>SAML group mappings</td>
+</tr>
+<tr>
+<td><code>GET /services/authentication/providers/SAML?output_mode=json</code></td>
+<td><code>dma_analytics/rbac/saml_config.json</code></td>
+<td>SAML provider configuration</td>
+</tr>
+<tr>
+<td><code>GET /services/admin/LDAP-groups?output_mode=json</code></td>
+<td><code>dma_analytics/rbac/ldap_groups.json</code></td>
+<td>LDAP group mappings</td>
+</tr>
+<tr>
+<td><code>GET /services/authentication/providers/LDAP?output_mode=json</code></td>
+<td><code>dma_analytics/rbac/ldap_config.json</code></td>
+<td>LDAP provider configuration</td>
+</tr>
 </tbody>
 </table>
-<h3>10.2 Configuration Sanitization</h3>
-<pre><code class="language-bash"># Before including config files, sanitize:
-
-# Remove passwords
-sed -i &#039;s/password\s*=\s*.*/password = [REDACTED]/g&#039; file.conf
-
-# Remove tokens
-sed -i &#039;s/token\s*=\s*.*/token = [REDACTED]/g&#039; file.conf
-
-# Remove private keys
-sed -i &#039;s/privateKey\s*=\s*.*/privateKey = [REDACTED]/g&#039; file.conf
-
-# Remove connection strings with credentials
-sed -i &#039;s/\(connection.*:\/\/[^:]*:\)[^@]*@/\1[REDACTED]@/g&#039; file.conf</code></pre>
-<h3>10.3 Audit Log Sampling</h3>
-<pre><code class="language-bash"># When collecting audit samples:
-
-# 1. Limit sample size (max 10,000 entries)
-tail -10000 audit.log &gt; audit_sample.log
-
-# 2. Anonymize if requested
-# Replace usernames with hashes
-# Replace IPs with anonymized versions
-# Remove search query content (may contain sensitive data)</code></pre>
-<h3>10.4 Export File Protection</h3>
-<pre><code class="language-bash"># 1. Set restrictive permissions on export file
-chmod 600 export.tar.gz
-
-# 2. Generate checksum for integrity
-sha256sum export.tar.gz &gt; export.tar.gz.sha256
-
-# 3. Recommend secure transfer
-echo &quot;Transfer this file using SCP, SFTP, or other encrypted method&quot;
-echo &quot;Delete the export file after upload to DMA&quot;</code></pre>
-<hr>
-<h2>Appendix A: Complete Script Pseudocode</h2>
-<pre><code class="language-bash">#!/bin/bash
-# DMA Splunk Export Script v3.0.0
-
-# =============================================================================
-# INITIALIZATION
-# =============================================================================
-
-display_banner()
-check_prerequisites()  # bash version, curl, permissions
-initialize_logging()
-
-# =============================================================================
-# STEP 1: ENVIRONMENT DETECTION
-# =============================================================================
-
-detect_splunk_home() {
-  # Check env var, common paths, prompt if needed
-}
-
-detect_splunk_flavor() {
-  # Returns: enterprise|uf|hf
-  check_splunk_launch_conf()
-  check_binary_footprint()
-  check_web_capability()
-}
-
-detect_architecture() {
-  # Returns: standalone|distributed|cloud
-  check_server_conf_clustering()
-  check_server_conf_shclustering()
-  check_distsearch_conf()
-  check_cloud_indicators()
-}
-
-detect_node_role() {
-  # Returns: search_head|indexer|forwarder|captain|master|...
-  analyze_configuration_files()
-  analyze_running_services()
-}
-
-build_environment_profile() {
-  # Combine all detection results into JSON profile
-}
-
-display_environment_profile()
-prompt_confirmation()
-
-# =============================================================================
-# STEP 2: SCOPE SELECTION
-# =============================================================================
-
-prompt_export_scope() {
-  # 1. Full export
-  # 2. Specific apps
-  # 3. Specific categories
-  # 4. Minimal (configs only)
-}
-
-if [ &quot;$scope&quot; == &quot;specific_apps&quot; ]; then
-  display_app_selector()
-  prompt_app_selection()
-fi
-
-if [ &quot;$scope&quot; == &quot;specific_categories&quot; ]; then
-  display_category_selector()
-  prompt_category_selection()
-fi
-
-# =============================================================================
-# STEP 3: AUTHENTICATION
-# =============================================================================
-
-prompt_credentials()
-test_authentication()
-check_capabilities()
-
-if [ &quot;$missing_capabilities&quot; ]; then
-  display_capability_warnings()
-  prompt_continue_with_limitations()
-fi
-
-# =============================================================================
-# STEP 4: USAGE ANALYTICS OPTIONS
-# =============================================================================
-
-prompt_analytics_period()  # 7d, 30d, 90d, 365d, skip
-prompt_audit_log_sample()  # y/n
-
-# =============================================================================
-# STEP 5: DATA COLLECTION
-# =============================================================================
-
-create_export_directory()
-
-# Stage 1: System Information
-collect_server_info()
-collect_installed_apps()
-collect_cluster_info()
-
-# Stage 2: Configuration Files
-for app in $apps; do
-  collect_app_configs &quot;$app&quot;
-done
-collect_system_configs()
-
-# Stage 3: Dashboards
-collect_classic_dashboards()      # XML files
-collect_dashboard_studio()        # REST API JSON
-
-# Stage 4: Alerts &amp; Saved Searches
-collect_saved_searches()
-
-# Stage 5: Users &amp; RBAC
-collect_users()
-collect_roles()
-collect_groups()
-build_ownership_map()
-
-# Stage 6: Usage Analytics
-collect_search_activity()
-collect_dashboard_usage()
-collect_alert_metrics()
-collect_index_usage()
-collect_user_activity()
-
-# Stage 7: Index Statistics
-collect_index_details()
-collect_sourcetype_stats()
-
-# =============================================================================
-# STEP 6: SUMMARY GENERATION
-# =============================================================================
-
-calculate_priority_scores()
-generate_summary_markdown()
-
-# =============================================================================
-# STEP 7: ARCHIVE CREATION
-# =============================================================================
-
-create_tarball()
-calculate_checksum()
-cleanup_temp_files()
-
-# =============================================================================
-# STEP 8: COMPLETION
-# =============================================================================
-
-display_summary()
-display_next_steps()</code></pre>
-<hr>
-<h2>Appendix B: Migration Priority Scoring Algorithm</h2>
-<pre><code class="language-python">def calculate_priority_score(asset):
-    &quot;&quot;&quot;
-    Calculate migration priority score (0-100) for an asset.
-
-    Weights:
-    - Usage Frequency: 40%
-    - User Reach: 25%
-    - Business Criticality: 20%
-    - Data Volume: 15%
-    &quot;&quot;&quot;
-
-    # Usage Frequency (0-40 points)
-    if asset.type == &quot;dashboard&quot;:
-        usage_score = min(40, (asset.views_30d / 100) * 40)
-    elif asset.type == &quot;alert&quot;:
-        usage_score = min(40, (asset.triggers_30d / 50) * 40)
-    elif asset.type == &quot;saved_search&quot;:
-        usage_score = min(40, (asset.executions_30d / 500) * 40)
-    elif asset.type == &quot;index&quot;:
-        usage_score = min(40, (asset.search_count_30d / 1000) * 40)
-
-    # User Reach (0-25 points)
-    reach_score = min(25, (asset.unique_users / 20) * 25)
-
-    # Business Criticality (0-20 points)
-    criticality_score = 0
-    if asset.severity == &quot;critical&quot;:
-        criticality_score += 10
-    elif asset.severity == &quot;high&quot;:
-        criticality_score += 7
-    elif asset.severity == &quot;medium&quot;:
-        criticality_score += 4
-
-    if asset.owner in HIGH_VALUE_OWNERS:  # security, compliance, ops
-        criticality_score += 5
-
-    if asset.app in CRITICAL_APPS:
-        criticality_score += 5
-
-    criticality_score = min(20, criticality_score)
-
-    # Data Volume (0-15 points) - only for indexes
-    if asset.type == &quot;index&quot;:
-        volume_score = min(15, (asset.size_gb / 1000) * 15)
-    else:
-        volume_score = 0
-
-    # Total Score
-    total = usage_score + reach_score + criticality_score + volume_score
-
-    return round(total, 1)</code></pre>
-<hr>
-<h2>Appendix C: Flavor-Specific Collection Matrices</h2>
-<h3>Universal Forwarder Collection</h3>
+<h3 id="graceful-404-handling">Graceful 404 Handling</h3>
+<p>When SAML or LDAP is not configured, the endpoints return errors. The
+script writes a placeholder instead of failing:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span><span class="dt">&quot;configured&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span> <span class="dt">&quot;note&quot;</span><span class="fu">:</span> <span class="st">&quot;SAML not configured or no group mappings defined&quot;</span><span class="fu">}</span></span></code></pre></div>
+<h3 id="filesystem-copies">Filesystem Copies</h3>
 <table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 46%" />
+<col style="width: 25%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Collected</th><th>Method</th><th>Notes</th></tr>
+<tr>
+<th>Source</th>
+<th>Destination</th>
+<th>Notes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>inputs.conf</td><td>✅</td><td>File</td><td>All monitored files/directories</td></tr>
-<tr><td>outputs.conf</td><td>✅</td><td>File</td><td>Forwarding destinations</td></tr>
-<tr><td>props.conf</td><td>✅</td><td>File</td><td>Local parsing rules (if any)</td></tr>
-<tr><td>transforms.conf</td><td>✅</td><td>File</td><td>Local transforms (if any)</td></tr>
-<tr><td>deploymentclient.conf</td><td>✅</td><td>File</td><td>DS relationship</td></tr>
-<tr><td>server.conf</td><td>✅</td><td>File</td><td>Basic server config</td></tr>
-<tr><td>Server info</td><td>⚠️</td><td>REST</td><td>Limited (if REST available)</td></tr>
-<tr><td>Dashboards</td><td>❌</td><td>N/A</td><td>Not applicable</td></tr>
-<tr><td>Alerts</td><td>❌</td><td>N/A</td><td>Not applicable</td></tr>
-<tr><td>Users/RBAC</td><td>❌</td><td>N/A</td><td>Not applicable</td></tr>
-<tr><td>Usage stats</td><td>❌</td><td>N/A</td><td>Not applicable</td></tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/authentication.conf</code></td>
+<td><code>dma_analytics/rbac/authentication.conf</code></td>
+<td>Password fields redacted via <code>sed</code></td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/authorize.conf</code></td>
+<td><code>dma_analytics/rbac/authorize.conf</code></td>
+<td>Copied as-is</td>
+</tr>
 </tbody>
 </table>
-<h3>Heavy Forwarder Collection</h3>
+<h3 id="app-scoped-rbac">App-Scoped RBAC</h3>
+<p>When <code>--scoped</code> or <code>--apps</code> is active, an
+additional SPL search runs to find users who accessed the selected
+apps:</p>
+<pre><code>search index=_audit action=search info=granted (app=&quot;app1&quot; OR app=&quot;app2&quot;) earliest=-30d
+| stats dc(search_id) as searches, latest(_time) as last_active by user</code></pre>
+<p>Results go to
+<code>dma_analytics/rbac/users_active_in_apps.json</code>.</p>
+<hr />
+<h2 id="app-analytics-6-global-queries">11. App Analytics – 6 Global
+Queries</h2>
+<p><code>collect_app_analytics()</code> (lines ~4469-4620) runs 6 global
+aggregate queries. These are the same queries used by the Cloud script.
+They are dispatched asynchronously via <code>run_usage_search()</code>
+with a 1-hour max wait per query.</p>
+<p>Each query is guarded by a checkpoint. If the checkpoint exists (from
+a previous partial run), the query is skipped.</p>
+<h3 id="query-1-dashboard-views">Query 1: Dashboard Views</h3>
+<pre><code>search index=_audit sourcetype=audittrail action=search info=granted
+  (provenance=&quot;UI:Dashboard:*&quot; OR provenance=&quot;UI:dashboard:*&quot;)
+  user!=&quot;splunk-system-user&quot; earliest=-&lt;USAGE_PERIOD&gt;
+| rex field=provenance &quot;UI:[Dd]ashboard:(?&lt;dashboard_name&gt;[\w\-\.]+)&quot;
+| where isnotnull(dashboard_name)
+| eval view_session=user.&quot;_&quot;.floor(_time/30)
+| stats dc(view_session) as view_count, dc(user) as unique_users,
+        values(user) as viewers, latest(_time) as last_viewed
+  by app, dashboard_name
+| sort -view_count</code></pre>
+<p><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/dashboard_views_global.json</code>
+<strong>Checkpoint</strong>: <code>dashboard_views</code></p>
+<p>Uses the <code>provenance</code> field (not
+<code>search_type=dashboard</code> which was broken). De-duplicates
+using 30-second view sessions per user.</p>
+<h3 id="query-2-user-activity">Query 2: User Activity</h3>
+<pre><code>search index=_audit sourcetype=audittrail action=search info=granted
+  user!=&quot;splunk-system-user&quot; user!=&quot;nobody&quot; earliest=-&lt;USAGE_PERIOD&gt;
+| stats count as searches, dc(search_id) as unique_searches,
+        latest(_time) as last_active
+  by app, user
+| sort -searches</code></pre>
+<p><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/user_activity_global.json</code>
+<strong>Checkpoint</strong>: <code>user_activity</code></p>
+<h3 id="query-3-search-type-breakdown">Query 3: Search Type
+Breakdown</h3>
+<pre><code>search index=_audit sourcetype=audittrail action=search info=granted
+  user!=&quot;splunk-system-user&quot; earliest=-&lt;USAGE_PERIOD&gt;
+| eval search_type=case(
+    match(provenance, &quot;^UI:[Dd]ashboard:&quot;), &quot;dashboard&quot;,
+    match(search_id, &quot;^(rt_)?scheduler__&quot;), &quot;scheduled&quot;,
+    match(savedsearch_name, &quot;^_ACCELERATE_&quot;), &quot;acceleration&quot;,
+    match(search_id, &quot;^SummaryDirector_&quot;), &quot;summarization&quot;,
+    isnotnull(provenance) AND match(provenance, &quot;^UI:&quot;), &quot;interactive&quot;,
+    1=1, &quot;other&quot;)
+| stats count as total_searches, dc(user) as unique_users,
+        dc(search_id) as unique_searches
+  by app, search_type
+| sort -total_searches</code></pre>
+<p><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/search_patterns_global.json</code>
+<strong>Checkpoint</strong>: <code>search_patterns</code></p>
+<p>Derives <code>search_type</code> from
+<code>provenance</code>/<code>search_id</code> since
+<code>search_type</code> is NOT a native <code>_audit</code> field.</p>
+<h3 id="query-4-daily-ingestion-volume">Query 4: Daily Ingestion
+Volume</h3>
+<pre><code>search index=_internal source=*license_usage.log type=Usage earliest=-&lt;USAGE_PERIOD&gt;
+| eval index_name=idx
+| stats sum(b) as total_bytes, dc(st) as sourcetype_count,
+        dc(h) as host_count, min(_time) as earliest_event,
+        max(_time) as latest_event
+  by index_name
+| eval total_gb=round(total_bytes/1024/1024/1024, 2),
+       daily_avg_gb=round(total_gb/&lt;days&gt;, 2)
+| sort -total_gb</code></pre>
+<p><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/index_volume_summary.json</code>
+<strong>Checkpoint</strong>: <code>index_volume</code> <strong>Max
+wait</strong>: 600 seconds <strong>Skipped when</strong>:
+<code>--skip-internal</code> is set</p>
+<h3 id="query-5-alert-firing-stats">Query 5: Alert Firing Stats</h3>
+<pre><code>search index=_internal sourcetype=scheduler earliest=-&lt;USAGE_PERIOD&gt;
+| fields _time, app, savedsearch_name, status
+| stats count as total_runs,
+        sum(eval(if(status=&quot;success&quot;,1,0))) as successful,
+        sum(eval(if(status=&quot;skipped&quot;,1,0))) as skipped,
+        sum(eval(if(status!=&quot;success&quot; AND status!=&quot;skipped&quot;,1,0))) as failed,
+        latest(_time) as last_run
+  by app, savedsearch_name
+| sort -total_runs</code></pre>
+<p><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/alert_firing_global.json</code>
+<strong>Checkpoint</strong>: <code>alert_firing</code> <strong>Skipped
+when</strong>: <code>--skip-internal</code> is set</p>
+<h3 id="query-6-alerts-inventory-per-app-rest">Query 6: Alerts Inventory
+(per-app REST)</h3>
+<p>This is the only per-app query. For each selected app, it runs a
+blocking <code>| rest</code> search:</p>
+<pre><code>| rest /servicesNS/-/&lt;app&gt;/saved/searches
+| where is_scheduled=1
+| table title, eai:acl.owner, eai:acl.sharing, is_scheduled, disabled,
+        cron_schedule, next_scheduled_time, alert.track, alert.severity,
+        actions, dispatch.earliest_time, dispatch.latest_time</code></pre>
+<p><strong>Output</strong>:
+<code>$EXPORT_DIR/&lt;app&gt;/splunk-analysis/alerts_inventory.json</code>
+<strong>Checkpoint</strong>: <code>alerts_inventory</code>
+<strong>Dispatch mode</strong>: Blocking
+(<code>exec_mode=blocking</code>)</p>
+<hr />
+<h2 id="usage-analytics-stripped-in-v4.6.0">12. Usage Analytics
+(Stripped in v4.6.0)</h2>
+<p><code>collect_usage_analytics()</code> (lines ~4670-4807) has been
+stripped down from ~40 detailed SPL search jobs to a lightweight
+function that collects only ownership data and REST metadata.</p>
+<h3 id="ownership-search-jobs-via-run_usage_search">3 Ownership Search
+Jobs (via run_usage_search)</h3>
 <table>
+<colgroup>
+<col style="width: 8%" />
+<col style="width: 19%" />
+<col style="width: 36%" />
+<col style="width: 36%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Collected</th><th>Method</th><th>Notes</th></tr>
+<tr>
+<th>#</th>
+<th>Query</th>
+<th>Output File</th>
+<th>Description</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>All UF items</td><td>✅</td><td>File</td><td>Same as UF</td></tr>
-<tr><td>props.conf</td><td>✅</td><td>File</td><td>Full parsing rules</td></tr>
-<tr><td>transforms.conf</td><td>✅</td><td>File</td><td>Full transforms</td></tr>
-<tr><td>routing rules</td><td>✅</td><td>File</td><td>Data routing configuration</td></tr>
-<tr><td>Server info</td><td>✅</td><td>REST</td><td>Full server info</td></tr>
-<tr><td>Throughput stats</td><td>⚠️</td><td>REST</td><td>If metrics available</td></tr>
-<tr><td>Users/RBAC</td><td>⚠️</td><td>REST</td><td>Limited local users</td></tr>
+<tr>
+<td>1</td>
+<td><code>\| rest /servicesNS/-/-/data/ui/views \| table title, eai:acl.app, eai:acl.owner, eai:acl.sharing</code></td>
+<td><code>dashboard_ownership.json</code></td>
+<td>Maps each dashboard to its owner</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>\| rest /servicesNS/-/-/saved/searches \| table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track</code></td>
+<td><code>alert_ownership.json</code></td>
+<td>Maps each alert/saved search to its owner</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Combined <code>\| rest</code> for views + saved searches,
+<code>\| stats sum(dashboards), sum(alerts) by owner</code></td>
+<td><code>ownership_summary.json</code></td>
+<td>Ownership count summary by user</td>
+</tr>
 </tbody>
 </table>
-<h3>Search Head / SHC Collection</h3>
+<p><strong>Checkpoint</strong>: <code>usage_ownership</code> (single
+checkpoint for all 3)</p>
+<p>When <code>--scoped</code> is active, <code>| rest</code> queries
+include an app filter clause via <code>eai:acl.app</code>.</p>
+<h3 id="rest-api-calls-curl-no-search-jobs">3 REST API Calls (curl, no
+search jobs)</h3>
 <table>
+<colgroup>
+<col style="width: 9%" />
+<col style="width: 30%" />
+<col style="width: 39%" />
+<col style="width: 21%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Collected</th><th>Method</th><th>Notes</th></tr>
+<tr>
+<th>#</th>
+<th>Endpoint</th>
+<th>Output File</th>
+<th>Notes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>All configs</td><td>✅</td><td>File + REST</td><td>Full collection</td></tr>
-<tr><td>Dashboards</td><td>✅</td><td>REST</td><td>Classic + Studio</td></tr>
-<tr><td>Alerts</td><td>✅</td><td>REST</td><td>All saved searches</td></tr>
-<tr><td>Users/RBAC</td><td>✅</td><td>REST</td><td>Full RBAC</td></tr>
-<tr><td>Usage stats</td><td>✅</td><td>REST + Search</td><td>Full analytics</td></tr>
-<tr><td>Index details</td><td>⚠️</td><td>REST</td><td>From search peers</td></tr>
+<tr>
+<td>1</td>
+<td><code>GET /servicesNS/-/-/saved/searches?count=0&amp;f=title&amp;f=eai:acl&amp;f=is_scheduled&amp;f=disabled&amp;f=cron_schedule&amp;f=alert.track&amp;f=alert.severity&amp;f=actions&amp;f=next_scheduled_time&amp;f=dispatch.earliest_time&amp;f=dispatch.latest_time</code></td>
+<td><code>saved_searches_all.json</code></td>
+<td>Metadata only (no search SPL) via <code>f=</code> field
+filtering</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>GET /services/search/jobs?count=1000</code></td>
+<td><code>recent_searches.json</code></td>
+<td>Recent search job metadata</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>GET /services/server/introspection/kvstore</code></td>
+<td><code>kvstore_stats.json</code></td>
+<td>KV Store health and stats</td>
+</tr>
 </tbody>
 </table>
-<h3>Indexer / IDX Cluster Collection</h3>
+<h3 id="summary-markdown">Summary Markdown</h3>
+<p>The function writes <code>USAGE_INTELLIGENCE_SUMMARY.md</code> to
+<code>dma_analytics/usage_analytics/</code> describing the collected
+data and providing a migration decision matrix.</p>
+<hr />
+<h2 id="index-and-data-statistics">13. Index and Data Statistics</h2>
+<p><code>collect_index_stats()</code> (lines ~4809-4869) collects index
+configuration and metadata.</p>
+<h3 id="filesystem">Filesystem</h3>
 <table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 61%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Collected</th><th>Method</th><th>Notes</th></tr>
+<tr>
+<th>Source</th>
+<th>Destination</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>indexes.conf</td><td>✅</td><td>File</td><td>Full index config</td></tr>
-<tr><td>props.conf</td><td>✅</td><td>File</td><td>Index-time parsing</td></tr>
-<tr><td>transforms.conf</td><td>✅</td><td>File</td><td>Index-time transforms</td></tr>
-<tr><td>Index stats</td><td>✅</td><td>REST</td><td>Full volume data</td></tr>
-<tr><td>Bucket info</td><td>✅</td><td>REST</td><td>Storage details</td></tr>
-<tr><td>Dashboards</td><td>❌</td><td>N/A</td><td>Run on SH</td></tr>
-<tr><td>Alerts</td><td>❌</td><td>N/A</td><td>Run on SH</td></tr>
-<tr><td>Users/RBAC</td><td>⚠️</td><td>REST</td><td>Limited</td></tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/indexes.conf</code></td>
+<td><code>dma_analytics/indexes/indexes.conf</code></td>
+</tr>
 </tbody>
 </table>
-<hr>
-<p>
-<em>End of Specification Document</em>
-<em>Version 4.0.0 | DMA Splunk Export Framework</em>
-</p>
+<h3 id="rest-api">REST API</h3>
+<table>
+<colgroup>
+<col style="width: 43%" />
+<col style="width: 56%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Output File</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /services/data/indexes?output_mode=json&amp;count=0</code></td>
+<td><code>dma_analytics/indexes/indexes_detailed.json</code></td>
+</tr>
+<tr>
+<td><code>GET /services/data/inputs/all?output_mode=json&amp;count=0</code></td>
+<td><code>dma_analytics/indexes/data_inputs.json</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="system-level-configs-also-copied-in-this-phase">System-Level
+Configs (also copied in this phase)</h3>
+<p>The following files from <code>$SPLUNK_HOME/etc/system/local/</code>
+are copied to <code>$EXPORT_DIR/_system/local/</code>:</p>
+<ul>
+<li><code>inputs.conf</code></li>
+<li><code>outputs.conf</code></li>
+<li><code>server.conf</code></li>
+</ul>
+<hr />
+<h2 id="system-configuration-collection">14. System Configuration
+Collection</h2>
+<p>System-level configurations are collected across multiple phases:</p>
+<h3 id="in-collect_index_stats-phase-8">In collect_index_stats (Phase
+8)</h3>
+<table>
+<colgroup>
+<col style="width: 31%" />
+<col style="width: 68%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>Destination</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/inputs.conf</code></td>
+<td><code>_system/local/inputs.conf</code></td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/outputs.conf</code></td>
+<td><code>_system/local/outputs.conf</code></td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/server.conf</code></td>
+<td><code>_system/local/server.conf</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="in-collect_rbac-phase-5">In collect_rbac (Phase 5)</h3>
+<table>
+<colgroup>
+<col style="width: 23%" />
+<col style="width: 50%" />
+<col style="width: 26%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>Destination</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/authentication.conf</code></td>
+<td><code>dma_analytics/rbac/authentication.conf</code></td>
+<td>Passwords redacted</td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/authorize.conf</code></td>
+<td><code>dma_analytics/rbac/authorize.conf</code></td>
+<td>Copied as-is</td>
+</tr>
+</tbody>
+</table>
+<h3 id="in-collect_system_macros-phase-2">In collect_system_macros
+(Phase 2)</h3>
+<table>
+<colgroup>
+<col style="width: 31%" />
+<col style="width: 68%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>Destination</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/local/macros.conf</code></td>
+<td><code>_system/local/macros.conf</code></td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/default/macros.conf</code></td>
+<td><code>_system/default/macros.conf</code></td>
+</tr>
+<tr>
+<td><code>$SPLUNK_HOME/etc/system/metadata/*.meta</code></td>
+<td><code>_system/metadata/</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="in-environment-detection-not-copied-only-read">In environment
+detection (not copied, only read)</h3>
+<p>These files are read during detection but not explicitly copied to
+the export:</p>
+<ul>
+<li><code>$SPLUNK_HOME/etc/system/local/web.conf</code> – read for
+<code>mgmtHostPort</code></li>
+<li><code>$SPLUNK_HOME/etc/system/local/distsearch.conf</code> – read
+for distributed search detection</li>
+</ul>
+<hr />
+<h2 id="async-search-dispatch-run_usage_search">15. Async Search
+Dispatch (run_usage_search)</h2>
+<p><code>run_usage_search()</code> (lines ~4261-4349) is the core
+function used by both <code>collect_app_analytics()</code> and
+<code>collect_usage_analytics()</code> to dispatch and poll Splunk
+searches.</p>
+<h3 id="dispatch">Dispatch</h3>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="ex">POST</span> /services/search/jobs</span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="va">output_mode</span><span class="op">=</span>json</span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="va">exec_mode</span><span class="op">=</span>normal</span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="va">earliest_time</span><span class="op">=</span>-<span class="op">&lt;</span>USAGE_PERIOD<span class="op">&gt;</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="va">latest_time</span><span class="op">=</span>now</span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="va">search</span><span class="op">=&lt;</span>URL-encoded <span class="ex">query</span><span class="op">&gt;</span></span></code></pre></div>
+<h3 id="polling">Polling</h3>
+<p>After extracting the SID from the dispatch response, the function
+polls:</p>
+<pre><code>GET /services/search/jobs/&lt;sid&gt;?output_mode=json</code></pre>
+<p>Checks <code>dispatchState</code> for completion. Polling uses an
+adaptive interval:</p>
+<ul>
+<li>Start: 5 seconds</li>
+<li>Increment: 5 seconds per iteration</li>
+<li>Cap: 30 seconds</li>
+<li>Maximum wait: configurable per query (default 3600 seconds / 1
+hour)</li>
+</ul>
+<h3 id="job-cancellation-on-timeout">Job Cancellation on Timeout</h3>
+<p>If the search does not complete within <code>max_wait</code>, the job
+is cancelled:</p>
+<pre><code>POST /services/search/jobs/&lt;sid&gt;/control
+  action=cancel</code></pre>
+<p>This frees the search quota on the Splunk server.</p>
+<h3 id="result-retrieval">Result Retrieval</h3>
+<pre><code>GET /services/search/jobs/&lt;sid&gt;/results?output_mode=json&amp;count=0</code></pre>
+<h3 id="error-handling-http-status">Error Handling (HTTP Status)</h3>
+<table>
+<colgroup>
+<col style="width: 16%" />
+<col style="width: 30%" />
+<col style="width: 52%" />
+</colgroup>
+<thead>
+<tr>
+<th>Code</th>
+<th>Error Type</th>
+<th>Written to Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>000</code></td>
+<td>Network error (no connection)</td>
+<td><code>{"error": "network_error", ...}</code></td>
+</tr>
+<tr>
+<td><code>401</code></td>
+<td>Authentication failure</td>
+<td><code>{"error": "auth_error", ...}</code></td>
+</tr>
+<tr>
+<td><code>403</code></td>
+<td>Permission denied</td>
+<td><code>{"error": "permission_error", ...}</code></td>
+</tr>
+<tr>
+<td><code>404</code></td>
+<td>Endpoint not found</td>
+<td><code>{"error": "endpoint_not_found", ...}</code></td>
+</tr>
+<tr>
+<td><code>500/502/503</code></td>
+<td>Server error</td>
+<td><code>{"error": "server_error", ...}</code></td>
+</tr>
+</tbody>
+</table>
+<p>Each error increments <code>STATS_ERRORS</code> and writes a
+structured JSON error to the output file. The script continues with
+remaining queries.</p>
+<hr />
+<h2 id="checkpointing-and-resume">16. Checkpointing and Resume</h2>
+<h3 id="checkpoint-file">Checkpoint File</h3>
+<p>Location: <code>$EXPORT_DIR/.analytics_checkpoint</code></p>
+<p>Each completed analytics query writes a line:</p>
+<pre><code>&lt;checkpoint_name&gt; &lt;timestamp&gt; &lt;output_file&gt;</code></pre>
+<h3 id="has_analytics_checkpoint">has_analytics_checkpoint</h3>
+<p>Before running a query,
+<code>has_analytics_checkpoint "&lt;name&gt;"</code> checks if the
+checkpoint file contains the named checkpoint. If yes, the query is
+skipped.</p>
+<h3 id="checkpoint-names-v4.6.0">Checkpoint Names (v4.6.0)</h3>
+<table>
+<thead>
+<tr>
+<th>Checkpoint</th>
+<th>Phase</th>
+<th>Query</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dashboard_views</code></td>
+<td>App Analytics</td>
+<td>Query 1</td>
+</tr>
+<tr>
+<td><code>user_activity</code></td>
+<td>App Analytics</td>
+<td>Query 2</td>
+</tr>
+<tr>
+<td><code>search_patterns</code></td>
+<td>App Analytics</td>
+<td>Query 3</td>
+</tr>
+<tr>
+<td><code>index_volume</code></td>
+<td>App Analytics</td>
+<td>Query 4</td>
+</tr>
+<tr>
+<td><code>alert_firing</code></td>
+<td>App Analytics</td>
+<td>Query 5</td>
+</tr>
+<tr>
+<td><code>alerts_inventory</code></td>
+<td>App Analytics</td>
+<td>Query 6</td>
+</tr>
+<tr>
+<td><code>usage_ownership</code></td>
+<td>Usage Analytics</td>
+<td>All 3 ownership queries</td>
+</tr>
+</tbody>
+</table>
+<h3 id="resume-mode-resume-collect-file">Resume Mode (–resume-collect
+FILE)</h3>
+<ol type="1">
+<li>Extracts the specified <code>.tar.gz</code> archive to
+<code>/tmp/</code></li>
+<li>Detects which phases completed via <code>has_collected_data()</code>
+sentinel files</li>
+<li>Continues from the first incomplete phase</li>
+<li>Re-creates the final archive when complete</li>
+</ol>
+<hr />
+<h2 id="export-directory-structure">17. Export Directory Structure</h2>
+<pre><code>dma_export_&lt;hostname&gt;_&lt;timestamp&gt;/
+|
++-- manifest.json                                    # Schema v4.0 metadata
++-- dma-env-summary.md                               # Human-readable summary
++-- export.log                                       # Collection log
++-- .analytics_checkpoint                            # Checkpoint tracking
+|
++-- dma_analytics/
+|   +-- system_info/
+|   |   +-- environment.json                         # OS, flavor, role, architecture
+|   |   +-- server_info.json                         # GET /services/server/info
+|   |   +-- installed_apps.json                      # GET /services/apps/local
+|   |   +-- search_peers.json                        # GET /services/search/distributed/peers
+|   |   +-- license_info.json                        # GET /services/licenser/licenses
+|   |   +-- splunk.version                           # $SPLUNK_HOME/etc/splunk.version
+|   |
+|   +-- rbac/
+|   |   +-- users.json                               # All users
+|   |   +-- roles.json                               # All roles + capabilities
+|   |   +-- capabilities.json                        # System capabilities inventory
+|   |   +-- saml_groups.json                         # SAML group mappings (or placeholder)
+|   |   +-- saml_config.json                         # SAML provider config (or placeholder)
+|   |   +-- ldap_groups.json                         # LDAP group mappings (or placeholder)
+|   |   +-- ldap_config.json                         # LDAP provider config (or placeholder)
+|   |   +-- authentication.conf                      # Password-redacted copy
+|   |   +-- authorize.conf                           # Authorization config
+|   |   +-- users_active_in_apps.json                # (scoped mode only)
+|   |
+|   +-- usage_analytics/
+|   |   +-- dashboard_views_global.json              # Query 1: Dashboard views
+|   |   +-- user_activity_global.json                # Query 2: User activity
+|   |   +-- search_patterns_global.json              # Query 3: Search type breakdown
+|   |   +-- index_volume_summary.json                # Query 4: Ingestion volume
+|   |   +-- alert_firing_global.json                 # Query 5: Alert firing stats
+|   |   +-- dashboard_ownership.json                 # Ownership: dashboards
+|   |   +-- alert_ownership.json                     # Ownership: alerts/searches
+|   |   +-- ownership_summary.json                   # Ownership: by-user summary
+|   |   +-- saved_searches_all.json                  # REST metadata (field-filtered)
+|   |   +-- recent_searches.json                     # Recent search jobs
+|   |   +-- kvstore_stats.json                       # KV Store introspection
+|   |   +-- USAGE_INTELLIGENCE_SUMMARY.md            # Summary markdown
+|   |   +-- ingestion_infrastructure/                # (reserved for future use)
+|   |
+|   +-- indexes/
+|       +-- indexes.conf                             # System indexes.conf
+|       +-- indexes_detailed.json                    # GET /services/data/indexes
+|       +-- data_inputs.json                         # GET /services/data/inputs/all
+|
++-- _system/
+|   +-- local/
+|   |   +-- inputs.conf
+|   |   +-- outputs.conf
+|   |   +-- server.conf
+|   |   +-- macros.conf
+|   +-- default/
+|   |   +-- macros.conf
+|   +-- metadata/
+|       +-- default.meta
+|       +-- local.meta
+|
++-- &lt;app_name&gt;/                                      # One per collected app
+|   +-- default/
+|   |   +-- props.conf
+|   |   +-- transforms.conf
+|   |   +-- eventtypes.conf
+|   |   +-- tags.conf
+|   |   +-- indexes.conf
+|   |   +-- macros.conf
+|   |   +-- savedsearches.conf
+|   |   +-- inputs.conf
+|   |   +-- outputs.conf
+|   |   +-- collections.conf
+|   |   +-- fields.conf
+|   |   +-- workflow_actions.conf
+|   |   +-- commands.conf
+|   |   +-- data/ui/views/*.xml                      # Classic dashboards (filesystem copy)
+|   +-- local/
+|   |   +-- (same structure as default)
+|   +-- lookups/
+|   |   +-- *.csv                                    # (when COLLECT_LOOKUPS=true)
+|   +-- metadata/
+|   |   +-- default.meta
+|   |   +-- local.meta
+|   +-- dashboards/
+|   |   +-- classic/
+|   |   |   +-- &lt;name&gt;.json                          # REST API response (Classic)
+|   |   +-- studio/
+|   |       +-- &lt;name&gt;.json                          # REST API response (Studio)
+|   |       +-- &lt;name&gt;_definition.json               # Extracted JSON definition
+|   +-- splunk-analysis/
+|       +-- alerts_inventory.json                    # Query 6 per-app results
+|
++-- dashboards_studio_examples/                      # (if Studio app installed)
+|   +-- *.js                                         # Example JS definitions
+|
++-- TROUBLESHOOTING.md                               # (generated if errors &gt; 0)</code></pre>
+<h3 id="archive-naming">Archive Naming</h3>
+<pre><code>dma_export_&lt;hostname&gt;_&lt;YYYYMMDD_HHMMSS&gt;.tar.gz          # Original
+dma_export_&lt;hostname&gt;_&lt;YYYYMMDD_HHMMSS&gt;_masked.tar.gz   # Anonymized copy</code></pre>
+<hr />
+<h2 id="archive-creation-and-anonymization">18. Archive Creation and
+Anonymization</h2>
+<h3 id="two-archive-model">Two-Archive Model</h3>
+<p>When <code>ANONYMIZE_DATA=true</code> (the default), the script
+creates <strong>two separate archives</strong>:</p>
+<ol type="1">
+<li><strong>Original archive</strong> (<code>dma_export_*.tar.gz</code>)
+– untouched collected data</li>
+<li><strong>Masked archive</strong>
+(<code>dma_export_*_masked.tar.gz</code>) – anonymized copy safe to
+share</li>
+</ol>
+<h3 id="anonymization-process">Anonymization Process</h3>
+<ol type="1">
+<li>Copy the entire export directory to a temporary <code>_masked</code>
+directory</li>
+<li>Run a Python-based anonymizer
+(<code>generate_python_anonymizer()</code>) over every
+<code>.json</code>, <code>.conf</code>, <code>.xml</code>,
+<code>.csv</code>, <code>.txt</code>, and <code>.meta</code> file</li>
+<li>The anonymizer applies these transformations:
+<ul>
+<li><strong>Email addresses</strong> -&gt;
+<code>anon&lt;hash&gt;@anon.dma.local</code></li>
+<li><strong>RFC 1918 private IPs</strong> (<code>10.x.x.x</code>,
+<code>172.16-31.x.x</code>, <code>192.168.x.x</code>) -&gt;
+<code>[IP-REDACTED]</code></li>
+<li><strong>Hostnames</strong> (in JSON <code>"host":</code> and conf
+<code>host =</code> patterns) -&gt;
+<code>host-&lt;hash&gt;.anon.local</code></li>
+<li><strong>Webhook URLs</strong> (Slack, PagerDuty, OpsGenie, Zapier)
+-&gt; <code>https://webhook.anon.dma.local/hook-&lt;hash&gt;</code></li>
+<li><strong>API keys/tokens</strong> (16+ char values in known JSON
+keys) -&gt; <code>[API-KEY-&lt;hash&gt;]</code></li>
+<li><strong>Slack channels</strong> -&gt;
+<code>#anon-channel-&lt;hash&gt;</code></li>
+<li><strong>Usernames</strong> (in JSON <code>"owner":</code>,
+<code>"user":</code>, etc.) -&gt;
+<code>anon-user-&lt;hash&gt;</code></li>
+</ul></li>
+<li>JSON escape fixing: repairs invalid escape sequences created during
+anonymization</li>
+<li>JSON validation: if the original file was valid JSON and the
+anonymized version is not, the original is kept</li>
+<li>Tar the masked directory into the <code>_masked.tar.gz</code>
+archive</li>
+<li>Clean up the temporary directory</li>
+</ol>
+<h3 id="preserved-values-not-anonymized">Preserved Values (Not
+Anonymized)</h3>
+<p>System users <code>nobody</code>, <code>admin</code>,
+<code>system</code>, <code>splunk-system-user</code>, <code>root</code>
+are never anonymized. IPs <code>localhost</code> and
+<code>127.0.0.1</code> are preserved. Already-anonymized values
+(detected by prefix patterns) are not double-anonymized.</p>
+<h3 id="remask-mode-remask-file">Remask Mode (–remask FILE)</h3>
+<p>Re-anonymizes an existing archive without connecting to Splunk:</p>
+<ol type="1">
+<li>Extract the archive</li>
+<li>Run the anonymizer</li>
+<li>Create a new <code>_masked.tar.gz</code></li>
+<li>Exit</li>
+</ol>
+<hr />
+<h2 id="cli-flags-reference">19. CLI Flags Reference</h2>
+<table>
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 28%" />
+<col style="width: 23%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Arguments</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--token</code></td>
+<td><code>TOKEN</code></td>
+<td>–</td>
+<td>API token authentication (recommended for automation)</td>
+</tr>
+<tr>
+<td><code>-u</code>, <code>--username</code></td>
+<td><code>USER</code></td>
+<td>–</td>
+<td>Splunk username</td>
+</tr>
+<tr>
+<td><code>-p</code>, <code>--password</code></td>
+<td><code>PASS</code></td>
+<td>–</td>
+<td>Splunk password</td>
+</tr>
+<tr>
+<td><code>-h</code>, <code>--host</code></td>
+<td><code>HOST</code></td>
+<td><code>localhost</code></td>
+<td>Splunk host</td>
+</tr>
+<tr>
+<td><code>-P</code>, <code>--port</code></td>
+<td><code>PORT</code></td>
+<td><code>8089</code></td>
+<td>Splunk management port</td>
+</tr>
+<tr>
+<td><code>--splunk-home</code></td>
+<td><code>PATH</code></td>
+<td>auto-detected</td>
+<td>Splunk installation path</td>
+</tr>
+<tr>
+<td><code>--proxy</code></td>
+<td><code>URL</code></td>
+<td>–</td>
+<td>HTTP proxy for all curl calls</td>
+</tr>
+<tr>
+<td><code>--apps</code></td>
+<td><code>LIST</code></td>
+<td>all apps</td>
+<td>Comma-separated app names to export</td>
+</tr>
+<tr>
+<td><code>--all-apps</code></td>
+<td>–</td>
+<td><code>true</code></td>
+<td>Export all applications</td>
+</tr>
+<tr>
+<td><code>--scoped</code></td>
+<td>–</td>
+<td><code>false</code></td>
+<td>Scope collections to selected apps only</td>
+</tr>
+<tr>
+<td><code>--quick</code></td>
+<td>–</td>
+<td><code>false</code></td>
+<td>Skip global analytics (TESTING ONLY)</td>
+</tr>
+<tr>
+<td><code>--rbac</code></td>
+<td>–</td>
+<td><code>true</code></td>
+<td>Collect RBAC/user data</td>
+</tr>
+<tr>
+<td><code>--no-rbac</code></td>
+<td>–</td>
+<td>–</td>
+<td>Disable RBAC collection</td>
+</tr>
+<tr>
+<td><code>--usage</code></td>
+<td>–</td>
+<td><code>true</code></td>
+<td>Collect usage analytics</td>
+</tr>
+<tr>
+<td><code>--no-usage</code></td>
+<td>–</td>
+<td>–</td>
+<td>Disable usage analytics</td>
+</tr>
+<tr>
+<td><code>--analytics-period</code></td>
+<td><code>N</code></td>
+<td><code>30d</code></td>
+<td>Analytics time window (e.g., <code>7d</code>, <code>90d</code>,
+<code>365d</code>)</td>
+</tr>
+<tr>
+<td><code>--skip-internal</code></td>
+<td>–</td>
+<td><code>false</code></td>
+<td>Skip <code>_audit</code>/<code>_internal</code> index searches</td>
+</tr>
+<tr>
+<td><code>--test-access</code></td>
+<td>–</td>
+<td><code>false</code></td>
+<td>Pre-flight API access check (no export written)</td>
+</tr>
+<tr>
+<td><code>--remask</code></td>
+<td><code>FILE</code></td>
+<td>–</td>
+<td>Re-anonymize an existing archive</td>
+</tr>
+<tr>
+<td><code>--resume-collect</code></td>
+<td><code>FILE</code></td>
+<td>–</td>
+<td>Resume an interrupted export</td>
+</tr>
+<tr>
+<td><code>--anonymize</code></td>
+<td>–</td>
+<td><code>true</code></td>
+<td>Enable two-archive anonymization</td>
+</tr>
+<tr>
+<td><code>--no-anonymize</code></td>
+<td>–</td>
+<td>–</td>
+<td>Disable anonymization</td>
+</tr>
+<tr>
+<td><code>-y</code>, <code>--yes</code></td>
+<td>–</td>
+<td><code>false</code></td>
+<td>Auto-confirm all prompts</td>
+</tr>
+<tr>
+<td><code>-d</code>, <code>--debug</code></td>
+<td>–</td>
+<td><code>false</code></td>
+<td>Enable verbose debug logging (<code>export_debug.log</code>)</td>
+</tr>
+<tr>
+<td><code>--help</code></td>
+<td>–</td>
+<td>–</td>
+<td>Show help and exit</td>
+</tr>
+</tbody>
+</table>
+<h3 id="non-interactive-mode">Non-Interactive Mode</h3>
+<p>The script auto-enables non-interactive mode when:</p>
+<ul>
+<li><code>--token</code> is provided (implies all credentials
+available)</li>
+<li><code>-y</code> / <code>--yes</code> is used (auto-confirm)</li>
+<li>All required parameters are supplied via CLI flags</li>
+</ul>
+<p>In non-interactive mode, all prompts use their default values.</p>
+<hr />
+<h2 id="test-access-mode">20. Test-Access Mode</h2>
+<p><code>--test-access</code> performs a pre-flight API access check
+across all collection categories without writing any export data.</p>
+<h3 id="what-it-tests">What It Tests</h3>
+<table>
+<colgroup>
+<col style="width: 22%" />
+<col style="width: 36%" />
+<col style="width: 40%" />
+</colgroup>
+<thead>
+<tr>
+<th>Category</th>
+<th>Endpoint Tested</th>
+<th>What It Verifies</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Authentication</td>
+<td><code>POST /services/auth/login</code></td>
+<td>Credentials work</td>
+</tr>
+<tr>
+<td>Server Info</td>
+<td><code>GET /services/server/info</code></td>
+<td>Basic API access</td>
+</tr>
+<tr>
+<td>Apps</td>
+<td><code>GET /services/apps/local</code></td>
+<td>App listing permission</td>
+</tr>
+<tr>
+<td>Dashboards</td>
+<td><code>GET /servicesNS/-/-/data/ui/views?count=1</code></td>
+<td>Dashboard read access</td>
+</tr>
+<tr>
+<td>Saved Searches</td>
+<td><code>GET /servicesNS/-/-/saved/searches?count=1</code></td>
+<td>Alert/search read access</td>
+</tr>
+<tr>
+<td>Users</td>
+<td><code>GET /services/authentication/users?count=1</code></td>
+<td>RBAC read access</td>
+</tr>
+<tr>
+<td>Roles</td>
+<td><code>GET /services/authorization/roles?count=1</code></td>
+<td>Authorization read access</td>
+</tr>
+<tr>
+<td>Indexes</td>
+<td><code>GET /services/data/indexes?count=1</code></td>
+<td>Index metadata access</td>
+</tr>
+<tr>
+<td>Search</td>
+<td><code>POST /services/search/jobs</code> (simple test query)</td>
+<td>Search dispatch permission</td>
+</tr>
+<tr>
+<td><code>_audit</code></td>
+<td>Search: <code>index=_audit \| head 1</code></td>
+<td>Internal index access</td>
+</tr>
+<tr>
+<td><code>_internal</code></td>
+<td>Search: <code>index=_internal \| head 1</code></td>
+<td>Internal index access</td>
+</tr>
+</tbody>
+</table>
+<p>Each test reports success/failure with HTTP status codes. The script
+exits after all tests complete – no archive is produced.</p>
+<hr />
+<h2 id="error-handling">21. Error Handling</h2>
+<h3 id="error-categories">Error Categories</h3>
+<table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 28%" />
+<col style="width: 43%" />
+</colgroup>
+<thead>
+<tr>
+<th>Error Type</th>
+<th>Detection</th>
+<th>Script Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Network timeout</td>
+<td>curl HTTP 000</td>
+<td>Log error, write error JSON, continue</td>
+</tr>
+<tr>
+<td>Authentication failure</td>
+<td>HTTP 401</td>
+<td>Log error, write error JSON, continue</td>
+</tr>
+<tr>
+<td>Permission denied</td>
+<td>HTTP 403</td>
+<td>Log error, write error JSON, continue</td>
+</tr>
+<tr>
+<td>Endpoint not found</td>
+<td>HTTP 404</td>
+<td>Write placeholder JSON, continue</td>
+</tr>
+<tr>
+<td>Server error</td>
+<td>HTTP 500/502/503</td>
+<td>Log error with response body, continue</td>
+</tr>
+<tr>
+<td>File not found</td>
+<td><code>[ ! -f ... ]</code></td>
+<td>Skip file, log, continue</td>
+</tr>
+<tr>
+<td>Directory not found</td>
+<td><code>[ ! -d ... ]</code></td>
+<td>Skip directory, log warning</td>
+</tr>
+<tr>
+<td>Search job creation failure</td>
+<td>No SID in response</td>
+<td>Write error JSON, continue</td>
+</tr>
+<tr>
+<td>Search timeout</td>
+<td>Exceeds max_wait</td>
+<td>Cancel job, write timeout error, continue</td>
+</tr>
+<tr>
+<td>Python not found</td>
+<td>No python3 available</td>
+<td>Fatal – exit with error</td>
+</tr>
+<tr>
+<td>curl not installed</td>
+<td><code>command_exists</code> check</td>
+<td>Fatal – exit with error</td>
+</tr>
+</tbody>
+</table>
+<h3 id="troubleshooting-report">Troubleshooting Report</h3>
+<p>If <code>STATS_ERRORS &gt; 0</code> at the end of collection, the
+script generates <code>TROUBLESHOOTING.md</code> in the export directory
+containing:</p>
+<ul>
+<li>Environment information (version, host, flavor, role)</li>
+<li>Error summary and counts</li>
+<li>Phase 1 resilience statistics (API calls, retries, failures,
+batches)</li>
+<li>Detailed error analysis from failed search output files</li>
+<li>Common troubleshooting guides for network, auth, permission,
+timeout, and REST command issues</li>
+</ul>
+<h3 id="retry-logic">Retry Logic</h3>
+<p>Failed API requests are retried up to <code>MAX_RETRIES</code>
+(default 3) times with exponential backoff starting at
+<code>RETRY_DELAY</code> (default 2 seconds).</p>
+<hr />
+<h2 id="api-endpoints-reference">22. API Endpoints Reference</h2>
+<h3 id="system-information">System Information</h3>
+<table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 30%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/server/info</code></td>
+<td>GET</td>
+<td><code>dma_analytics/system_info/server_info.json</code></td>
+</tr>
+<tr>
+<td><code>/services/apps/local</code></td>
+<td>GET</td>
+<td><code>dma_analytics/system_info/installed_apps.json</code></td>
+</tr>
+<tr>
+<td><code>/services/search/distributed/peers</code></td>
+<td>GET</td>
+<td><code>dma_analytics/system_info/search_peers.json</code></td>
+</tr>
+<tr>
+<td><code>/services/licenser/licenses</code></td>
+<td>GET</td>
+<td><code>dma_analytics/system_info/license_info.json</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="authentication-and-rbac">Authentication and RBAC</h3>
+<table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 30%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/auth/login</code></td>
+<td>POST</td>
+<td>Session key (not saved to file)</td>
+</tr>
+<tr>
+<td><code>/services/authentication/users</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/users.json</code></td>
+</tr>
+<tr>
+<td><code>/services/authorization/roles</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/roles.json</code></td>
+</tr>
+<tr>
+<td><code>/services/authorization/capabilities</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/capabilities.json</code></td>
+</tr>
+<tr>
+<td><code>/services/admin/SAML-groups</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/saml_groups.json</code></td>
+</tr>
+<tr>
+<td><code>/services/authentication/providers/SAML</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/saml_config.json</code></td>
+</tr>
+<tr>
+<td><code>/services/admin/LDAP-groups</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/ldap_groups.json</code></td>
+</tr>
+<tr>
+<td><code>/services/authentication/providers/LDAP</code></td>
+<td>GET</td>
+<td><code>dma_analytics/rbac/ldap_config.json</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="knowledge-objects">Knowledge Objects</h3>
+<table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 30%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/servicesNS/-/&lt;app&gt;/data/ui/views</code></td>
+<td>GET</td>
+<td>Dashboard listing (per-app)</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/&lt;app&gt;/data/ui/views/&lt;name&gt;</code></td>
+<td>GET</td>
+<td>Individual dashboard content</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/-/saved/searches</code></td>
+<td>GET</td>
+<td><code>dma_analytics/usage_analytics/saved_searches_all.json</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="index-and-data">Index and Data</h3>
+<table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 30%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/data/indexes</code></td>
+<td>GET</td>
+<td><code>dma_analytics/indexes/indexes_detailed.json</code></td>
+</tr>
+<tr>
+<td><code>/services/data/inputs/all</code></td>
+<td>GET</td>
+<td><code>dma_analytics/indexes/data_inputs.json</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="search-jobs">Search Jobs</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/search/jobs</code></td>
+<td>POST</td>
+<td>Dispatch search (exec_mode=normal or blocking)</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs/&lt;sid&gt;</code></td>
+<td>GET</td>
+<td>Poll job status (dispatchState, isDone)</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs/&lt;sid&gt;/results</code></td>
+<td>GET</td>
+<td>Fetch results (count=0 for all)</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs/&lt;sid&gt;/control</code></td>
+<td>POST</td>
+<td>Cancel job (action=cancel)</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs</code></td>
+<td>GET</td>
+<td><code>dma_analytics/usage_analytics/recent_searches.json</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="shc-detection">SHC Detection</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/shcluster/member/info</code></td>
+<td>GET</td>
+<td>Detect SHC membership, captain status</td>
+</tr>
+<tr>
+<td><code>/services/shcluster/member/members</code></td>
+<td>GET</td>
+<td>SHC member count</td>
+</tr>
+</tbody>
+</table>
+<h3 id="supplementary">Supplementary</h3>
+<table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 30%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/server/introspection/kvstore</code></td>
+<td>GET</td>
+<td><code>dma_analytics/usage_analytics/kvstore_stats.json</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="security-considerations">23. Security Considerations</h2>
+<h3 id="data-never-collected">Data Never Collected</h3>
+<table>
+<colgroup>
+<col style="width: 52%" />
+<col style="width: 47%" />
+</colgroup>
+<thead>
+<tr>
+<th>Data Type</th>
+<th>Handling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>User passwords</td>
+<td>Never collected. Redacted from <code>authentication.conf</code> via
+<code>sed</code>.</td>
+</tr>
+<tr>
+<td>API tokens</td>
+<td>Never saved to export files. Used only in memory for
+<code>AUTH_HEADER</code>.</td>
+</tr>
+<tr>
+<td>LDAP bind passwords</td>
+<td>Redacted from <code>authentication.conf</code>.</td>
+</tr>
+<tr>
+<td>Session keys</td>
+<td>Used transiently; not written to disk.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="password-redaction">Password Redaction</h3>
+<p>When copying <code>authentication.conf</code> from filesystem:</p>
+<div class="sourceCode" id="cb28"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sed</span> <span class="st">&#39;s/password\s*=.*/password = [REDACTED]/gi&#39;</span> <span class="st">&quot;</span><span class="va">$SPLUNK_HOME</span><span class="st">/etc/system/local/authentication.conf&quot;</span></span></code></pre></div>
+<h3 id="debug-log-redaction">Debug Log Redaction</h3>
+<p>When <code>--debug</code> is enabled, the debug log file
+automatically redacts:</p>
+<ul>
+<li>Passwords in command-line arguments</li>
+<li>Token values in auth headers</li>
+<li>Session keys in API responses</li>
+</ul>
+<h3 id="export-file-permissions">Export File Permissions</h3>
+<p>The archive is created with standard permissions. The script
+recommends:</p>
+<ul>
+<li>Transfer via SCP, SFTP, or other encrypted method</li>
+<li>Delete the export file after upload to DMA</li>
+<li>Use the <code>_masked</code> archive when sharing with third
+parties</li>
+</ul>
+<h3 id="sensitive-data-in-anonymized-archives">Sensitive Data in
+Anonymized Archives</h3>
+<p>The <code>_masked</code> archive anonymizes emails, hostnames,
+usernames, private IPs, webhook URLs, API keys, and Slack channels.
+Search SPL content and field values in dashboards/alerts are
+<strong>not</strong> fully anonymized – they may contain
+business-specific terms, index names, and sourcetype names that reveal
+environment details.</p>
+<hr />
+<p><em>End of Specification</em> <em>Version 4.6.0 | DMA Splunk
+Enterprise Export</em></p>
     </main>
 
     <footer class="footer">

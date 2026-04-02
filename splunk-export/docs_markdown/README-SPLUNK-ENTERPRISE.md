@@ -1,1865 +1,474 @@
 # DMA Splunk Enterprise Export Script
-## READ THIS FIRST - Complete Prerequisites Guide
 
-**Version**: 4.4.0
+**Version**: 4.6.0
 **Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise Export Specification](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | For Splunk Cloud exports, see [Cloud Export README](README-SPLUNK-CLOUD.md)
-
-### What's New in v4.4.0
-
-#### New CLI Flags
-
-| Flag | Description |
-|------|-------------|
-| `--token TOKEN` | API token authentication (recommended for automation) |
-| `--proxy URL` | Route all connections through an HTTP proxy |
-| `--skip-internal` | Skip `_audit`/`_internal` index searches for restricted accounts |
-| `--test-access` | Pre-flight API access check across all categories (no export) |
-| `--remask FILE` | Re-anonymize an existing archive without connecting to Splunk |
-| `--resume-collect FILE` | Resume an interrupted export from a `.tar.gz` archive |
-| `--analytics-period N` | Analytics time window (default: 7d; e.g. 30d, 90d) |
-
-#### Token & Session Key Authentication
-- `--token TOKEN` sets `AUTH_HEADER` for all API calls (replaces `-u user:pass`)
-- Password auth now POSTs to `/services/auth/login`, extracts session key, sets `AUTH_HEADER="Authorization: Splunk $SESSION_KEY"`
-- Passwords URL-encoded via Python stdin (safe for `$`, backticks, `"`, `\`)
-- Token-only invocation auto-enables non-interactive mode
-
-#### Expanded RBAC Collection
-Now collects: capabilities, SAML groups, SAML config, LDAP groups, LDAP config. All new endpoints handle 404 gracefully with placeholder JSON when not configured.
-
-#### Progressive Checkpointing
-Each collection phase saves a checkpoint. Resume skips already-completed phases. Analytics checkpoints are per-query, so interrupted analytics resume mid-way.
-
-#### Default Changes
-- Analytics period default changed from 30d to **7d**
-- RBAC and usage remain OFF by default (use `--rbac` / `--usage`)
-
-### Previous v4.3.0 Changes
-
-- Async search dispatch (exec_mode=normal + dispatchState polling)
-- `--analytics-period` flag for custom time windows
-- `--usage` / `--rbac` enable flags (both off by default)
-- 12-hour maximum runtime (up from 4 hours)
-
-### Previous v4.2.4 Changes
-
-- **Two-Archive Anonymization**: Original + `_masked` copy for safe sharing
-- **RBAC/Usage OFF by default**: Use `--rbac` / `--usage` to enable
-- **Faster defaults**: Batch size 250, API delay 50ms
-
-### Previous v4.2.0 Changes
-
-- **App-Centric Dashboard Structure (v2)**: `{AppName}/dashboards/classic/` and `{AppName}/dashboards/studio/`
-- **Manifest Schema v4.0**: `archive_structure_version: "v2"`
-
----
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
 > *An ACE Services Division of Dynatrace*
 
 ---
 
-## CRITICAL: Where to Run This Script
+## Overview
 
-### TL;DR - Run It ONCE on the Search Head
+The Enterprise script (`dma-splunk-export.sh`) collects configuration, dashboards, alerts, and usage analytics from Splunk Enterprise (on-premises) deployments. It reads configuration files directly from the Splunk filesystem (`$SPLUNK_HOME/etc/apps/`) and makes REST API calls to `localhost:8089`. The resulting archive feeds into the **DMA Curator Server** for migration planning and Splunk-to-Dynatrace conversion.
+
+This script is for **Splunk Enterprise only**. For Splunk Cloud, use `dma-splunk-cloud-export.sh` (Bash) or `dma-splunk-cloud-export.ps1` (PowerShell). See [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md).
+
+---
+
+## Where to Run
+
+The Enterprise script **must run on the Splunk Search Head** because it needs both filesystem access to `$SPLUNK_HOME/etc/apps/` and REST API access to `localhost:8089`.
+
+### Search Head Cluster (SHC)
+
+If your environment uses a Search Head Cluster, where you run the script matters:
+
+| Server | What You Get | Recommended? |
+|--------|-------------|--------------|
+| **SHC Member** | Full data -- configs, dashboards, alerts, REST API analytics. Replicated knowledge objects are available on every member. | **Yes -- best choice** |
+| **SHC Captain** | Works, but the script warns you. The Captain handles cluster coordination and running a heavy export adds load. | Avoid if possible |
+| **Deployment Server** | Has app configurations pushed to it, but lacks REST API search capabilities or `_audit`/`_internal` data. Configs complete, usage analytics will fail. | Only if Search Heads are inaccessible |
+| **Indexers** | Missing search-time knowledge objects and dashboard definitions. | **No** |
+
+The script auto-detects SHC membership via the `/services/shcluster/member/info` REST endpoint. If it detects you are on the Captain node, it displays a warning recommending you run from a member instead.
+
+### Where NOT to Run
+
+- **Indexers / Indexer Cluster peers** -- the Search Head queries these via REST
+- **Universal Forwarders** -- no search capability, no dashboards, no alerts
+- **Heavy Forwarders** -- unless standalone and not managed by a Deployment Server
+- **Cluster Manager / License Master** -- the Search Head queries these via REST
+
+---
+
+## Prerequisites
+
+| Requirement | Detail |
+|-------------|--------|
+| **Where to run** | On the Splunk Search Head (SSH required) |
+| **Run as** | The `splunk` user (e.g., `sudo -u splunk bash dma-splunk-export.sh`) |
+| **Shell** | bash 4.0+ |
+| **Utilities** | curl, Python 3 (Splunk bundles Python at `$SPLUNK_HOME/bin/python3`), tar, gzip |
+| **Disk space** | 500 MB+ free in `/tmp` or the working directory |
+| **Network** | localhost access to port 8089 (Splunk management port) |
+
+### Filesystem Permissions
+
+The script reads (never writes to) these directories:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    WHERE TO RUN THE EXPORT SCRIPT                        │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ✅ RUN HERE (Primary - Required):                                       │
-│     • Search Head (standalone)                                           │
-│     • SHC Captain (in Search Head Cluster)                              │
-│                                                                          │
-│  ⚠️  OPTIONAL (Secondary - Only if needed):                              │
-│     • Deployment Server (for forwarder deployment configs)              │
-│                                                                          │
-│  ❌ DO NOT RUN ON:                                                       │
-│     • Indexers / Indexer Cluster peers (SH queries them via REST)       │
-│     • Universal Forwarders (configs come from Deployment Server)        │
-│     • Heavy Forwarders (unless standalone, not managed by DS)           │
-│     • Cluster Manager (SH can get cluster info via REST)                │
-│     • License Master (SH can get license info via REST)                 │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
+$SPLUNK_HOME/
+  etc/
+    apps/*/default/     # App default configurations
+    apps/*/local/       # App local configurations
+    apps/*/metadata/    # default.meta, local.meta
+    apps/*/default/data/ui/views/   # Classic XML dashboards
+    apps/*/local/data/ui/views/     # Classic XML dashboards
+    apps/*/lookups/     # Lookup CSV files (if --lookups enabled)
+    system/local/       # System-level configurations
 ```
 
-### Why Only the Search Head?
-
-The Search Head is the **authoritative source** for migration-relevant data:
-
-| Data Type | Lives On | How SH Gets It |
-|-----------|----------|----------------|
-| Dashboards | Search Head | Local files + KV Store |
-| Alerts & Saved Searches | Search Head | Local files |
-| Users & Roles | Search Head | Local + REST API |
-| Search Macros | Search Head | Local files |
-| Index Statistics | Indexers | **REST API from SH** |
-| Cluster Topology | Cluster Manager | **REST API from SH** |
-| License Info | License Master | **REST API from SH** |
-
-**The Search Head can collect everything via its REST API connections to other components.**
-
-### When to Run on Deployment Server (Optional)
-
-Only run on the Deployment Server if you need:
-- The **source-of-truth** for forwarder configurations (`deployment-apps/`)
-- Server class definitions (`serverclass.conf`)
-- Which forwarders receive which app configurations
-
-This is **supplementary** to the main SH export, not a replacement.
-
----
-
-## Supported Platforms
-
-### ✅ SUPPORTED: Splunk Enterprise (On-Premises)
-
-This script is designed for **Splunk Enterprise** deployments where you have:
-- SSH/shell access to the Splunk servers
-- File system access to `$SPLUNK_HOME/etc/`
-- REST API access (ports 8089 or custom)
-
-Supported architectures:
-- Standalone (single server)
-- Distributed (Search Heads + Indexers)
-- Search Head Cluster (SHC)
-- Indexer Cluster
-- With or without Deployment Server
-
-### ❌ NOT SUPPORTED: Splunk Cloud (Classic or Victoria Experience)
-
-**Splunk Cloud does NOT allow SSH access** to the underlying infrastructure.
-
-For Splunk Cloud migrations, use the dedicated Cloud export scripts:
-- **`dma-splunk-cloud-export.sh`** -- Bash script for Linux/macOS
-- **`dma-splunk-cloud-export.ps1`** -- PowerShell script for Windows
-
-These scripts operate 100% via REST API and require:
-1. **Splunk Cloud admin credentials** or API token with appropriate permissions
-2. **Network access** to `https://your-stack.splunkcloud.com:8089`
-
-See **[README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md)** for full prerequisites, usage instructions, and parameter reference.
-
----
-
-## What This Document Covers
-
-This document explains **everything you need to know** before running the DMA Splunk Export Script, including:
-
-1. [What This Script Does](#1-what-this-script-does)
-2. [Server Access Requirements](#2-server-access-requirements)
-3. [Splunk User Permissions](#3-splunk-user-permissions)
-4. [Permissions by Splunk Deployment Type](#4-permissions-by-splunk-deployment-type)
-5. [Pre-Flight Checklist](#5-pre-flight-checklist)
-6. [What Data Gets Collected](#6-what-data-gets-collected)
-7. [Security & Privacy Considerations](#7-security--privacy-considerations)
-8. [Command-Line Arguments & Automation](#8-command-line-arguments--automation) **(Updated in v4.1.0)**
-9. [Troubleshooting Access Issues](#9-troubleshooting-access-issues)
-
----
-
-## 1. What This Script Does
-
-The DMA Export Script collects configuration data, dashboards, alerts, and usage analytics from your Splunk environment to enable migration to Dynatrace.
-
-### The Script Collects:
-
-| Category | What's Collected | Why It's Needed |
-|----------|-----------------|-----------------|
-| **Configurations** | props.conf, transforms.conf, indexes.conf, inputs.conf | Understanding data pipeline for OpenPipeline conversion |
-| **Dashboards** | Classic XML dashboards + Dashboard Studio JSON | Visual conversion to Dynatrace apps |
-| **Alerts** | savedsearches.conf with all alert definitions | Migration of monitoring and alerting |
-| **Users & RBAC** | Users, roles, groups, object ownership | Mapping who owns what for migration prioritization |
-| **Usage Analytics** | Search frequency, dashboard views, alert triggers | Identifying high-value assets worth migrating |
-| **Index Statistics** | Sizes, retention, sourcetypes, volume metrics | Capacity planning for Dynatrace buckets |
-
-### The Script Does NOT:
-
-- ❌ Collect passwords, API tokens, or secrets
-- ❌ Access actual log data or search results
-- ❌ Modify any Splunk configurations
-- ❌ Send data anywhere (all data stays local)
-- ❌ Require network access (runs entirely on the Splunk server)
-
----
-
-## 2. Server Access Requirements
-
-### 2.1 How to Access the Server
-
-You need **shell access** (SSH or console) to the Splunk server. The script must run directly on the machine where Splunk is installed.
-
-```bash
-# Example: SSH to your Splunk server
-ssh your_username@splunk-server.company.com
-
-# Or if using a jump host
-ssh -J jumphost your_username@splunk-server.company.com
-```
-
-### 2.2 Operating System User Requirements
-
-| Requirement | Details |
-|-------------|---------|
-| **Recommended User** | `splunk` (the user running Splunk) |
-| **Alternative** | `root` or any user with read access to `$SPLUNK_HOME/etc/` |
-| **Required Permissions** | Read access to Splunk configuration directories |
-
-#### Why Run as the `splunk` User?
-
-The `splunk` user (or whatever user runs your Splunk installation) has guaranteed read access to all configuration files. This is the safest and most reliable option.
+Running as the `splunk` user (the user that owns the Splunk installation) guarantees read access to all of these paths:
 
 ```bash
 # Switch to splunk user
 sudo su - splunk
 
-# Or run script as splunk user
-sudo -u splunk bash dma-splunk-export.sh
+# Or run the script as the splunk user directly
+sudo -u splunk bash /tmp/dma-splunk-export.sh
 ```
 
-### 2.3 File System Access Required
+### SPLUNK_HOME Detection
 
-The script needs to READ (not write) from these directories:
+The script auto-detects `$SPLUNK_HOME` using the following order:
 
-```
-$SPLUNK_HOME/
-├── etc/
-│   ├── system/local/          # System-level configurations
-│   ├── apps/*/                # All app configurations
-│   ├── users/*/               # User-level objects (optional)
-│   └── deployment-apps/       # (Deployment Server only)
-└── var/
-    └── log/splunk/audit.log   # (Optional) For usage analytics
-```
+1. **Environment variable** -- if `$SPLUNK_HOME` is set and the directory exists, uses it directly
+2. **Common paths** -- scans `/opt/splunk`, `/opt/splunkforwarder`, `/Applications/Splunk`, `/Applications/SplunkForwarder`, `$HOME/splunk`, `$HOME/splunkforwarder`, `/usr/local/splunk`
+3. **Interactive prompt** -- if none of the above are found, asks you to enter the path manually
 
-### 2.4 Checking Your Access
+You can also set it explicitly with the `--splunk-home` flag.
 
-Run these commands to verify you have the required access:
+### Splunk User Permissions (REST API)
 
-```bash
-# Check if you can read Splunk configs
-ls -la $SPLUNK_HOME/etc/apps/
+In addition to filesystem access, the script uses the Splunk REST API. The Splunk user account needs these capabilities:
 
-# Check if you can read a config file
-cat $SPLUNK_HOME/etc/system/local/server.conf
-
-# Check if audit.log is readable (optional, for usage analytics)
-head -5 $SPLUNK_HOME/var/log/splunk/audit.log
-```
-
-If any of these fail with "Permission denied", you need to either:
-1. Switch to the `splunk` user
-2. Run as root
-3. Ask your administrator to add read permissions
-
----
-
-## 3. Splunk User Permissions
-
-### 3.1 Why Splunk Credentials Are Needed
-
-In addition to OS-level access, the script uses **Splunk's REST API** to collect:
-- Dashboard Studio dashboards (stored in KV Store, not files)
-- User and role information
-- Usage analytics from internal indexes
-- Cluster and distributed environment information
-
-### 3.2 Required Splunk Capabilities
-
-The Splunk user account used for the export needs these capabilities:
-
-| Capability | Required? | What It's Used For |
-|------------|-----------|-------------------|
-| `admin_all_objects` | **Required** | Access all apps and objects |
-| `list_users` | **Required** | Collect user information |
+| Capability | Required? | What It Is Used For |
+|------------|-----------|---------------------|
+| `admin_all_objects` | **Required** | Access dashboards, saved searches, and alerts across all apps |
+| `list_users` | **Required** | Enumerate users and roles (for RBAC collection) |
 | `list_roles` | **Required** | Collect role definitions |
 | `rest_access` | **Required** | Make REST API calls |
-| `search` | Recommended | Run analytics searches |
-| `list_indexes` | Recommended | Get index metadata |
+| `search` | Recommended | Run SPL search jobs (ownership queries, usage analytics) |
+| `list_indexes` | Recommended | Get index metadata and retention policies |
 | `list_inputs` | Recommended | Get data input details |
 | `list_settings` | Recommended | Get system settings |
 
-### 3.3 Checking Your Splunk Permissions
-
-Run this search in Splunk to see your capabilities:
-
-```spl
-| rest /services/authentication/current-context
-| table username, roles, capabilities
-```
-
-Or use the CLI:
-
-```bash
-$SPLUNK_HOME/bin/splunk show user-info
-```
-
-### 3.4 Creating a Dedicated Export User (Recommended)
-
-For security best practices, create a dedicated user for the export:
-
-```bash
-# Create a new role with required capabilities
-$SPLUNK_HOME/bin/splunk add role dma_export \
-  -capability admin_all_objects \
-  -capability list_users \
-  -capability list_roles \
-  -capability list_indexes \
-  -capability list_inputs \
-  -capability list_settings \
-  -capability rest_access \
-  -capability search \
-  -auth admin:your_password
-
-# Create the export user with this role
-$SPLUNK_HOME/bin/splunk add user dma_user \
-  -password 'SecurePassword123!' \
-  -role dma_export \
-  -auth admin:your_password
-```
-
-### 3.5 Using the Admin Account
-
-If creating a dedicated user isn't possible, you can use any existing admin account. The script will prompt for credentials:
-
-```
-Enter Splunk admin username [admin]:
-Enter Splunk admin password: ********
-```
+For usage analytics (`--usage` or the default), the user also needs search-time access to `_audit` and `_internal` indexes.
 
 ---
 
-## 4. Permissions by Splunk Deployment Type
+## Always Run --test-access First
 
-Different Splunk deployment types require different access levels. Identify your environment type and follow the specific requirements below.
+Before running a full export, confirm permissions with `--test-access`. This pre-flight check tests API categories and reports what will and will not work -- without writing any export data.
 
-### IMPORTANT: You Only Need to Run on ONE Server
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        DISTRIBUTED ENVIRONMENT?                          │
-│                                                                          │
-│  Q: Do I need to run on SHC, IDXC, DS, each UF, each HWF?               │
-│                                                                          │
-│  A: NO! Run ONCE on the Search Head (or SHC Captain).                   │
-│                                                                          │
-│     The Search Head can collect data from all other components via      │
-│     REST API. You do NOT need to run on:                                │
-│       • Indexers (SH queries them)                                      │
-│       • Universal Forwarders (configs come from DS)                     │
-│       • Heavy Forwarders (configs come from DS)                         │
-│       • Cluster Manager (SH queries it)                                 │
-│       • License Master (SH queries it)                                  │
-│                                                                          │
-│     The ONLY exception: Optionally run on Deployment Server if you      │
-│     need forwarder deployment configs (deployment-apps/).               │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### 4.1 Standalone Splunk Enterprise
-
-**Description**: Single server running all Splunk components
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the single Splunk server |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Any admin account |
-| **Special Considerations** | None - full access from one server |
-
-```
-┌─────────────────────────────────────┐
-│         STANDALONE SERVER           │
-│                                     │
-│  ┌─────────────────────────────┐   │
-│  │  ✅ Run script HERE         │   │
-│  │  • Full file system access  │   │
-│  │  • Full REST API access     │   │
-│  │  • All data available       │   │
-│  └─────────────────────────────┘   │
-└─────────────────────────────────────┘
-```
-
-### 4.2 Distributed Environment (Search Head + Indexers)
-
-**Description**: Separate search heads and indexer tiers
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the **Search Head** (NOT indexers) |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Admin account with distributed search access |
-| **Special Considerations** | Index stats come from search peers via REST |
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                 DISTRIBUTED ENVIRONMENT                      │
-│                                                              │
-│  ┌──────────────────┐       ┌─────────────────────────────┐ │
-│  │  SEARCH HEAD     │       │  INDEXER CLUSTER            │ │
-│  │                  │ REST  │                              │ │
-│  │  ✅ Run HERE     ├──────►│  ❌ DO NOT run here         │ │
-│  │  • Dashboards    │       │  (SH queries via REST)      │ │
-│  │  • Alerts        │       │                              │ │
-│  │  • Users/RBAC    │       └─────────────────────────────┘ │
-│  │  • Usage stats   │                                       │
-│  │  • Index stats   │ ◄── Collected via REST from indexers │
-│  └──────────────────┘                                       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4.3 Search Head Cluster (SHC)
-
-**Description**: Multiple search heads in a cluster for high availability
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the **SHC Captain** (preferred) or any member |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Admin account |
-| **Special Considerations** | Captain has authoritative view of all shared objects |
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│               SEARCH HEAD CLUSTER                            │
-│                                                              │
-│  ┌──────────────────┐                                       │
-│  │  SHC CAPTAIN     │ ◄── Run script HERE (preferred)       │
-│  │  • Authoritative  │                                       │
-│  │  • All shared KOs │                                       │
-│  └────────┬─────────┘                                       │
-│           │                                                  │
-│  ┌────────┼────────┐                                        │
-│  │        │        │                                         │
-│  ▼        ▼        ▼                                         │
-│ ┌───┐   ┌───┐   ┌───┐                                       │
-│ │SH1│   │SH2│   │SH3│  ◄── Or run on any member             │
-│ └───┘   └───┘   └───┘      (may miss some shared objects)   │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Finding the SHC Captain**:
 ```bash
-$SPLUNK_HOME/bin/splunk show shcluster-status -auth admin:password
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
+  --test-access
 ```
 
-### 4.4 Indexer Cluster
-
-**Description**: Clustered indexers with a Cluster Manager
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the **Search Head** (NOT Cluster Manager or indexers) |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Admin account |
-| **Special Considerations** | Run on SH; CM only for cluster configs if needed |
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                INDEXER CLUSTER                               │
-│                                                              │
-│  ┌──────────────────┐                                       │
-│  │  SEARCH HEAD     │ ◄── Run script HERE                   │
-│  │  • Dashboards    │                                        │
-│  │  • Alerts        │                                        │
-│  │  • Full export   │                                        │
-│  └────────┬─────────┘                                       │
-│           │ REST                                             │
-│  ┌────────┴────────────────────────────────────────┐        │
-│  │           INDEXER CLUSTER                         │        │
-│  │  ┌────────────┐                                  │        │
-│  │  │ Cluster    │ ◄── Only for cluster topology    │        │
-│  │  │ Manager    │     (optional, script handles)   │        │
-│  │  └─────┬──────┘                                  │        │
-│  │        │                                          │        │
-│  │  ┌─────┼─────┬─────┐                             │        │
-│  │  ▼     ▼     ▼     ▼                              │        │
-│  │ IDX1  IDX2  IDX3  IDX4                           │        │
-│  └──────────────────────────────────────────────────┘        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4.5 Universal Forwarder
-
-**Description**: Lightweight agent that only forwards data
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the forwarder host |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Not needed (no REST API on UF) |
-| **Special Considerations** | **LIMITED EXPORT** - No dashboards, alerts, or users |
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│            UNIVERSAL FORWARDER                               │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  WHAT CAN BE COLLECTED:                               │   │
-│  │  ✓ inputs.conf (what logs are being monitored)        │   │
-│  │  ✓ outputs.conf (where logs are forwarded to)         │   │
-│  │  ✓ props.conf (any local parsing rules)               │   │
-│  │  ✓ deploymentclient.conf (deployment server config)   │   │
-│  │                                                       │   │
-│  │  WHAT CANNOT BE COLLECTED:                            │   │
-│  │  ✗ Dashboards (UF has no search capability)           │   │
-│  │  ✗ Alerts (UF cannot run searches)                    │   │
-│  │  ✗ Users/RBAC (minimal authentication)                │   │
-│  │  ✗ Usage analytics (no search history)                │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  RECOMMENDATION: Run full export on Search Head instead     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4.6 Heavy Forwarder
-
-**Description**: Full Splunk instance configured for forwarding with parsing
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the Heavy Forwarder |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Admin account (REST API available) |
-| **Special Considerations** | Focus on data routing configs; no dashboards |
-
-### 4.7 Deployment Server
-
-**Description**: Central configuration management for forwarders
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | SSH to the Deployment Server |
-| **OS User** | `splunk` or `root` |
-| **Splunk User** | Admin account |
-| **Special Considerations** | Collects deployed app configurations |
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              DEPLOYMENT SERVER                               │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  WHAT CAN BE COLLECTED:                               │   │
-│  │  ✓ deployment-apps/* (all apps deployed to forwarders)│   │
-│  │  ✓ serverclass.conf (which forwarders get which apps) │   │
-│  │  ✓ Server configurations                              │   │
-│  │                                                       │   │
-│  │  WHAT CANNOT BE COLLECTED:                            │   │
-│  │  ✗ Dashboards (typically not on DS)                   │   │
-│  │  ✗ Alerts (typically not on DS)                       │   │
-│  │  ✗ Usage analytics (no searches run here)             │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  NOTE: DS export is useful for understanding forwarder      │
-│        configurations and data collection landscape         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 4.8 Splunk Cloud (Classic & Victoria Experience)
-
-**⚠️ NOT SUPPORTED BY THIS ENTERPRISE SCRIPT -- USE THE CLOUD EXPORT SCRIPTS**
-
-**Description**: Splunk-managed SaaS deployment
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  SPLUNK CLOUD                                │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │                                                       │   │
-│  │  ❌ THIS SCRIPT DOES NOT SUPPORT SPLUNK CLOUD         │   │
-│  │                                                       │   │
-│  │  Splunk Cloud (both Classic and Victoria Experience)  │   │
-│  │  does NOT allow SSH access to the infrastructure.     │   │
-│  │                                                       │   │
-│  │  This script requires file system access to:          │   │
-│  │    • $SPLUNK_HOME/etc/apps/                          │   │
-│  │    • $SPLUNK_HOME/etc/system/local/                  │   │
-│  │    • $SPLUNK_HOME/var/log/splunk/                    │   │
-│  │                                                       │   │
-│  │  Which is not possible in Splunk Cloud.               │   │
-│  │                                                       │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                                                              │
-│  FOR SPLUNK CLOUD MIGRATIONS, USE:                          │
-│                                                              │
-│  • dma-splunk-cloud-export.sh (Bash - Linux/macOS)  │
-│  • dma-splunk-cloud-export.ps1  (PowerShell - Windows)│
-│                                                              │
-│  Both scripts operate 100% via REST API.                    │
-│  See README-SPLUNK-CLOUD.md for full documentation.         │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
-
-| Requirement | Details |
-|-------------|---------|
-| **Server Access** | ❌ Not possible - No SSH to Splunk Cloud |
-| **This Script** | ❌ Not supported |
-| **Alternative (Bash)** | `dma-splunk-cloud-export.sh` -- see [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) |
-| **Alternative (PowerShell)** | `dma-splunk-cloud-export.ps1` -- see [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) |
+If `--test-access` shows FAIL on Dashboards, Saved Searches, or System Info, stop and fix permissions before proceeding. Running a full export with these failures will produce an incomplete archive.
 
 ---
 
-## 5. Pre-Flight Checklist
+## Running the Export
 
-Before running the export script, verify each item:
+### Interactive Mode
 
-### Server & OS Access
+When run without CLI arguments, the script walks you through each step:
 
-- [ ] I have SSH or console access to the appropriate Splunk server
-- [ ] I can switch to the `splunk` user OR I have root access
-- [ ] I can read files in `$SPLUNK_HOME/etc/`
-
-### Splunk Credentials
-
-- [ ] I have a Splunk admin username and password
-- [ ] The account has `admin_all_objects` capability
-- [ ] The account has `list_users` and `list_roles` capabilities
-
-### Network & Firewall
-
-- [ ] The Splunk REST API port (default 8089) is accessible locally
-- [ ] For Splunk Cloud: I can reach the cloud URL from my machine
-
-### Disk Space
-
-- [ ] I have at least 500 MB free in `/tmp` for the export archive
-- [ ] (Optional) I have space to store the archive before download
-
-### Time & Scheduling
-
-- [ ] I'm running this during a low-activity period (recommended)
-- [ ] I have approximately 15-30 minutes for the export to complete
-- [ ] I've notified relevant teams about the export activity
-
----
-
-## 6. What Data Gets Collected
-
-### 6.1 Data Collection Summary
-
-| Data Type | File/Location | Sensitivity | Redacted? |
-|-----------|---------------|-------------|-----------|
-| Server info | _systeminfo/server_info.json | Low | No |
-| App list | _systeminfo/installed_apps.json | Low | No |
-| props.conf | [app]/default/props.conf | Low | No |
-| transforms.conf | [app]/default/transforms.conf | Low | No |
-| indexes.conf | _system/local/indexes.conf | Low | No |
-| inputs.conf | [app]/local/inputs.conf | Medium | Paths only |
-| savedsearches.conf | [app]/local/savedsearches.conf | Medium | No |
-| Dashboards XML | [app]/data/ui/views/*.xml | Low | No |
-| Dashboard Studio | [app]/dashboards/studio/*.json | Low | No |
-| Users list | _rbac/users.json | Medium | Emails included |
-| Roles list | _rbac/roles.json | Low | No |
-| LDAP/SAML config | _rbac/authentication.conf | Medium | Passwords redacted |
-| Usage analytics | _usage_analytics/*.json | Low | Anonymizable |
-| Audit sample | _audit_sample/audit_sample.log | Medium | Optional |
-
-### 6.2 Sensitive Data Handling
-
-The script automatically redacts or excludes:
-
-```
-ALWAYS REDACTED:
-• Passwords (password = [REDACTED])
-• API tokens (token = [REDACTED])
-• Private keys (privateKey = [REDACTED])
-• Session tokens
-• LDAP bind credentials
-
-NEVER COLLECTED:
-• Actual log data
-• Search results
-• KV Store data (except dashboard definitions)
-• Encrypted credential storage
-```
-
-### 6.3 Optional/Sensitive Collections
-
-These require explicit opt-in:
-
-| Collection | Risk Level | Contains |
-|------------|------------|----------|
-| **Lookup Tables** | Medium | May contain reference data with PII |
-| **Audit Log Sample** | Medium | May contain search queries with sensitive terms |
-| **User Email Addresses** | Low | PII but useful for ownership mapping |
-
----
-
-## 7. Security & Privacy Considerations
-
-### 7.1 Data Stays Local
-
-The export script:
-- Creates a `.tar.gz` file on the local filesystem
-- Does NOT transmit data to any external service
-- Does NOT require internet access (except for Splunk Cloud)
-- Does NOT modify any Splunk configurations
-
-### 7.2 Secure the Export File
-
-After the export completes:
+1. **Pre-flight checklist** -- verifies bash, curl, Python 3, tar, gzip, disk space
+2. **SPLUNK_HOME detection** -- auto-detects or prompts for the Splunk installation path
+3. **Authentication** -- choose token or username/password; credentials are verified against the REST API
+4. **SHC detection** -- warns if running on the Captain, shows member count
+5. **Application selection** -- export all apps or pick specific ones
+6. **Data category selection** -- toggle configs, dashboards, alerts, RBAC, usage, indexes, lookups, anonymization
+7. **Analytics period** (if usage enabled) -- 7d, 30d, 90d, or 365d
+8. **Collection** -- progress displayed per category
+9. **Anonymization** -- creates the `_masked` archive (unless disabled)
+10. **Summary** -- statistics table with counts, timing, and any errors
 
 ```bash
-# The export file is created with restrictive permissions
-ls -la /tmp/splunk_export_*.tar.gz
-# -rw------- 1 splunk splunk 150M Jan 15 10:30 splunk_export_...
-
-# Transfer securely (examples)
-scp /tmp/splunk_export_*.tar.gz user@secure-host:/path/
-rsync -avz --progress /tmp/splunk_export_*.tar.gz user@host:/path/
-
-# Delete after transfer
-rm /tmp/splunk_export_*.tar.gz
+# Interactive -- prompts for everything
+sudo -u splunk bash /tmp/dma-splunk-export.sh
 ```
 
-### 7.3 Audit Trail
+### Non-Interactive Mode
 
-The script logs its activities:
+Supply all required parameters on the command line with `-y` / `--yes` to skip prompts:
 
 ```bash
-# View what the script did
-cat /tmp/splunk_export_*/export.log
-
-# The audit log shows:
-# - What was collected
-# - What was skipped
-# - Any errors encountered
-# - Duration of each step
-```
-
-### 7.4 Approval Workflow
-
-For regulated environments, consider:
-
-1. **Pre-Approval**: Get written approval before running the export
-2. **Witness**: Have a security team member observe the export
-3. **Review**: Examine the export contents before sharing
-4. **Document**: Log the export as a data handling event
-
-### 7.5 Data Anonymization (Option 9)
-
-When sharing exports with third parties (e.g., migration consultants, Dynatrace Professional Services), enable **Option 9: Anonymize Sensitive Data** to protect privacy while preserving data relationships.
-
-**What Gets Anonymized:**
-
-| Data Type | Original | Anonymized |
-|-----------|----------|------------|
-| **Email Addresses** | `user1@example-corp.com` | `user3f8a2c@anon.dma.local` |
-| **Hostnames** | `splunk-idx01.acme.internal` | `host-7b4c9e12.anon.local` |
-| **IP Addresses** | `192.168.1.100` | `[IP-REDACTED]` |
-| **IPv6 Addresses** | `2001:db8::1` | `[IPv6-REDACTED]` |
-
-**Key Features:**
-
-- **Consistent Mapping**: The same original value always produces the same anonymized value, preserving relationships (e.g., all logs from `server-01` still appear together)
-- **Hash-Based**: Uses SHA-256 hashing, so anonymized values cannot be reversed to reveal originals
-- **Selective**: `localhost` and `127.0.0.1` are preserved
-- **Report**: Creates `_anonymization_report.json` documenting what was anonymized
-
-**When to Use:**
-
-```
-✅ Use Anonymization When:
-  • Sharing export with external consultants
-  • Sending to vendor for analysis
-  • Including in support tickets
-  • Uploading to shared/cloud environments
-
-❌ Skip Anonymization When:
-  • Internal use only
-  • Migration team needs real hostnames for planning
-  • Troubleshooting requires actual IP addresses
-```
-
-**To Enable:**
-
-During Step 4 (Data Categories), enter `9` to toggle anonymization ON:
-
-```
-Enter numbers to toggle (e.g., 7,8,9 to add lookups, audit, and anonymization)
-Toggle: 9
-✓ Data Anonymization: ON - Emails, hostnames, and IPs will be anonymized
-```
-
----
-
-## 8. Command-Line Arguments & Automation
-
-**Updated in v4.4.0**: The script supports comprehensive command-line arguments for automation, app-scoped exports, and troubleshooting.
-
-### 8.1 Available Command-Line Arguments
-
-| Argument | Description | Example |
-|----------|-------------|---------|
-| `--token TOKEN` | API token authentication **(NEW v4.3.0, recommended)** | `--token "xxxxx"` |
-| `-u, --username` | Splunk admin username | `-u admin` |
-| `-p, --password` | Splunk admin password | `-p MyPassword123` |
-| `-h, --host` | Splunk host (default: localhost) | `-h splunk-server.local` |
-| `-P, --port` | Splunk REST API port (default: 8089) | `-P 8089` |
-| `--splunk-home` | Splunk installation path | `--splunk-home /opt/splunk` |
-| `--apps` | Comma-separated list of apps to export | `--apps "search,myapp,security"` |
-| `--all-apps` | Export all applications (default) | `--all-apps` |
-| `--rbac` | Enable RBAC/user collection (OFF by default) | `--rbac` |
-| `--usage` | Enable usage analytics (OFF by default) | `--usage` |
-| `--analytics-period N` | Analytics time window (default: 7d) **(NEW v4.3.0)** | `--analytics-period 30d` |
-| `--proxy URL` | Route all connections through HTTP proxy **(NEW v4.4.0)** | `--proxy http://proxy:8080` |
-| `--skip-internal` | Skip `_audit`/`_internal` searches **(NEW v4.4.0)** | `--skip-internal` |
-| `--test-access` | Pre-flight API access check (no export) **(NEW v4.4.0)** | `--test-access` |
-| `--remask FILE` | Re-anonymize existing archive **(NEW v4.4.0)** | `--remask ./export.tar.gz` |
-| `--resume-collect FILE` | Resume from previous archive **(NEW v4.4.0)** | `--resume-collect ./export.tar.gz` |
-| `--quick` | Quick mode - skip analytics **(TESTING ONLY)** | `--quick` |
-| `--scoped` | Scope collections to selected apps only | `--scoped` |
-| `--anonymize` | Enable data anonymization (default) | `--anonymize` |
-| `--no-anonymize` | Disable data anonymization | `--no-anonymize` |
-| `-y, --yes` | Auto-confirm all prompts (non-interactive) | `-y` |
-| `-d, --debug` | Enable verbose debug logging | `--debug` |
-| `--help` | Show help message | `--help` |
-
-### 8.2 Non-Interactive Mode (Automation)
-
-Non-interactive mode is automatically enabled when username AND password are provided (via CLI arguments or environment variables):
-
-```bash
-# Fully automated export
-./dma-splunk-export.sh \
-  -u admin \
-  -p 'YourPassword' \
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
   --splunk-home /opt/splunk \
-  --anonymize
+  --yes
 ```
 
-### 8.3 App-Scoped Export Mode (NEW in v4.1.0)
+Token-only invocation (`--token` without username/password) auto-enables non-interactive mode.
 
-For large environments with many apps, you can dramatically reduce export time by targeting specific apps:
+### Authentication Options
+
+| Method | Flags | Notes |
+|--------|-------|-------|
+| **API token** (recommended) | `--token TOKEN` | Sets `Authorization: Splunk $TOKEN` header for all API calls |
+| **Username + password** | `-u USER -p PASS` | POSTs to `/services/auth/login` to obtain a session key |
+| **Environment variables** | `SPLUNK_USER` + `SPLUNK_PASSWORD` | Alternative to CLI flags; useful for container deployments |
+
+---
+
+## What Is Collected
+
+### Default Behavior (v4.6.0)
+
+The Enterprise script defaults differ from the Cloud scripts:
+
+| Setting | Enterprise Default | Cloud Default |
+|---------|-------------------|---------------|
+| **RBAC** | **ON** (`--no-rbac` to disable) | OFF (`--rbac` to enable) |
+| **Usage Analytics** | **ON** (`--no-usage` to disable) | OFF (`--usage` to enable) |
+| **Analytics Period** | **30d** | 7d |
+| **Max Runtime** | **4 hours** (14400s) | 4 hours |
+
+### Always Collected (defaults ON)
+
+| Category | Source | Description |
+|----------|--------|-------------|
+| **Configuration files** | Filesystem | `props.conf`, `transforms.conf`, `eventtypes.conf`, `tags.conf`, `indexes.conf`, `macros.conf`, `savedsearches.conf`, `inputs.conf`, `outputs.conf`, `collections.conf`, `fields.conf`, `workflow_actions.conf`, `commands.conf` -- from both `default/` and `local/` directories of each app |
+| **Dashboards** | Filesystem + REST | Classic XML from `data/ui/views/*.xml`; Dashboard Studio JSON via REST API (KV Store) |
+| **Alerts & Saved Searches** | Filesystem + REST | All definitions with SPL queries and schedules |
+| **Index Statistics** | REST API | Index metadata, sizes, retention policies, sourcetypes |
+| **Knowledge Objects** | Filesystem | Macros, eventtypes, tags, lookups, field extractions |
+| **Metadata** | Filesystem | `default.meta` and `local.meta` per app (for macro export scope) |
+
+### On by Default in Enterprise (use --no-rbac / --no-usage to disable)
+
+| Category | Flag to Disable | Description |
+|----------|----------------|-------------|
+| **Users & RBAC** | `--no-rbac` | Users, roles, capabilities, SAML groups, SAML config, LDAP groups, LDAP config. No passwords collected. 404s handled gracefully with placeholder JSON when not configured. |
+| **Usage Analytics** | `--no-usage` | Ownership mapping, REST metadata, and (if `_audit`/`_internal` accessible) the 6 global aggregate queries that power the DMA Explorer. |
+
+### What Usage Analytics Produces (v4.6.0)
+
+In v4.6.0, `collect_usage_analytics` has been streamlined. It now collects:
+
+**Ownership data** (via `| rest` SPL queries -- no `_audit`/`_internal` access required):
+
+| File | Method | Explorer Tab |
+|------|--------|-------------|
+| `dashboard_ownership.json` | `\| rest /servicesNS/-/-/data/ui/views` | Dashboards -- owner column |
+| `alert_ownership.json` | `\| rest /servicesNS/-/-/saved/searches` | Alerts -- owner column |
+| `ownership_summary.json` | `\| rest` (aggregate) | Supplementary -- assets per owner |
+
+**REST supplementary metadata** (direct REST calls, no search jobs):
+
+| File | Endpoint | Purpose |
+|------|----------|---------|
+| `saved_searches_all.json` | `/servicesNS/-/-/saved/searches` (metadata fields only via `f=` params) | Schedule, severity, actions for all saved searches |
+| `recent_searches.json` | `/services/search/jobs` (last 1000) | Recent search job activity |
+| `kvstore_stats.json` | `/services/server/introspection/kvstore` | KV Store usage statistics |
+
+**USAGE_INTELLIGENCE_SUMMARY.md** -- a markdown summary document describing the collected data and providing a migration prioritization framework.
+
+The 6 global aggregate queries that produce Explorer data are in `collect_app_analytics` (not `collect_usage_analytics`). These run against `_audit` and `_internal`:
+
+| File | Index | Explorer Tab |
+|------|-------|-------------|
+| `dashboard_views_global.json` | `_audit` | Dashboards -- view counts per dashboard |
+| `user_activity_global.json` | `_audit` | Supplementary -- searches per user per app |
+| `search_patterns_global.json` | `_audit` | Supplementary -- search type breakdown |
+| `index_volume_summary.json` | `_internal` | Indexes -- daily ingestion GB per index |
+| `index_event_counts_daily.json` | `_internal` | Indexes -- event counts per index per day |
+| `alert_firing_global.json` | `_internal` | Alerts -- execution stats per alert |
+
+### What Is NOT Collected
+
+- User passwords or password hashes
+- API tokens or session keys (passwords in `.conf` files are auto-redacted)
+- Actual log/event data (only metadata and structure)
+- SSL certificates or private keys
+- KV Store data (except Dashboard Studio definitions)
+
+---
+
+## Data Anonymization
+
+When anonymization is enabled (the default), the script creates **two archives**:
+
+| Archive | Contents | Purpose |
+|---------|----------|---------|
+| `dma_export_<hostname>_<YYYYMMDD_HHMMSS>.tar.gz` | Original, untouched data | Reference copy -- keep internally |
+| `dma_export_<hostname>_<YYYYMMDD_HHMMSS>_masked.tar.gz` | Anonymized copy | Safe to share with Dynatrace or externally |
+
+Anonymization applies deterministic (hash-based) masking:
+
+| Data Type | Example Original | Example Anonymized |
+|-----------|-----------------|-------------------|
+| **Email addresses** | `user@corp.com` | `anon######@anon.dma.local` |
+| **Hostnames** | `splunk-idx01.corp.com` | `host-########.anon.local` |
+| **IPv4 addresses** | `192.168.1.100` | `[IP-REDACTED]` |
+| **IPv6 addresses** | `2001:db8::1` | `[IPv6-REDACTED]` |
+| **Webhook URLs** | `https://hooks.slack.com/...` | `https://webhook.anon.dma.local/hook-###` |
+| **API keys/tokens** | (various) | `[API-KEY-########]` |
+
+`localhost` and `127.0.0.1` are preserved. The same original value always produces the same anonymized value, so relationships are maintained across the archive. An `_anonymization_report.json` documents what was anonymized.
+
+Upload the `_masked` archive when sharing externally. Use the original archive for internal analysis on the DMA Server.
+
+---
+
+## Command-Line Reference
+
+### Connection & Authentication
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--token TOKEN` | API token authentication (recommended for automation) | -- |
+| `-u`, `--username USER` | Splunk admin username | -- |
+| `-p`, `--password PASS` | Splunk admin password | -- |
+| `-h`, `--host HOST` | Splunk host | `localhost` |
+| `-P`, `--port PORT` | Splunk REST API port | `8089` |
+| `--splunk-home PATH` | Splunk installation path (overrides auto-detection) | auto-detect |
+| `--proxy URL` | Route all connections through an HTTP proxy | -- |
+
+### Scope & Data Selection
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--all-apps` | Export all applications | ON (default) |
+| `--apps "a,b,c"` | Export only these apps (comma-separated) | all apps |
+| `--scoped` | Scope all collections to selected apps only | OFF |
+| `--rbac` | Enable RBAC/users collection | **ON** (Enterprise default) |
+| `--no-rbac` | Disable RBAC/users collection | -- |
+| `--usage` | Enable usage analytics | **ON** (Enterprise default) |
+| `--no-usage` | Disable usage analytics | -- |
+| `--analytics-period N` | Analytics time window (e.g., `7d`, `30d`, `90d`, `365d`) | `30d` |
+| `--skip-internal` | Skip `_audit`/`_internal` index searches | OFF |
+| `--anonymize` | Enable data anonymization | ON (default) |
+| `--no-anonymize` | Disable data anonymization | -- |
+
+### Special Modes
+
+| Flag | Description |
+|------|-------------|
+| `--test-access` | Pre-flight permission check -- test all API categories, then exit. No export written. **Always run this first.** |
+| `--remask FILE` | Re-anonymize an existing unmasked archive. No Splunk connection needed. |
+| `--resume-collect FILE` | Resume an interrupted export from a `.tar.gz` archive. Detects completed phases via checkpoint files and continues from where it stopped. Per-query checkpointing means individual analytics searches resume mid-way. |
+| `--quick` | Quick mode -- skips global analytics entirely. **TESTING ONLY, not for migration analysis.** |
+
+### Operational
+
+| Flag | Description |
+|------|-------------|
+| `-y`, `--yes` | Auto-confirm all prompts (non-interactive mode) |
+| `-d`, `--debug` | Verbose debug logging (writes `_export_debug.log` inside the archive) |
+| `--help` | Show help and exit |
+
+---
+
+## Examples
+
+### Recommended: Full Export with Token
 
 ```bash
-# Export only specific apps (fastest option)
-./dma-splunk-export.sh \
-  -u admin -p 'YourPassword' \
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
+  --splunk-home /opt/splunk \
+  --yes
+```
+
+RBAC and usage are on by default in Enterprise, so this collects everything.
+
+### Minimal Export (No RBAC, No Usage)
+
+```bash
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
+  --no-rbac --no-usage \
+  --yes
+```
+
+### Scoped to Specific Apps
+
+```bash
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
   --apps "search,myapp,security_essentials" \
-  --quick
-
-# Scoped mode - exports app configs + only users/searches related to those apps
-./dma-splunk-export.sh \
-  -u admin -p 'YourPassword' \
-  --apps "myapp,otherapp" \
-  --scoped
+  --scoped --yes
 ```
 
-| Mode | What It Does | Use When |
-|------|-------------|----------|
-| `--quick` | App configs only, no global analytics | **Testing/validation only** - NOT for migration analysis |
-| `--scoped` | App configs + app-filtered users/usage | You want usage data but only for selected apps |
-| (default) | Full export of all apps + global analytics | **Recommended** - Full migration analysis |
-
-> **⚠️ CRITICAL WARNING: Do NOT use `--quick` for Migration Analysis**
->
-> The `--quick` flag is intended **ONLY for testing and script validation**, not for actual migration planning. Using `--quick` eliminates critical data needed for migration analysis:
->
-> - **Usage Analytics**: Who uses which dashboards/alerts, how often, and when last accessed
-> - **User & RBAC Data**: Migration audience identification, role mappings, permission structures
-> - **Search Activity**: Which saved searches are actively used vs. abandoned
-> - **Priority Assessment**: Data needed to determine migration priority and phasing
->
-> **Without this data, you cannot:**
-> - Identify which assets are actually being used vs. unused/abandoned
-> - Understand who your migration audiences are
-> - Prioritize which dashboards/alerts to migrate first
-> - Make informed decisions about what may or may not be needed
->
-> **Always use the default (full) export or `--scoped` for any export intended for migration analysis.**
-
-**Performance comparison:**
-
-| Environment Size | Full Export | --scoped | --quick |
-|-----------------|-------------|----------|---------|
-| Small (100 dashboards) | ~5 min | ~3 min | ~1 min |
-| Medium (500 dashboards) | ~15 min | ~8 min | ~3 min |
-| Large (2000+ dashboards) | ~45 min | ~15 min | ~5 min |
-| Enterprise (5000+ dashboards) | ~2 hours | ~30 min | ~10 min |
-
-### 8.4 Debug Mode (NEW in v4.1.0)
-
-When troubleshooting issues, enable debug mode to capture detailed logs:
+### Pre-Flight Access Check
 
 ```bash
-./dma-splunk-export.sh \
-  -u admin -p 'YourPassword' \
-  --apps myapp \
-  --debug
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
+  --test-access
 ```
 
-Debug mode provides:
-- **Console output**: Color-coded messages by category (API, SEARCH, TIMING, ERROR, WARN)
-- **Debug log file**: `export_debug.log` inside the export directory (included in the .tar.gz)
-- **Detailed timing**: Duration of each API call and search operation
-- **Configuration state**: All settings logged at startup
-- **API call tracking**: Every REST API call with HTTP status and response size
-- **Search job lifecycle**: Creation, polling, completion, and timeouts
+### Resume an Interrupted Export
 
-**Debug log categories:**
-| Category | Color | Description |
-|----------|-------|-------------|
-| ERROR | Red | Errors that prevented data collection |
-| WARN | Yellow | Warnings (retries, rate limits, missing data) |
-| API | Cyan | REST API calls with timing |
-| SEARCH | Magenta | Search job lifecycle |
-| TIMING | Blue | Operation durations |
-| CONFIG | Gray | Configuration settings |
-| ENV | Gray | Environment information |
-
-### 8.5 Environment Variables
-
-The script also supports environment variables (useful for container deployments):
-
-| Variable | Description |
-|----------|-------------|
-| `SPLUNK_USER` or `SPLUNK_ADMIN_USER` | Splunk username |
-| `SPLUNK_PASSWORD` or `SPLUNK_ADMIN_PASSWORD` | Splunk password |
-
-Example:
 ```bash
-export SPLUNK_ADMIN_USER="admin"
-export SPLUNK_ADMIN_PASSWORD="MySecurePassword"
-./dma-splunk-export.sh -y --splunk-home /opt/splunk
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" \
+  --resume-collect dma_export_splunk-sh01_20260401_143022.tar.gz
 ```
 
-### 8.6 CI/CD Pipeline Integration
+### Re-Anonymize an Existing Archive
 
-Example for Jenkins/GitLab CI:
-
-```yaml
-# GitLab CI example
-splunk_export:
-  stage: export
-  script:
-    - chmod +x dma-splunk-export.sh
-    - ./dma-splunk-export.sh \
-        -u $SPLUNK_USER \
-        -p $SPLUNK_PASSWORD \
-        --splunk-home /opt/splunk \
-        --anonymize \
-        -y
-  artifacts:
-    paths:
-      - dma-export-*.tar.gz
+```bash
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --remask dma_export_splunk-sh01_20260401_143022.tar.gz
 ```
 
-### 8.7 Enhanced Anonymization
+No Splunk connection needed -- extracts, anonymizes, and repacks locally.
 
-The v4.0 script now anonymizes additional sensitive data types:
+### With Username/Password and Environment Variables
 
-| Data Type | Anonymization Pattern |
-|-----------|----------------------|
-| Email addresses | `user######@anon.dma.local` |
-| Hostnames | `host-########.anon.local` |
-| IP addresses | `[IP-REDACTED]` |
-| **Webhook URLs** | `https://webhook.anon.dma.local/hook-###` |
-| **API keys/tokens** | `[API-KEY-########]` |
-| **PagerDuty keys** | `[PAGERDUTY-KEY-########]` |
-| **Slack channels** | `#anon-channel-######` |
-| **Usernames** | `anon-user-######` |
+```bash
+export SPLUNK_USER="admin"
+export SPLUNK_PASSWORD="MySecurePassword"
+sudo -u splunk -E bash /tmp/dma-splunk-export.sh \
+  --splunk-home /opt/splunk --yes
+```
 
-This ensures your export can be safely shared with consultants or support teams.
+---
 
-### 8.8 Enterprise Resilience Features
+## Enterprise Resilience Settings
 
-**NEW in v4.0.0**: The script now includes comprehensive enterprise-scale features for environments with 4000+ dashboards and 10K+ alerts.
-
-#### Default Settings (Enterprise-Ready)
+The script includes enterprise-scale defaults for environments with 4000+ dashboards and 10K+ alerts. All are overridable via environment variables:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `BATCH_SIZE` | 250 | Items per API request |
-| `API_TIMEOUT` | 120s | Per-request timeout (2 min) |
-| `MAX_TOTAL_TIME` | 43200s | Max runtime (12 hours) |
+| `RATE_LIMIT_DELAY` | 0.05s | Delay between paginated requests (50ms) |
+| `API_TIMEOUT` | 120s | Per-request timeout (2 minutes) |
+| `CONNECT_TIMEOUT` | 10s | TCP connection timeout |
+| `MAX_TOTAL_TIME` | 14400s (4 hours) | Maximum total script runtime |
 | `MAX_RETRIES` | 3 | Retry attempts with exponential backoff |
-| `RATE_LIMIT_DELAY` | 0.1s | Delay between API calls (100ms) |
+| `RETRY_DELAY` | 2s | Initial retry delay (doubles on each retry) |
 | `CHECKPOINT_ENABLED` | true | Enable checkpoint/resume capability |
 
-#### Search Head Cluster (SHC) Detection
-
-The script automatically detects if running on an SHC Captain and displays a warning:
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│  ⚠️  SEARCH HEAD CLUSTER CAPTAIN DETECTED                               │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  You are running this script on the SHC Captain.                        │
-│                                                                          │
-│  The Captain has additional cluster coordination duties. Running        │
-│  intensive operations may temporarily impact cluster performance.       │
-│                                                                          │
-│  RECOMMENDATIONS:                                                        │
-│    • Run during off-peak hours                                          │
-│    • Consider running on an SHC Member instead                          │
-│    • Monitor cluster health during export                               │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-#### Checkpoint/Resume Capability
-
-If the export is interrupted (timeout, network error, Ctrl+C), you can resume:
+Override for very large environments:
 
 ```bash
-# Script detects previous incomplete export
-./dma-splunk-export.sh
-
-# Output:
-# Found incomplete export from 2025-01-06 14:30:00
-# Would you like to resume? (Y/n): Y
-# Resuming from: Usage Analytics (step 5 of 8)...
+BATCH_SIZE=50 API_TIMEOUT=180 sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" --yes
 ```
 
-#### Export Timing Statistics
+---
 
-At completion, the script shows detailed timing:
+## Typical Runtimes
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      EXPORT TIMING STATISTICS                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│  Total Duration:        5 minutes 4 seconds                              │
-│  API Calls:             347                                              │
-│  API Retries:           2                                                │
-│  API Failures:          0                                                │
-│  Batches Completed:     52                                               │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+| Environment | Without Usage Analytics | With Usage Analytics |
+|-------------|------------------------|---------------------|
+| Small (10 apps, 200 dashboards) | 2-5 minutes | 5-15 minutes |
+| Medium (50 apps, 1000 dashboards) | 10-20 minutes | 20-45 minutes |
+| Large (200+ apps, 5000+ dashboards) | 30-60 minutes | 1-3 hours |
 
-#### Environment Variable Overrides
+Analytics searches use async dispatch with up to 1 hour per query, so large `_audit` indexes no longer cause timeouts.
 
-For very large environments, tune via environment variables:
+---
+
+## Debug Mode
+
+Add `--debug` (or `-d`) for detailed diagnostics:
+
+- **Console**: Color-coded messages by category (ERROR, WARN, API, SEARCH, TIMING, AUTH, CONFIG, ENV)
+- **Log file**: `_export_debug.log` inside the archive
+- **API calls**: Logs every request with endpoint, HTTP status, response size, and duration
+- **Auth**: Logs token probe responses and final header format
+- **Search jobs**: Logs SID dispatch, poll states, completion time
 
 ```bash
-# Large environment (5000+ dashboards)
-export BATCH_SIZE=50
-export API_TIMEOUT=180
-./dma-splunk-export.sh
-
-# Or inline
-BATCH_SIZE=50 API_TIMEOUT=180 ./dma-splunk-export.sh
+sudo -u splunk bash /tmp/dma-splunk-export.sh \
+  --token "$TOKEN" --debug --yes
 ```
 
 ---
 
-## 9. Troubleshooting Access Issues
+## Troubleshooting
 
-### 9.1 "Permission Denied" Reading Files
-
-**Symptom**: Script fails with permission errors
-
-**Solution**:
-```bash
-# Check current user
-whoami
-
-# Switch to splunk user
-sudo su - splunk
-
-# Or run as root
-sudo bash dma-splunk-export.sh
-```
-
-### 9.2 "Connection Refused" on REST API
-
-**Symptom**: REST API calls fail
-
-**Check**:
-```bash
-# Is Splunk running?
-$SPLUNK_HOME/bin/splunk status
-
-# Is the management port listening?
-netstat -tlnp | grep 8089
-ss -tlnp | grep 8089
-
-# Can you connect locally?
-curl -k https://localhost:8089/services/server/info -u admin:password
-```
-
-### 9.3 "Unauthorized" on REST API
-
-**Symptom**: Authentication fails
-
-**Check**:
-```bash
-# Test credentials manually
-$SPLUNK_HOME/bin/splunk login -auth admin:password
-
-# Check user capabilities
-$SPLUNK_HOME/bin/splunk show user-info -auth admin:password
-```
-
-### 9.4 "Capability Not Granted"
-
-**Symptom**: REST calls return 403 for certain endpoints
-
-**Solution**: Add required capabilities to the user's role:
-```bash
-$SPLUNK_HOME/bin/splunk edit role your_role \
-  -capability list_users \
-  -capability list_roles \
-  -capability admin_all_objects \
-  -auth admin:password
-```
-
-### 9.5 Splunk Cloud Access Issues
-
-**Symptom**: Cannot reach Splunk Cloud
-
-**Check**:
-```bash
-# Test network connectivity
-curl -I https://your-stack.splunkcloud.com
-
-# Check if port is blocked
-telnet your-stack.splunkcloud.com 8089
-
-# Verify credentials
-curl -k https://your-stack.splunkcloud.com:8089/services/server/info \
-  -u your_username:your_password
-```
-
-### 9.6 Search Head Cluster Issues
-
-**Symptom**: Missing dashboards or knowledge objects
-
-**Solution**: Run the script on the SHC Captain:
-```bash
-# Find the captain
-$SPLUNK_HOME/bin/splunk show shcluster-status -auth admin:password | grep -i captain
-
-# SSH to captain and run script there
-ssh splunk@shc-captain.company.com
-bash dma-splunk-export.sh
-```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `SPLUNK_HOME not found` | Not running on the Search Head, or non-standard install path | Set `$SPLUNK_HOME` environment variable, use `--splunk-home`, or run as the `splunk` user |
+| `Permission denied` reading config files | Not running as the `splunk` user | Run with `sudo -u splunk bash dma-splunk-export.sh` |
+| `Connection refused` on REST API | Splunk not running or management port not 8089 | Check `$SPLUNK_HOME/bin/splunk status`; verify port with `ss -tlnp \| grep 8089` |
+| `Unauthorized` on REST API | Wrong credentials or insufficient capabilities | Test with `--test-access`; verify the account has `admin_all_objects` |
+| SHC Captain warning | Running on the cluster captain | Switch to an SHC member node |
+| Export completes but Explorer shows no usage data | `_audit`/`_internal` access denied | Run `--test-access` to confirm; use `--skip-internal` to collect what you can |
+| Analytics searches timeout | Very large `_audit` index | Reduce `--analytics-period 7d`; or use `--apps "app1,app2" --scoped` |
+| Export takes hours | Large environment with usage analytics | Scope to key apps: `--apps "app1,app2" --scoped` |
 
 ---
 
-## Quick Reference Card
+## Where to Upload the Archive
 
-### Where to Run - Decision Tree
+After the export completes, upload the `.tar.gz` archive:
 
-```
-Is it Splunk Cloud?
-  └─ YES → ❌ This script not supported. Use Cloud scripts (see README-SPLUNK-CLOUD.md).
-  └─ NO  → Is it a distributed environment?
-             └─ YES → Run on Search Head (or SHC Captain)
-             └─ NO  → Run on the standalone Splunk server
-```
+- **DMA Curator Server** -- migration planning, reporting, and team collaboration (recommended for all exports)
+- **DMA Splunk App** -- ad-hoc migration analysis (suitable for smaller archives)
 
-### Minimum Requirements Summary
-
-| Environment | Where to Run | OS User | Splunk User | Notes |
-|-------------|--------------|---------|-------------|-------|
-| Standalone | The server | `splunk` | Admin | Full export |
-| Distributed | **Search Head only** | `splunk` | Admin | Queries indexers via REST |
-| SHC | **SHC Captain only** | `splunk` | Admin | Has all shared objects |
-| Indexer Cluster | **Search Head only** | `splunk` | Admin | SH queries cluster via REST |
-| With Deployment Server | SH + optionally DS | `splunk` | Admin | DS for forwarder configs |
-| Universal Forwarder | ❌ Don't run here | - | - | Use Deployment Server instead |
-| Heavy Forwarder | ❌ Don't run here | - | - | Use Deployment Server instead |
-| Splunk Cloud | ❌ Not supported | - | - | Use Cloud scripts (see README-SPLUNK-CLOUD.md) |
-
-### One-Liner Access Test
-
-```bash
-# Test everything at once
-sudo -u splunk $SPLUNK_HOME/bin/splunk search "| rest /services/authentication/current-context | table username, roles" -auth admin:password
-```
-
-If this returns your username and roles, you're ready to run the export script!
+Use the `_masked` variant when sharing outside your organization.
 
 ---
 
-## Next Steps
-
-Once you've verified all requirements:
-
-1. **Download the script**: `dma-splunk-export.sh`
-2. **Copy to Splunk server**: `scp dma-splunk-export.sh splunk-server:/tmp/`
-3. **Run the script**: `sudo -u splunk bash /tmp/dma-splunk-export.sh`
-4. **Follow the prompts**: The script will guide you through each step
-5. **Download the export**: Copy the `.tar.gz` file to your workstation
-6. **Upload to DMA**: Open Dynatrace Migration Assistant in Dynatrace and upload
-
----
-
-## What to Expect: Step-by-Step Walkthrough
-
-This section shows exactly what you'll see when running the script successfully.
-
-### Step 1: Launch and Welcome Screen
-
-When you run `./dma-splunk-export.sh`, you'll see:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                                ║
-║  ██████╗ ██╗   ██╗███╗   ██╗ █████╗ ██████╗ ██████╗ ██╗██████╗  ██████╗ ███████╗ ║
-║  ██╔══██╗╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝ ██╔════╝ ║
-║  ██║  ██║ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝██████╔╝██║██║  ██║██║  ███╗█████╗   ║
-║  ██║  ██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝   ║
-║  ██████╔╝   ██║   ██║ ╚████║██║  ██║██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗ ║
-║  ╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝ ║
-║                                                                                ║
-║                 🏢  SPLUNK ENTERPRISE EXPORT SCRIPT  🏢                       ║
-║                                                                                ║
-║          Complete Data Collection for Migration to Dynatrace Gen3            ║
-║                        Version 4.4.0                                    ║
-║                                                                                ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-  Documentation: See README-SPLUNK-ENTERPRISE.md for prerequisites
-
-Ready to begin? (Y/n):
-```
-
-**Action**: Press `Y` or Enter to continue.
-
-### Step 2: Pre-Flight Checklist
-
-After confirming, you'll see a checklist and system verification:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                     PRE-FLIGHT CHECKLIST                                    ║
-║         Please confirm you have the following before continuing            ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  SHELL ACCESS:                                                              ║
-║    □  SSH access to Splunk server (or running locally on Splunk server)    ║
-║    □  User with read access to $SPLUNK_HOME directory                      ║
-║    □  Root/sudo access (may be needed for some configs)                    ║
-║                                                                              ║
-║  🔒 DATA PRIVACY & SECURITY:                                                ║
-║                                                                              ║
-║  We do NOT collect or export:                                              ║
-║    ✗  User passwords or password hashes                                    ║
-║    ✗  API tokens or session keys                                           ║
-║    ✗  Private keys or certificates                                         ║
-║    ✗  Your actual log data (only metadata/structure)                       ║
-║    ✗  SSL certificates or .pem files                                       ║
-║                                                                              ║
-║  We automatically REDACT:                                                  ║
-║    ✓  password = [REDACTED] in all .conf files                             ║
-║    ✓  secret = [REDACTED] in outputs.conf                                  ║
-║    ✓  pass4SymmKey = [REDACTED] in server.conf                             ║
-║    ✓  sslPassword = [REDACTED] in inputs.conf                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-
-  Quick System Check:
-    ✓ bash: 4.4.20(1)-release (4.0+ required)
-    ✓ curl: 7.88.1
-    ✓ Python: Python 3.9.16 (Splunk bundled)
-    ✓ tar: available
-    ✓ SPLUNK_HOME: /opt/splunk
-
-Ready to proceed? (Y/n):
-```
-
-**Action**: Press `Y` if all checks pass.
-
-### Step 3: SPLUNK_HOME Detection
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 1: DETECTING SPLUNK INSTALLATION                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-◐ Searching for Splunk installation...
-✓ Found SPLUNK_HOME: /opt/splunk
-
-  Splunk Version: 9.1.2
-  Splunk Build:   abc123def
-  Server Name:    splunk-sh01
-  Server Role:    search_head
-
-  Is this the correct Splunk installation? (Y/n): Y
-```
-
-**Action**: Confirm the detected Splunk installation.
-
-### Step 4: Environment Detection
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 2: DETECTING ENVIRONMENT                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-◐ Analyzing Splunk environment...
-
-  Detected Configuration:
-  ┌────────────────────────────────────────────────────────────────────────┐
-  │  Deployment Type:     Distributed (Search Head)                        │
-  │  Search Head Cluster: Yes (Captain)                                    │
-  │  Indexer Cluster:     Yes (connected)                                  │
-  │  Deployment Server:   No                                               │
-  │  License Master:      Connected                                        │
-  └────────────────────────────────────────────────────────────────────────┘
-
-  Apps Found: 24 apps in $SPLUNK_HOME/etc/apps/
-  Users:      15 users configured
-
-  Is the detected environment correct? (Y/n): Y
-```
-
-**Action**: Confirm the environment detection is accurate.
-
-### Step 5: Select Data Categories
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 4: DATA CATEGORIES                                                     │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-Select data categories to collect:
-
-  [✓] 1. Configuration Files (props, transforms, indexes, inputs)
-      → Required for understanding data pipeline
-
-  [✓] 2. Dashboards (Classic XML + Dashboard Studio JSON)
-      → Visual content for conversion to Dynatrace apps
-
-  [✓] 3. Alerts & Saved Searches (savedsearches.conf)
-      → Critical for operational continuity
-
-  [✓] 4. Users, Roles & Groups (RBAC data - NO passwords)
-      → Usernames and roles only - passwords are NEVER collected
-
-  [✓] 5. Usage Analytics (search frequency, dashboard views)
-      → Identifies high-value assets worth migrating
-
-  [✓] 6. Index & Data Statistics
-      → Volume metrics for capacity planning
-
-  [ ] 7. Lookup Tables (.csv files)
-      → May contain sensitive data - review before including
-
-  [ ] 8. Audit Log Sample (last 10,000 entries)
-      → May contain sensitive query content
-
-  [ ] 9. Anonymize Sensitive Data (emails, hostnames, IPs)
-      → Replaces real data with consistent fake values
-      → RECOMMENDED when sharing export with third parties
-
-  🔒 Privacy: Passwords are NEVER collected. Secrets in .conf files are auto-redacted.
-
-Enter numbers to toggle (e.g., 7,8,9 to add lookups, audit, and anonymization)
-Or press Enter to accept defaults [1-6]:
-```
-
-**Action**: Press Enter to accept defaults, or enter numbers to toggle options.
-
-### Step 6: Splunk Authentication (for Usage Analytics)
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ STEP 5: SPLUNK AUTHENTICATION                                               │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  WHY WE NEED THIS:
-  Some data requires accessing Splunk's REST API, including:
-    • Dashboard Studio dashboards (stored in KV Store)
-    • User and role information
-    • Usage analytics from internal indexes
-    • Distributed environment topology
-
-  REQUIRED PERMISSIONS:
-  The account needs: admin_all_objects, list_users, list_roles
-
-  SECURITY NOTE:
-  Credentials are only used locally and are never stored or transmitted.
-
-Splunk admin username [admin]: admin
-Splunk admin password: ••••••••••••
-
-◐ Testing authentication...
-✓ Authentication successful
-
-◐ Checking account capabilities...
-✓ admin_all_objects: granted
-✓ list_users: granted
-✓ list_roles: granted
-✓ search: granted
-```
-
-**Action**: Enter Splunk admin credentials.
-
-### Step 7: Data Collection Progress
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ COLLECTING DATA                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  [1/8] Collecting system information...
-✓ Server info collected
-✓ License info collected
-✓ Installed apps list collected
-
-  [2/8] Collecting configuration files...
-✓ apps/search/local/props.conf
-✓ apps/search/local/transforms.conf
-✓ apps/security_essentials/local/savedsearches.conf
-[████████████████████████████████████████] 100% (127 files)
-
-  [3/8] Collecting dashboards...
-✓ apps/search/default/data/ui/views/ (12 dashboards)
-✓ apps/security_essentials/default/data/ui/views/ (28 dashboards)
-✓ Dashboard Studio: 15 dashboards from KV Store
-
-  [4/8] Collecting alerts and saved searches...
-✓ Collected 156 saved searches
-✓ Identified 47 alerts (alert.track = 1)
-
-  [5/8] Collecting users and roles...
-✓ 15 users collected (passwords NOT collected)
-✓ 8 roles collected with capabilities
-
-  [6/8] Collecting usage analytics...
-◐ Running: Dashboard views (last 30 days)...
-✓ Dashboard usage collected
-◐ Running: Most active users...
-✓ User activity collected
-◐ Running: Alert execution history...
-✓ Alert statistics collected
-
-  [7/8] Collecting index statistics...
-✓ 23 indexes analyzed
-✓ Volume metrics collected
-
-  [8/8] Generating manifest and summary...
-✓ manifest.json created
-✓ dma-env-summary.md created
-```
-
-### Step 8: Export Complete
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                         EXPORT COMPLETE!                                     ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  Export Archive:                                                             ║
-║    📦 dma_export_splunk-sh01_20241203_152347.tar.gz                   ║
-║                                                                              ║
-║  Summary:                                                                    ║
-║  ┌──────────────────────────────────────────────────────────────────────┐   ║
-║  │  Dashboards:        55 (40 Classic + 15 Studio)                      │   ║
-║  │  Alerts:            47                                               │   ║
-║  │  Saved Searches:    156                                              │   ║
-║  │  Users:             15                                               │   ║
-║  │  Roles:             8                                                │   ║
-║  │  Apps:              24                                               │   ║
-║  │  Indexes:           23                                               │   ║
-║  │  Config Files:      127                                              │   ║
-║  └──────────────────────────────────────────────────────────────────────┘   ║
-║                                                                              ║
-║  Duration: 7 minutes 12 seconds                                              ║
-║  Archive Size: 8.7 MB                                                        ║
-║                                                                              ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  NEXT STEPS:                                                                 ║
-║                                                                              ║
-║  1. Copy the export to your workstation:                                     ║
-║     scp splunk-sh01:/tmp/dma_export_*.tar.gz ./                       ║
-║                                                                              ║
-║  2. Upload to DMA:                                                           ║
-║     Open Dynatrace Migration Assistant app → Data Sources → Upload Export    ║
-║                                                                              ║
-║  3. Review the summary report:                                               ║
-║     cat dma_export_splunk-sh01_20241203_152347/                       ║
-║         dma-env-summary.md                                            ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-```
-
-### What Success Looks Like
-
-After a successful export, you'll have a `.tar.gz` file. Extract it to see the v2 app-centric structure:
-
-```bash
-$ tar -tzf dma_export_splunk-sh01_20241203_152347.tar.gz | head -30
-
-dma_export_splunk-sh01_20241203_152347/
-dma_export_splunk-sh01_20241203_152347/manifest.json
-dma_export_splunk-sh01_20241203_152347/dma-env-summary.md
-dma_export_splunk-sh01_20241203_152347/_export.log
-dma_export_splunk-sh01_20241203_152347/_systeminfo/
-dma_export_splunk-sh01_20241203_152347/_systeminfo/environment.json
-dma_export_splunk-sh01_20241203_152347/_systeminfo/server_info.json
-dma_export_splunk-sh01_20241203_152347/_systeminfo/license_info.json
-dma_export_splunk-sh01_20241203_152347/_rbac/
-dma_export_splunk-sh01_20241203_152347/_rbac/users.json
-dma_export_splunk-sh01_20241203_152347/_rbac/roles.json
-dma_export_splunk-sh01_20241203_152347/_usage_analytics/
-dma_export_splunk-sh01_20241203_152347/_usage_analytics/dashboard_views.json
-dma_export_splunk-sh01_20241203_152347/_usage_analytics/users_most_active.json
-dma_export_splunk-sh01_20241203_152347/_usage_analytics/alert_execution_history.json
-dma_export_splunk-sh01_20241203_152347/_indexes/
-dma_export_splunk-sh01_20241203_152347/_indexes/index_stats.json
-dma_export_splunk-sh01_20241203_152347/search/
-dma_export_splunk-sh01_20241203_152347/search/dashboards/classic/          # v2 app-scoped
-dma_export_splunk-sh01_20241203_152347/search/dashboards/studio/           # v2 app-scoped
-dma_export_splunk-sh01_20241203_152347/search/local/props.conf
-dma_export_splunk-sh01_20241203_152347/search/local/transforms.conf
-dma_export_splunk-sh01_20241203_152347/search/local/savedsearches.conf
-dma_export_splunk-sh01_20241203_152347/security_essentials/
-dma_export_splunk-sh01_20241203_152347/security_essentials/dashboards/classic/
-dma_export_splunk-sh01_20241203_152347/security_essentials/dashboards/studio/
-```
-
-### If Something Goes Wrong
-
-If errors occur, you'll see a warning box:
-
-```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  ⚠️  EXPORT COMPLETED WITH 2 ERRORS                                          ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                              ║
-║  Some data could not be collected. See details below:                        ║
-║                                                                              ║
-║  Errors:                                                                     ║
-║    • Permission denied reading /opt/splunk/etc/apps/custom_app/local/        ║
-║    • REST API timeout querying indexer cluster status                        ║
-║                                                                              ║
-║  A troubleshooting report has been generated:                                ║
-║    📄 TROUBLESHOOTING.md                                                      ║
-║                                                                              ║
-║  The export is still usable - only the failed items are missing.             ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-```
-
-Review `TROUBLESHOOTING.md` in the export directory for specific remediation steps.
-
-### Verifying the Export
-
-After the export completes, verify it's valid:
-
-```bash
-# Check the manifest
-$ cat dma_export_*/manifest.json | jq '.statistics'
-{
-  "apps": 24,
-  "dashboards": 55,
-  "alerts": 47,
-  "saved_searches": 156,
-  "users": 15,
-  "roles": 8,
-  "indexes": 23
-}
-
-# Check for errors in the log
-$ grep -i error dma_export_*/_export.log
-(no output = no errors)
-
-# Verify archive integrity
-$ tar -tzf dma_export_*.tar.gz > /dev/null && echo "Archive OK"
-Archive OK
-```
-
----
-
-## Sample Output Files
-
-### Example: dma-env-summary.md
-
-This human-readable summary report is generated in the export directory:
-
-```markdown
-# DynaSplunk Environment Summary
-
-**Export Date**: 2025-12-03T20:23:47Z
-**Hostname**: splunk-sh01.acme-corp.com
-**Export Tool Version**: 4.4.0
-
----
-
-## Environment Overview
-
-| Attribute | Value |
-|-----------|-------|
-| **Product** | Splunk Enterprise |
-| **Role** | Search Head |
-| **Architecture** | Distributed |
-| **SPLUNK_HOME** | /opt/splunk |
-
----
-
-## Export Statistics
-
-| Category | Count |
-|----------|-------|
-| **Applications Exported** | 24 |
-| **Dashboards** | 156 |
-| **Alerts** | 47 |
-| **Users** | 15 |
-| **Indexes** | 23 |
-| **Errors** | 0 |
-
----
-
-## Applications Included
-
-- search
-- security_essentials
-- enterprise_security
-- itsi
-- splunk_app_for_aws
-- splunk_app_for_infrastructure
-- Splunk_TA_windows
-- Splunk_TA_nix
-- phantom
-- dashboard_studio
-- alert_manager
-- monitoring_console
-- user-prefs
-- learned
-- introspection_generator_addon
-- custom_security_app
-- compliance_reporting
-- soc_dashboards
-- executive_reports
-- it_ops_analytics
-- network_monitor
-- cloud_security
-- devsecops
-- ml_toolkit
-
----
-
-## Data Categories Collected
-
-| Category | Collected |
-|----------|-----------|
-| Configuration Files | Yes |
-| Dashboards | Yes |
-| Alerts & Saved Searches | Yes |
-| Users & RBAC | Yes |
-| Usage Analytics | Yes (7d default) |
-| Index Statistics | Yes |
-| Lookup Tables | Yes |
-| Audit Log Sample | Yes |
-| Data Anonymization | Yes (emails, hosts, IPs) |
-
----
-
-## Next Steps
-
-1. Download the export file from this server
-2. Open Dynatrace Migration Assistant in Dynatrace
-3. Navigate to: Migration Workspace → Project Initialization
-4. Upload the .tar.gz file
-5. DMA will analyze your environment and show:
-   - Migration readiness assessment
-   - Dashboard conversion preview
-   - Alert conversion checklist
-   - Data pipeline requirements
-
----
-
-*Generated by DMA Splunk Export Tool v4.1.0*
-```
-
-### Example: manifest.json (Schema)
-
-This machine-readable manifest is used by DMA to process your export:
-
-```json
-{
-  "schema_version": "3.3",
-  "export_tool": "dma-splunk-export",
-  "export_tool_version": "4.0.0",
-  "export_timestamp": "2025-12-03T20:23:47Z",
-  "export_duration_seconds": 187,
-
-  "source": {
-    "hostname": "splunk-sh01",
-    "fqdn": "splunk-sh01.acme-corp.com",
-    "platform": "Linux",
-    "platform_version": "Red Hat Enterprise Linux 8.7",
-    "ip_addresses": ["10.0.1.50", "192.168.100.50"]
-  },
-
-  "splunk": {
-    "home": "/opt/splunk",
-    "version": "9.1.3",
-    "build": "d95b3299fa65",
-    "flavor": "enterprise",
-    "role": "search_head",
-    "architecture": "distributed",
-    "license_type": "enterprise",
-    "cluster_label": "acme-production",
-    "is_cloud": false
-  },
-
-  "collection": {
-    "configs": true,
-    "dashboards": true,
-    "alerts": true,
-    "rbac": true,
-    "usage_analytics": true,
-    "usage_period": "7d",
-    "indexes": true,
-    "lookups": true,
-    "audit_sample": true
-  },
-
-  "statistics": {
-    "apps_exported": 24,
-    "dashboards_classic": 128,
-    "dashboards_studio": 28,
-    "dashboards_total": 156,
-    "alerts": 47,
-    "saved_searches": 234,
-    "users": 15,
-    "roles": 8,
-    "indexes": 23,
-    "lookups": 34,
-    "config_files": 156,
-    "errors": 0,
-    "warnings": 2,
-    "total_files": 512,
-    "total_size_bytes": 8847234
-  },
-
-  "apps": [
-    {
-      "name": "security_essentials",
-      "dashboards": 32,
-      "alerts": 18,
-      "saved_searches": 45,
-      "lookups": 8
-    },
-    {
-      "name": "enterprise_security",
-      "dashboards": 24,
-      "alerts": 12,
-      "saved_searches": 67,
-      "lookups": 12
-    },
-    {
-      "name": "itsi",
-      "dashboards": 18,
-      "alerts": 8,
-      "saved_searches": 34,
-      "lookups": 4
-    }
-  ],
-
-  "usage_intelligence": {
-    "summary": {
-      "dashboards_never_viewed": 23,
-      "alerts_never_fired": 11,
-      "users_inactive": 3,
-      "alerts_with_failures": 4
-    },
-    "volume": {
-      "avg_daily_gb": 127.4,
-      "peak_daily_gb": 245.8,
-      "total_period_gb": 3822.5,
-      "top_indexes_by_volume": [
-        {"index": "main", "total_gb": 1245.6},
-        {"index": "security", "total_gb": 876.3},
-        {"index": "windows", "total_gb": 543.2},
-        {"index": "linux", "total_gb": 412.8},
-        {"index": "network", "total_gb": 298.4}
-      ],
-      "top_sourcetypes_by_volume": [
-        {"sourcetype": "WinEventLog:Security", "total_gb": 567.3},
-        {"sourcetype": "syslog", "total_gb": 423.8},
-        {"sourcetype": "access_combined", "total_gb": 312.4},
-        {"sourcetype": "aws:cloudtrail", "total_gb": 245.6}
-      ],
-      "top_hosts_by_volume": [
-        {"host": "dc01.acme-corp.com", "total_gb": 234.5},
-        {"host": "web-prod-01", "total_gb": 187.3},
-        {"host": "app-server-cluster", "total_gb": 156.8}
-      ]
-    },
-    "prioritization": {
-      "top_dashboards": [
-        {"dashboard": "security_overview", "app": "security_essentials", "views": 3847},
-        {"dashboard": "executive_summary", "app": "executive_reports", "views": 2156},
-        {"dashboard": "soc_main", "app": "soc_dashboards", "views": 1923},
-        {"dashboard": "incident_tracker", "app": "enterprise_security", "views": 1654}
-      ],
-      "top_users": [
-        {"user": "admin", "searches": 8934},
-        {"user": "soc_analyst1", "searches": 5621},
-        {"user": "security_lead", "searches": 4532},
-        {"user": "it_ops", "searches": 3245}
-      ],
-      "top_alerts": [
-        {"alert": "Failed Authentication", "app": "security_essentials", "fires": 1234},
-        {"alert": "High CPU Usage", "app": "itsi", "fires": 567},
-        {"alert": "Suspicious Network Activity", "app": "enterprise_security", "fires": 345}
-      ],
-      "top_sourcetypes": [
-        {"sourcetype": "WinEventLog:Security", "searches": 12453},
-        {"sourcetype": "syslog", "searches": 8976},
-        {"sourcetype": "access_combined", "searches": 5643}
-      ],
-      "top_indexes": [
-        {"index": "main", "searches": 15678},
-        {"index": "security", "searches": 12345},
-        {"index": "_audit", "searches": 4532}
-      ]
-    },
-    "elimination_candidates": {
-      "dashboards_never_viewed_count": 23,
-      "alerts_never_fired_count": 11,
-      "users_inactive_count": 3,
-      "note": "See _usage_analytics/ for full lists of candidates"
-    },
-    "ownership_mapping": {
-      "apps_by_owner": [
-        {"owner": "security_team", "apps": ["security_essentials", "enterprise_security"]},
-        {"owner": "it_ops", "apps": ["itsi", "splunk_app_for_infrastructure"]},
-        {"owner": "admin", "apps": ["search", "monitoring_console"]}
-      ],
-      "dashboards_by_owner": [
-        {"owner": "soc_analyst1", "count": 12},
-        {"owner": "security_lead", "count": 8},
-        {"owner": "admin", "count": 45}
-      ]
-    }
-  },
-
-  "cluster": {
-    "is_clustered": true,
-    "cluster_mode": "search_head_cluster",
-    "cluster_label": "acme-production",
-    "captain": "splunk-sh01.acme-corp.com",
-    "members": [
-      "splunk-sh01.acme-corp.com",
-      "splunk-sh02.acme-corp.com",
-      "splunk-sh03.acme-corp.com"
-    ]
-  }
-}
-```
-
-This manifest enables DMA to:
-- **Prioritize migration** based on actual usage data (most-viewed dashboards first)
-- **Identify elimination candidates** (unused dashboards/alerts - don't migrate waste)
-- **Estimate data volume** for Dynatrace ingestion planning and licensing
-- **Map ownership** to coordinate with stakeholders
-- **Understand cluster topology** for multi-node environments
-
----
-
-*For support, contact your DMA administrator or visit the documentation portal.*
+## Additional Documentation
+
+| Document | Description |
+|----------|-------------|
+| [README-SPLUNK-CLOUD.md](README-SPLUNK-CLOUD.md) | Cloud prerequisites, token creation, and network requirements |
+| [EXPORT-SCHEMA.md](EXPORT-SCHEMA.md) | Complete archive file structure and field definitions |
+| [SCRIPT-GENERATED-ANALYTICS-REFERENCE.md](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | Reference of all SPL queries used for analytics collection |
+| [SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | Technical specification for Enterprise export internals |
+| [INTERACTIVE-WALKTHROUGH.md](INTERACTIVE-WALKTHROUGH.md) | Step-by-step visual guide to the interactive prompts |

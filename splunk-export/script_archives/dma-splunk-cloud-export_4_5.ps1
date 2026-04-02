@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    DMA Splunk Cloud Export Script v4.6.0 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.5.8 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
@@ -13,32 +13,7 @@
     use dma-splunk-export.sh instead.
 
     This is a functionally equivalent PowerShell port of
-    dma-splunk-cloud-export.sh v4.6.0 for Windows environments.
-
-    v4.6.0 Changes (parity with bash v4.6.0, 2026-04-02):
-
-      Usage collection improvements:
-      - Usage collection ON by default (was $false — use -NoUsage to disable)
-      - Default USAGE_PERIOD changed to 30d (was 7d) for comprehensive migration planning
-      - --resume-collect + usage active: clears usage checkpoints to force re-collection
-      - Dynamic daily_avg_gb calculation uses actual USAGE_PERIOD days (was hardcoded /7)
-
-      Query optimizations:
-      - All _audit queries: added sourcetype=audittrail + info=granted (tsidx-level filtering)
-      - Dashboard views: uses provenance field (search_type=dashboard was unreliable)
-      - Search type breakdown: derives search_type from provenance/search_id (not raw field)
-      - Alert firing: added | fields before | stats (reduces indexer memory)
-      - Removed ALL | head N limits from usage queries (was silently dropping data)
-
-      REST API bloat fixes:
-      - saved_searches_all.json: uses f= field selection (was 256MB+ raw REST dump)
-      - alert_ownership REST fallback: uses f= field selection (was 256MB+ REST dump)
-      - dashboard_ownership REST fallback: uses f= field selection (reduces XML bloat)
-
-      New parameters:
-      - -NoUsage: disable usage analytics (usage is now ON by default)
-      - -NoRbac: disable RBAC collection
-      - -Scoped: scope all collections to selected apps only
+    dma-splunk-cloud-export_beta.sh v4.5.8 for Windows environments.
 
     v4.5.8 Changes (parity with bash v4.5.8, 2026-03-31):
 
@@ -215,17 +190,8 @@ param(
     [Parameter(HelpMessage = "Enable RBAC/Users collection")]
     [switch]$Rbac,
 
-    [Parameter(HelpMessage = "Disable RBAC/Users collection")]
-    [switch]$NoRbac,
-
-    [Parameter(HelpMessage = "Enable usage analytics collection (ON by default)")]
+    [Parameter(HelpMessage = "Enable usage analytics collection")]
     [switch]$Usage,
-
-    [Parameter(HelpMessage = "Disable usage analytics collection")]
-    [switch]$NoUsage,
-
-    [Parameter(HelpMessage = "Scope all collections to selected apps only")]
-    [switch]$Scoped,
 
     [Parameter(HelpMessage = "Enable verbose debug logging")]
     [switch]$Debug_Mode,
@@ -265,7 +231,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.6.0"
+$Script:SCRIPT_VERSION = "4.5.8"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -363,12 +329,12 @@ $Script:COLLECT_CONFIGS = $true
 $Script:COLLECT_DASHBOARDS = $true
 $Script:COLLECT_ALERTS = $true
 $Script:COLLECT_RBAC = $false         # OFF by default
-$Script:COLLECT_USAGE = $true         # ON by default — use -NoUsage to disable
+$Script:COLLECT_USAGE = $false        # OFF by default
 $Script:COLLECT_INDEXES = $true
 $Script:COLLECT_LOOKUPS = $false
 $Script:COLLECT_AUDIT = $false
 $Script:ANONYMIZE_DATA = $true
-$Script:USAGE_PERIOD = "30d"            # Default analytics window (30d recommended for migration planning)
+$Script:USAGE_PERIOD = "7d"             # Default analytics window (was 30d in v4.3.0; 7d matches bash default)
 $Script:SKIP_INTERNAL = $false
 
 # App-scoped collection mode
@@ -505,17 +471,8 @@ if ($Output) {
 if ($Rbac) {
     $Script:COLLECT_RBAC = $true
 }
-if ($NoRbac) {
-    $Script:COLLECT_RBAC = $false
-}
 if ($Usage) {
     $Script:COLLECT_USAGE = $true
-}
-if ($NoUsage) {
-    $Script:COLLECT_USAGE = $false
-}
-if ($Scoped) {
-    $Script:SCOPE_TO_APPS = $true
 }
 if ($Debug_Mode) {
     $Script:DEBUG_MODE = $true
@@ -3406,15 +3363,10 @@ function Export-GlobalAnalytics {
         Write-Log "  App-scoped analytics: filtering to $($Script:SELECTED_APPS.Count) apps"
     }
 
-    # Compute numeric days from USAGE_PERIOD for daily average calculations
-    $usageDays = 30
-    if ($Script:USAGE_PERIOD -match '^(\d+)d$') { $usageDays = [int]$Matches[1] }
-
     $analyticsStart = Get-Date
-    Write-Info "Running global analytics queries (v4.6.0 - async dispatch)..."
+    Write-Info "Running global analytics queries (v4.5.0 - async dispatch)..."
     Write-Host ""
     Write-Host "  ${Script:DIM}Analytics period: $($Script:USAGE_PERIOD) | Dispatch: async (max 1h per query)${Script:NC}"
-    Write-Host "  ${Script:DIM}Queries use verified field names: provenance, sourcetype=audittrail${Script:NC}"
     Write-Host "  ${Script:DIM}Queries use verified field names: provenance, sourcetype=audittrail${Script:NC}"
     Write-Host ""
 
@@ -3470,7 +3422,7 @@ function Export-GlobalAnalytics {
     } else {
         $q4File = Join-Path $analyticsDir "index_volume_summary.json"
         if (-not $Script:SKIP_INTERNAL) {
-            $q4 = "search index=_internal source=*license_usage.log type=Usage earliest=-$period | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/$usageDays, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event"
+            $q4 = "search index=_internal source=*license_usage.log type=Usage earliest=-$period | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/7, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event"
             Invoke-AnalyticsSearch -SearchQuery $q4 -OutputFile $q4File -Label "Daily ingestion volume (license_usage.log)" -MaxWait 600
         } else {
             $skipJson = [PSCustomObject]@{ skipped = $true; reason = "_internal index not accessible (-SkipInternal). Use index metadata from REST API for size estimates." }
@@ -3495,7 +3447,7 @@ function Export-GlobalAnalytics {
     } else {
         $q5File = Join-Path $analyticsDir "alert_firing_global.json"
         if (-not $Script:SKIP_INTERNAL) {
-            $q5 = "search index=_internal sourcetype=scheduler $appFilter earliest=-$period | fields _time, app, savedsearch_name, status | stats count as total_runs, sum(eval(if(status=""success"",1,0))) as successful, sum(eval(if(status=""skipped"",1,0))) as skipped, sum(eval(if(status!=""success"" AND status!=""skipped"",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs"
+            $q5 = "search index=_internal sourcetype=scheduler status=* $appFilter earliest=-$period | stats count as total_runs, sum(eval(if(status=""success"",1,0))) as successful, sum(eval(if(status=""skipped"",1,0))) as skipped, sum(eval(if(status!=""success"" AND status!=""skipped"",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs"
             Invoke-AnalyticsSearch -SearchQuery $q5 -OutputFile $q5File -Label "Alert firing stats (global)" -MaxWait 3600
         } else {
             $skipJson = [PSCustomObject]@{ skipped = $true; reason = "_internal index not accessible (-SkipInternal). Alert firing stats require scheduler logs." }
@@ -3618,8 +3570,7 @@ function Get-DashboardOwnershipRest {
 
     Write-Info "Collecting dashboard ownership via REST API (fallback)..."
 
-    # v4.6.0: Use f= to request only ownership fields (not full dashboard XML)
-    $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/data/ui/views" -Data "output_mode=json&count=0&f=title&f=eai:acl"
+    $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/data/ui/views" -Data "output_mode=json&count=0"
 
     if ($null -ne $response -and $response.entry) {
         $results = @()
@@ -3646,8 +3597,7 @@ function Get-AlertOwnershipRest {
 
     Write-Info "Collecting alert ownership via REST API (fallback)..."
 
-    # v4.6.0: Use f= to request only ownership fields, NOT full search SPL (256MB+)
-    $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/saved/searches" -Data "output_mode=json&count=0&f=title&f=eai:acl&f=is_scheduled&f=alert.track"
+    $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/saved/searches" -Data "output_mode=json&count=0"
 
     if ($null -ne $response -and $response.entry) {
         $results = @()
@@ -3803,38 +3753,321 @@ function Export-UsageAnalytics {
     Write-Host "  ${Script:WHITE}$([string]::new([char]0x2501, 68))${Script:NC}"
     Write-Host ""
 
+    if ($Script:SKIP_INTERNAL) {
+        Write-Host "  ${Script:YELLOW}$([char]0x26A0) SPLUNK CLOUD MODE: Skipping _internal index searches${Script:NC}"
+        Write-Host "  ${Script:DIM}  Some analytics (scheduler, volume, ingestion) will be limited.${Script:NC}"
+        Write-Host "  ${Script:DIM}  Dashboard views and user activity from _audit will still be collected.${Script:NC}"
+        Write-Host ""
+    }
+
+    # Build app filter for scoped mode
+    $appSearchFilter = ""
+    $appWhere = ""
+    if ($Script:SCOPE_TO_APPS -and $Script:SELECTED_APPS.Count -gt 0) {
+        $appFilter = Get-AppFilter -Field "app"
+        $appSearchFilter = "$appFilter "
+        $appWhere = Get-AppWhereClause -Field "app"
+        Write-Host "  ${Script:CYAN}$([char]0x2139) APP-SCOPED ANALYTICS: Filtering to $($Script:SELECTED_APPS.Count) app(s)${Script:NC}"
+        Write-Host "  ${Script:DIM}  Apps: $($Script:SELECTED_APPS -join ', ')${Script:NC}"
+        Write-Host ""
+    }
+
     $analyticsDir = Join-Path $Script:EXPORT_DIR "dma_analytics/usage_analytics"
 
     # =========================================================================
-    # v4.6.0: Detailed per-category queries (Cat 1-5c) removed.
-    # Dashboard views, user activity, search patterns, alert firing, and
-    # index volume are now collected ONCE by Export-GlobalAnalytics as
-    # global aggregate queries. This eliminates duplicate search jobs and
-    # reduces failure risk on large environments.
+    # CATEGORY 1: DASHBOARD VIEW STATISTICS
     # =========================================================================
+    Write-Progress2 "Collecting dashboard view statistics..."
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search search_type=dashboard ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" savedsearch_name=* | stats count as view_count, dc(user) as unique_users, max(_time) as last_viewed by app, savedsearch_name | rename savedsearch_name as dashboard | sort -view_count | head 100" `
+        -OutputFile "$analyticsDir/dashboard_views_top100.json" `
+        -Label "Top 100 viewed dashboards" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search search_type=dashboard ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" savedsearch_name=* | bucket _time span=1w | stats count as views by _time, app, savedsearch_name | rename savedsearch_name as dashboard | sort -_time | head 200" `
+        -OutputFile "$analyticsDir/dashboard_views_trend.json" `
+        -Label "Dashboard view trends" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search search_type=dashboard ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" savedsearch_name=* | stats count as views by app, savedsearch_name | rename savedsearch_name as dashboard" `
+        -OutputFile "$analyticsDir/dashboard_view_counts.json" `
+        -Label "Dashboard view counts" | Out-Null
+
+    # Legacy never-viewed query (may fail in Cloud)
+    $restAppFilter = ""
+    if ($appWhere) { $restAppFilter = $appWhere }
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /servicesNS/-/-/data/ui/views | rename title as dashboard, eai:acl.app as app | table dashboard, app $restAppFilter | join type=left dashboard [search index=_audit action=search search_type=dashboard ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" | stats count as views by savedsearch_name | rename savedsearch_name as dashboard] | where isnull(views) OR views=0 | table dashboard, app" `
+        -OutputFile "$analyticsDir/dashboards_never_viewed.json" `
+        -Label "Never viewed dashboards (legacy)" | Out-Null
+
+    # Check if legacy query failed, use fallback
+    $neverViewedFile = "$analyticsDir/dashboards_never_viewed.json"
+    if (Test-Path $neverViewedFile) {
+        $content = Get-Content $neverViewedFile -Raw -ErrorAction SilentlyContinue
+        if ($content -match '"error"') {
+            Write-Info "Legacy never-viewed query failed (expected in Splunk Cloud) - using view counts file instead"
+            Get-DashboardsNeverViewedFallback -OutputFile $neverViewedFile | Out-Null
+        }
+    }
+
+    Write-Success "Dashboard statistics collected"
 
     # =========================================================================
-    # OWNERSHIP MAPPING (via REST API — no search jobs)
+    # CATEGORY 2: USER ACTIVITY METRICS
     # =========================================================================
-    Write-Progress2 "Collecting ownership mapping..."
+    Write-Progress2 "Collecting user activity metrics..."
 
-    Get-DashboardOwnershipRest -OutputFile "$analyticsDir/dashboard_ownership.json" | Out-Null
-    Get-AlertOwnershipRest -OutputFile "$analyticsDir/alert_ownership.json" | Out-Null
-    Get-OwnershipSummaryFromRest -OutputFile "$analyticsDir/ownership_summary.json" | Out-Null
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" | stats count as searches, dc(search) as unique_searches, max(_time) as last_active by user | sort -searches | head 100" `
+        -OutputFile "$analyticsDir/users_most_active.json" `
+        -Label "Most active users" | Out-Null
 
-    Write-Success "Ownership mapping collected"
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" | stats count by user | join user [| rest /services/authentication/users | rename title as user | table user, roles] | stats sum(count) as searches by roles" `
+        -OutputFile "$analyticsDir/activity_by_role.json" `
+        -Label "Activity by role" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /services/authentication/users | rename title as user | where user!=`"splunk-system-user`" | table user, realname, email | join type=left user [index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | stats count by user] | where isnull(count) | table user, realname, email" `
+        -OutputFile "$analyticsDir/users_inactive.json" `
+        -Label "Inactive users" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) user!=`"splunk-system-user`" | timechart span=1d dc(user) as daily_active_users" `
+        -OutputFile "$analyticsDir/daily_active_users.json" `
+        -Label "Daily active users" | Out-Null
+
+    Write-Success "User activity collected"
 
     # =========================================================================
-    # REST-BASED METADATA (no search jobs)
+    # CATEGORY 3: ALERT EXECUTION STATISTICS
     # =========================================================================
-    Write-Progress2 "Collecting REST-based supplementary metadata..."
+    if ($Script:SKIP_INTERNAL) {
+        Write-Info "Skipping alert execution statistics (_internal index restricted)"
+        foreach ($f in @("alerts_most_fired", "alerts_with_actions", "alerts_failed", "alerts_never_fired", "alert_firing_trend")) {
+            $placeholder = '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud"}'
+            [System.IO.File]::WriteAllText("$analyticsDir/${f}.json", $placeholder, $Script:UTF8NoBOM)
+        }
+    } else {
+        Write-Progress2 "Collecting alert execution statistics..."
 
-    # v4.6.0: Use f= to request only metadata fields, NOT the full search SPL.
-    # Without f=, this dumps ALL fields (256MB+ on large environments).
-    $savedSearchAll = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/saved/searches" -Data "output_mode=json&count=0&f=title&f=eai:acl&f=is_scheduled&f=disabled&f=cron_schedule&f=alert.track&f=alert.severity&f=actions&f=next_scheduled_time&f=dispatch.earliest_time&f=dispatch.latest_time"
+        Invoke-AnalyticsSearch `
+            -SearchQuery "search index=_internal sourcetype=scheduler status=success savedsearch_name=* ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | stats count as executions, latest(_time) as last_run by savedsearch_name, app | sort -executions | head 100" `
+            -OutputFile "$analyticsDir/alerts_most_fired.json" `
+            -Label "Most fired alerts" | Out-Null
+
+        Invoke-AnalyticsSearch `
+            -SearchQuery "search index=_internal sourcetype=scheduler result_count>0 ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | stats count as triggers, sum(result_count) as total_results by savedsearch_name, app | sort -triggers | head 50" `
+            -OutputFile "$analyticsDir/alerts_with_actions.json" `
+            -Label "Alerts with actions" | Out-Null
+
+        Invoke-AnalyticsSearch `
+            -SearchQuery "search index=_internal sourcetype=scheduler status=failed ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | stats count as failures, latest(_time) as last_failure by savedsearch_name, app | sort -failures" `
+            -OutputFile "$analyticsDir/alerts_failed.json" `
+            -Label "Failed alerts" | Out-Null
+
+        $alertsRestFilter = ""
+        if ($appWhere) {
+            $alertsRestFilter = Get-AppWhereClause -Field "eai:acl.app"
+        }
+        Invoke-AnalyticsSearch `
+            -SearchQuery "| rest /servicesNS/-/-/saved/searches | search is_scheduled=1 | rename title as savedsearch_name $alertsRestFilter | table savedsearch_name, eai:acl.app | join type=left savedsearch_name [search index=_internal sourcetype=scheduler ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | stats count by savedsearch_name] | where isnull(count) | table savedsearch_name, eai:acl.app" `
+            -OutputFile "$analyticsDir/alerts_never_fired.json" `
+            -Label "Never fired alerts" | Out-Null
+
+        Invoke-AnalyticsSearch `
+            -SearchQuery "search index=_internal sourcetype=scheduler status=success ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | timechart span=1d count by savedsearch_name | head 20" `
+            -OutputFile "$analyticsDir/alert_firing_trend.json" `
+            -Label "Alert firing trend" | Out-Null
+
+        Write-Success "Alert statistics collected"
+    }
+
+    # =========================================================================
+    # CATEGORY 4: SEARCH USAGE PATTERNS
+    # =========================================================================
+    Write-Progress2 "Collecting search usage patterns..."
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | sample 10 | rex field=search `"\|\s*(?<command>\w+)`" | stats count as sample_count by command | eval estimated_count=sample_count*10 | sort -estimated_count | head 50" `
+        -OutputFile "$analyticsDir/search_commands_popular.json" `
+        -Label "Popular search commands" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | stats count by search_type | sort -count" `
+        -OutputFile "$analyticsDir/search_by_type.json" `
+        -Label "Search by type" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search total_run_time>30 ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | fields total_run_time, search, app | stats avg(total_run_time) as avg_time, count as runs by search, app | sort -avg_time | head 50" `
+        -OutputFile "$analyticsDir/searches_slow.json" `
+        -Label "Slow searches" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | sample 20 | rex field=search `"index\s*=\s*(?<searched_index>\w+)`" | stats count as sample_count by searched_index | eval estimated_count=sample_count*20 | sort -estimated_count | head 30" `
+        -OutputFile "$analyticsDir/indexes_searched.json" `
+        -Label "Indexes searched" | Out-Null
+
+    Write-Success "Search patterns collected"
+
+    # =========================================================================
+    # CATEGORY 5: DATA SOURCE USAGE
+    # =========================================================================
+    Write-Progress2 "Collecting data source usage..."
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "index=_audit action=search ${appSearchFilter}earliest=-$($Script:USAGE_PERIOD) | sample 20 | rex field=search `"sourcetype\s*=\s*(?<st>\w+)`" | stats count as sample_count by st | eval estimated_count=sample_count*20 | sort -estimated_count | head 30" `
+        -OutputFile "$analyticsDir/sourcetypes_searched.json" `
+        -Label "Sourcetypes searched" | Out-Null
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /services/data/indexes | table title, currentDBSizeMB, totalEventCount, maxTime, minTime | sort -currentDBSizeMB" `
+        -OutputFile "$analyticsDir/index_sizes.json" `
+        -Label "Index sizes" | Out-Null
+
+    if ($Script:SKIP_INTERNAL) {
+        Write-Info "Skipping index query patterns (_internal index restricted)"
+        [System.IO.File]::WriteAllText("$analyticsDir/indexes_queried.json", '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud"}', $Script:UTF8NoBOM)
+    } else {
+        Invoke-AnalyticsSearch `
+            -SearchQuery "search index=_internal source=*metrics.log group=per_index_thruput earliest=-$($Script:USAGE_PERIOD) | stats sum(kb) as total_kb, avg(ev) as avg_events by series | eval total_gb=round(total_kb/1024/1024,2) | sort -total_gb | head 30" `
+            -OutputFile "$analyticsDir/indexes_queried.json" `
+            -Label "Indexes queried" | Out-Null
+    }
+
+    Write-Success "Data source usage collected"
+
+    # =========================================================================
+    # CATEGORY 5b: DAILY VOLUME ANALYSIS
+    # =========================================================================
+    if ($Script:SKIP_INTERNAL) {
+        Write-Info "Skipping daily volume statistics (_internal index restricted)"
+        Write-Info "  -> Use Splunk Cloud Monitoring Console for license usage data"
+        foreach ($f in @("daily_volume_by_index", "daily_volume_by_sourcetype", "daily_volume_summary", "daily_events_by_index", "hourly_volume_pattern", "top_indexes_by_volume", "top_sourcetypes_by_volume", "top_hosts_by_volume")) {
+            $placeholder = '{"skipped": true, "reason": "_internal index not accessible in Splunk Cloud", "alternative": "Use Monitoring Console > License Usage"}'
+            [System.IO.File]::WriteAllText("$analyticsDir/${f}.json", $placeholder, $Script:UTF8NoBOM)
+        }
+    } else {
+        Write-Progress2 "Collecting daily volume statistics (last 30 days)..."
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by idx | eval gb=round(bytes/1024/1024/1024,2) | fields _time, idx, gb' -OutputFile "$analyticsDir/daily_volume_by_index.json" -Label "Daily volume by index (GB)" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by st | eval gb=round(bytes/1024/1024/1024,2) | fields _time, st, gb' -OutputFile "$analyticsDir/daily_volume_by_sourcetype.json" -Label "Daily volume by sourcetype (GB)" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes | eval gb=round(bytes/1024/1024/1024,2) | stats avg(gb) as avg_daily_gb, max(gb) as peak_daily_gb, sum(gb) as total_30d_gb' -OutputFile "$analyticsDir/daily_volume_summary.json" -Label "Daily volume summary" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*metrics.log group=per_index_thruput earliest=-30d@d | timechart span=1d sum(ev) as events by series | rename series as index' -OutputFile "$analyticsDir/daily_events_by_index.json" -Label "Daily event counts by index" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-7d | eval hour=strftime(_time, "%H") | stats sum(b) as bytes by hour | eval gb=round(bytes/1024/1024/1024,2) | sort hour' -OutputFile "$analyticsDir/hourly_volume_pattern.json" -Label "Hourly volume pattern (last 7 days)" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by idx | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20' -OutputFile "$analyticsDir/top_indexes_by_volume.json" -Label "Top 20 indexes by daily average volume" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by st | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20' -OutputFile "$analyticsDir/top_sourcetypes_by_volume.json" -Label "Top 20 sourcetypes by daily average volume" | Out-Null
+
+        Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by h | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 50' -OutputFile "$analyticsDir/top_hosts_by_volume.json" -Label "Top 50 hosts by daily average volume" | Out-Null
+
+        Write-Success "Daily volume statistics collected"
+    }
+
+    # =========================================================================
+    # CATEGORY 5c: INGESTION INFRASTRUCTURE
+    # =========================================================================
+    Write-Progress2 "Collecting ingestion infrastructure information..."
+
+    $infraDir = Join-Path $analyticsDir "ingestion_infrastructure"
+    # Directory already created in Initialize-ExportDirectory
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as unique_hosts, sum(kb) as total_kb by connectionType | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)' -OutputFile "$infraDir/by_connection_type.json" -Label "Ingestion by connection type (UF/HF/other)" | Out-Null
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | rex field=series "^(?<input_type>[^:]+):" | stats sum(kb) as total_kb, dc(series) as unique_sources by input_type | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2) | sort - total_kb' -OutputFile "$infraDir/by_input_method.json" -Label "Ingestion by input method" | Out-Null
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput series=http:* earliest=-7d | stats sum(kb) as total_kb, dc(series) as token_count | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)' -OutputFile "$infraDir/hec_usage.json" -Label "HTTP Event Collector usage" | Out-Null
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats sum(kb) as total_kb, latest(_time) as last_seen, values(connectionType) as connection_types by sourceHost | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb | head 500' -OutputFile "$infraDir/forwarding_hosts.json" -Label "Forwarding hosts inventory (top 500)" | Out-Null
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal source=*license_usage.log type=Usage earliest=-30d | stats sum(b) as bytes, dc(h) as unique_hosts by st | eval daily_avg_gb=round((bytes/30)/1024/1024/1024,2) | eval category=case(match(st,"^otel|^otlp|opentelemetry"),"opentelemetry", match(st,"^aws:|^azure:|^gcp:|^cloud"),"cloud", match(st,"^WinEventLog|^windows|^wmi"),"windows", match(st,"^linux|^syslog|^nix"),"linux_unix", match(st,"^cisco:|^pan:|^juniper:|^fortinet:|^f5:|^checkpoint"),"network_security", match(st,"^access_combined|^nginx|^apache|^iis"),"web", match(st,"^docker|^kube|^container"),"containers", 1=1,"other") | stats sum(daily_avg_gb) as daily_avg_gb, sum(unique_hosts) as unique_hosts, values(st) as sourcetypes by category | sort - daily_avg_gb' -OutputFile "$infraDir/by_sourcetype_category.json" -Label "Ingestion by sourcetype category" | Out-Null
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | search series=udp:* OR series=tcp:* | stats sum(kb) as total_kb by series | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb' -OutputFile "$infraDir/syslog_inputs.json" -Label "Syslog inputs (UDP/TCP)" | Out-Null
+
+    Invoke-AnalyticsSearch -SearchQuery 'search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as total_forwarding_hosts, sum(kb) as total_kb | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)' -OutputFile "$infraDir/summary.json" -Label "Ingestion infrastructure summary" | Out-Null
+
+    Write-Success "Ingestion infrastructure information collected"
+
+    # =========================================================================
+    # CATEGORY 5d: OWNERSHIP MAPPING
+    # =========================================================================
+    Write-Progress2 "Collecting ownership information..."
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /servicesNS/-/-/data/ui/views | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing | rename title as dashboard, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing" `
+        -OutputFile "$analyticsDir/dashboard_ownership.json" `
+        -Label "Dashboard ownership mapping" | Out-Null
+
+    # REST API fallback for dashboard ownership
+    $dashOwnFile = "$analyticsDir/dashboard_ownership.json"
+    if (Test-Path $dashOwnFile) {
+        $content = Get-Content $dashOwnFile -Raw -ErrorAction SilentlyContinue
+        if ($content -match '"error"') {
+            Write-Info "SPL | rest failed for dashboard ownership, trying REST API fallback..."
+            Get-DashboardOwnershipRest -OutputFile $dashOwnFile | Out-Null
+        }
+    }
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /servicesNS/-/-/saved/searches | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track | rename title as alert_name, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing" `
+        -OutputFile "$analyticsDir/alert_ownership.json" `
+        -Label "Alert/saved search ownership mapping" | Out-Null
+
+    # REST API fallback for alert ownership
+    $alertOwnFile = "$analyticsDir/alert_ownership.json"
+    if (Test-Path $alertOwnFile) {
+        $content = Get-Content $alertOwnFile -Raw -ErrorAction SilentlyContinue
+        if ($content -match '"error"') {
+            Write-Info "SPL | rest failed for alert ownership, trying REST API fallback..."
+            Get-AlertOwnershipRest -OutputFile $alertOwnFile | Out-Null
+        }
+    }
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /servicesNS/-/-/data/ui/views | stats count as dashboards by eai:acl.owner | rename eai:acl.owner as owner | append [| rest /servicesNS/-/-/saved/searches | stats count as alerts by eai:acl.owner | rename eai:acl.owner as owner] | stats sum(dashboards) as dashboards, sum(alerts) as alerts by owner | sort - dashboards" `
+        -OutputFile "$analyticsDir/ownership_summary.json" `
+        -Label "Ownership summary by user" | Out-Null
+
+    # REST fallback for ownership summary
+    $ownSummFile = "$analyticsDir/ownership_summary.json"
+    if (Test-Path $ownSummFile) {
+        $content = Get-Content $ownSummFile -Raw -ErrorAction SilentlyContinue
+        if ($content -match '"error"') {
+            Write-Info "SPL search failed for ownership summary, computing from REST data..."
+            Get-OwnershipSummaryFromRest -OutputFile $ownSummFile | Out-Null
+        }
+    }
+
+    Write-Success "Ownership information collected"
+
+    # =========================================================================
+    # CATEGORY 6: SAVED SEARCH METADATA
+    # =========================================================================
+    Write-Progress2 "Collecting saved search metadata..."
+
+    $savedSearchAll = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/saved/searches" -Data "output_mode=json&count=0"
     if ($null -ne $savedSearchAll) {
         Write-JsonFile -Path "$analyticsDir/saved_searches_all.json" -Data $savedSearchAll
     }
+
+    Invoke-AnalyticsSearch `
+        -SearchQuery "| rest /servicesNS/-/-/saved/searches | stats count by eai:acl.owner | sort -count | head 20" `
+        -OutputFile "$analyticsDir/saved_searches_by_owner.json" `
+        -Label "Saved searches by owner" | Out-Null
+
+    Write-Success "Saved search metadata collected"
+
+    # =========================================================================
+    # CATEGORY 7: SCHEDULER EXECUTION STATS
+    # =========================================================================
+    Write-Progress2 "Collecting scheduler statistics..."
 
     $recentJobs = Invoke-SplunkApi -Endpoint "/services/search/jobs" -Data "output_mode=json&count=100"
     if ($null -ne $recentJobs) {
@@ -3846,7 +4079,12 @@ function Export-UsageAnalytics {
         Write-JsonFile -Path "$analyticsDir/kvstore_stats.json" -Data $kvStoreStats
     }
 
-    Write-Success "REST-based supplementary metadata collected"
+    Invoke-AnalyticsSearch `
+        -SearchQuery "search index=_internal sourcetype=scheduler earliest=-$($Script:USAGE_PERIOD) | stats count as total, count(eval(status=`"success`")) as success, count(eval(status=`"failed`")) as failed by date_hour | sort date_hour" `
+        -OutputFile "$analyticsDir/scheduler_load.json" `
+        -Label "Scheduler load" | Out-Null
+
+    Write-Success "Scheduler statistics collected"
 
     # =========================================================================
     # USAGE INTELLIGENCE SUMMARY (Markdown)
@@ -3856,39 +4094,33 @@ function Export-UsageAnalytics {
 
     $summaryFile = Join-Path $analyticsDir "USAGE_INTELLIGENCE_SUMMARY.md"
     $summaryContent = @"
-# Usage Intelligence Summary (v4.6.0)
+# Usage Intelligence Summary
 
 ## Migration Prioritization Framework
 
 This export includes comprehensive usage analytics to help prioritize your migration to Dynatrace.
 
-### What's Collected (v4.6.0 Global Queries)
-
-| File | Purpose | Use For |
-|------|---------|---------|
-| ``dashboard_views_global.json`` | Dashboard views by app (provenance-based) | Prioritize migration order |
-| ``user_activity_global.json`` | User activity per app | Training priorities, team planning |
-| ``search_patterns_global.json`` | Search type breakdown (dashboard/scheduled/ad-hoc) | Workload characterization |
-| ``index_volume_summary.json`` | Per-index daily ingestion (GB) | Grail storage planning |
-| ``index_event_counts_daily.json`` | Event counts per index per day | Volume trending |
-| ``alert_firing_global.json`` | Alert execution stats | Critical alerts to migrate |
-
-### Key Improvements in v4.6.0
-
-- **Dashboard views now use the provenance field** (not search_type=dashboard which was broken)
-- **View session de-duplication**: Counts page loads, not individual panel searches
-- **Global aggregate queries**: 6 queries total instead of N x 7 per-app queries
-- **Async search dispatch**: Searches can run up to 1 hour (was limited to 5 minutes)
-- **Never-viewed dashboards**: Computed by Curator from dashboard list + view data (no slow | rest + | join)
-
 ### Decision Matrix
 
 | Category | High Usage | Low/No Usage |
 |----------|------------|--------------|
-| **Dashboards** | Migrate first - users depend on these | Review with stakeholders |
+| **Dashboards** | Migrate first - users depend on these | Review with stakeholders - may be deprecated |
 | **Alerts** | Critical - ensure Dynatrace equivalents | Consider not migrating |
 | **Users** | Key stakeholders for training | May not need Dynatrace access |
 | **Data Sources** | Must ingest into Dynatrace | May not need migration |
+
+### Files Reference
+
+| File | Purpose | Use For |
+|------|---------|---------|
+| ``dashboard_views_top100.json`` | Most viewed dashboards | Prioritize migration order |
+| ``dashboards_never_viewed.json`` | Unused dashboards | Consider not migrating |
+| ``users_most_active.json`` | Power users | Training priorities |
+| ``users_inactive.json`` | Inactive accounts | Skip in migration |
+| ``alerts_most_fired.json`` | Active alerts | Critical to migrate |
+| ``alerts_never_fired.json`` | Unused alerts | Consider removing |
+| ``sourcetypes_searched.json`` | Important data types | Data ingestion priorities |
+| ``indexes_searched.json`` | Important indexes | Bucket mapping priorities |
 
 ### Recommended Migration Order
 
@@ -3898,7 +4130,7 @@ This export includes comprehensive usage analytics to help prioritize your migra
 4. **Phase 4**: Review never-used items with stakeholders
 
 ---
-*Generated by DMA Splunk Cloud Export v4.6.0*
+*Generated by DMA Splunk Cloud Export*
 "@
     [System.IO.File]::WriteAllText($summaryFile, $summaryContent, $Script:UTF8NoBOM)
     Write-Success "Usage intelligence summary generated"
@@ -4162,19 +4394,62 @@ function New-ExportManifest {
             return $Default
         }
 
-        # v4.6.0: Usage intelligence references global aggregate files only
+        $neverViewedCount = Get-ResultCount "$analyticsDir/dashboards_never_viewed.json"
+        $neverFiredCount = Get-ResultCount "$analyticsDir/alerts_never_fired.json"
+        $inactiveUsersCount = Get-ResultCount "$analyticsDir/users_inactive.json"
+        $failedAlertsCount = Get-ResultCount "$analyticsDir/alerts_failed.json"
+
+        $avgDailyGb = Get-ResultField "$analyticsDir/daily_volume_summary.json" "avg_daily_gb" 0
+        $peakDailyGb = Get-ResultField "$analyticsDir/daily_volume_summary.json" "peak_daily_gb" 0
+        $total30dGb = Get-ResultField "$analyticsDir/daily_volume_summary.json" "total_30d_gb" 0
+
+        $totalForwardingHosts = Get-ResultField "$analyticsDir/ingestion_infrastructure/summary.json" "total_forwarding_hosts" 0
+        $ingestionDailyGb = Get-ResultField "$analyticsDir/ingestion_infrastructure/summary.json" "daily_avg_gb" 0
+
+        $hecDailyGb = Get-ResultField "$analyticsDir/ingestion_infrastructure/hec_usage.json" "daily_avg_gb" 0
+        $hecTokenCount = Get-ResultField "$analyticsDir/ingestion_infrastructure/hec_usage.json" "token_count" 0
+        $hecEnabled = ($hecTokenCount -ne 0 -and $hecTokenCount -ne "0")
+
         $usageIntel = [PSCustomObject]@{
-            prioritization = [PSCustomObject]@{
-                top_dashboards = @(Get-TopResults "$analyticsDir/dashboard_views_global.json")
-                top_alerts = @(Get-TopResults "$analyticsDir/alert_firing_global.json")
-                top_users = @(Get-TopResults "$analyticsDir/user_activity_global.json")
+            summary = [PSCustomObject]@{
+                dashboards_never_viewed = $neverViewedCount
+                alerts_never_fired = $neverFiredCount
+                users_inactive_30d = $inactiveUsersCount
+                alerts_with_failures = $failedAlertsCount
             }
             volume = [PSCustomObject]@{
-                index_volume = @(Get-TopResults "$analyticsDir/index_volume_summary.json" 50)
-                index_events = @(Get-TopResults "$analyticsDir/index_event_counts_daily.json")
-                note = "See index_volume_summary.json for per-index daily ingestion"
+                avg_daily_gb = $avgDailyGb
+                peak_daily_gb = $peakDailyGb
+                total_30d_gb = $total30dGb
+                top_indexes_by_volume = @(Get-TopResults "$analyticsDir/top_indexes_by_volume.json")
+                top_sourcetypes_by_volume = @(Get-TopResults "$analyticsDir/top_sourcetypes_by_volume.json")
+                top_hosts_by_volume = @(Get-TopResults "$analyticsDir/top_hosts_by_volume.json")
+                note = "See _usage_analytics/daily_volume_*.json for full daily breakdown"
             }
-            search_patterns = @(Get-TopResults "$analyticsDir/search_patterns_global.json")
+            ingestion_infrastructure = [PSCustomObject]@{
+                summary = [PSCustomObject]@{
+                    total_forwarding_hosts = $totalForwardingHosts
+                    daily_ingestion_gb = $ingestionDailyGb
+                    hec_enabled = $hecEnabled
+                    hec_daily_gb = $hecDailyGb
+                }
+                by_connection_type = @(Get-TopResults "$analyticsDir/ingestion_infrastructure/by_connection_type.json" 100)
+                by_input_method = @(Get-TopResults "$analyticsDir/ingestion_infrastructure/by_input_method.json" 100)
+                by_sourcetype_category = @(Get-TopResults "$analyticsDir/ingestion_infrastructure/by_sourcetype_category.json" 100)
+                note = "See _usage_analytics/ingestion_infrastructure/ for detailed breakdown"
+            }
+            prioritization = [PSCustomObject]@{
+                top_dashboards = @(Get-TopResults "$analyticsDir/dashboard_views_top100.json")
+                top_users = @(Get-TopResults "$analyticsDir/users_most_active.json")
+                top_alerts = @(Get-TopResults "$analyticsDir/alerts_most_fired.json")
+                top_sourcetypes = @(Get-TopResults "$analyticsDir/sourcetypes_searched.json")
+                top_indexes = @(Get-TopResults "$analyticsDir/indexes_searched.json")
+            }
+            elimination_candidates = [PSCustomObject]@{
+                dashboards_never_viewed_count = $neverViewedCount
+                alerts_never_fired_count = $neverFiredCount
+                note = "See _usage_analytics/ for full lists of candidates"
+            }
         }
     }
 
@@ -5374,20 +5649,7 @@ function Start-Collection {
         $collected++
     }
 
-    # v4.6.0: When usage is active in resume mode, clear usage-related analytics
-    # checkpoints so queries always re-run fresh (previous data may be broken/timed-out).
-    if ($Script:COLLECT_USAGE -and $Script:RESUME_MODE) {
-        $checkpointFile = Join-Path $Script:EXPORT_DIR ".analytics_checkpoint"
-        if (Test-Path $checkpointFile) {
-            Write-Info "Usage collection active in resume mode - clearing usage checkpoints to force re-collection"
-            $usagePhases = @("dashboard_views", "user_activity", "search_patterns", "index_volume", "alert_firing", "alerts_inventory")
-            $lines = Get-Content $checkpointFile | Where-Object { $_ -notin $usagePhases }
-            if ($null -eq $lines) { $lines = @() }
-            Set-Content -Path $checkpointFile -Value $lines -Force
-        }
-    }
-
-    # Global aggregate analytics (v4.6.0 — replaces per-app loop)
+    # Global aggregate analytics (v4.5.0 — replaces per-app loop)
     $currentStep++
     if ($Script:RESUME_MODE -and (Test-HasCollectedData "app_analytics") -and -not $Script:COLLECT_USAGE) {
         Write-Host "  [$currentStep/$totalSteps] Global analytics... ${Script:GREEN}SKIP (already collected)${Script:NC}"
@@ -5400,7 +5662,7 @@ function Start-Collection {
 
     # Global usage analytics
     $currentStep++
-    if ($Script:RESUME_MODE -and (Test-HasCollectedData "usage_analytics") -and -not $Script:COLLECT_USAGE) {
+    if ($Script:RESUME_MODE -and (Test-HasCollectedData "usage_analytics")) {
         Write-Host "  [$currentStep/$totalSteps] Global usage analytics... ${Script:GREEN}SKIP (already collected)${Script:NC}"
         $skipped++
     } else {
@@ -5452,12 +5714,9 @@ function Invoke-Main {
         Write-Host "  -AllApps             Export all applications"
         Write-Host "  -Apps LIST           Comma-separated list of apps"
         Write-Host "  -Output DIR          Output directory"
-        Write-Host "  -Rbac                Enable RBAC/users data collection"
-        Write-Host "  -NoRbac              Disable RBAC/users data collection"
-        Write-Host "  -Usage               Enable usage analytics (ON by default)"
-        Write-Host "  -NoUsage             Disable usage analytics"
-        Write-Host "  -Scoped              Scope all collections to selected apps only"
-        Write-Host "  -AnalyticsPeriod N   Analytics time window (default: 30d; e.g. 7d, 90d, 365d)"
+        Write-Host "  -Rbac                Collect RBAC/users data (OFF by default)"
+        Write-Host "  -Usage               Collect usage analytics (OFF by default)"
+        Write-Host "  -AnalyticsPeriod N   Analytics time window (default: 7d; e.g. 30d, 90d)"
         Write-Host "  -Proxy URL           Route all connections through a proxy server"
         Write-Host "  -ResumeCollect FILE  Resume a previous interrupted export from archive"
         Write-Host "  -SkipInternal        Skip searches requiring _internal index"

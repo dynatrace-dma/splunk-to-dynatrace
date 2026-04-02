@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>$title$ | Dynatrace Migration Assistant</title>
+    <title>Enterprise Changelog | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -250,7 +250,7 @@
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
             <span class="version-badge"><span class="dot"></span>Version 4.6.0</span>
-            <div class="doc-title"><h2>$title$</h2></div>
+            <div class="doc-title"><h2>Enterprise Changelog</h2></div>
         </div>
     </header>
 
@@ -268,7 +268,145 @@
     </nav>
 
     <main class="content">
-$body$
+<h1 id="dma-splunk-enterprise-export-changelog">DMA Splunk Enterprise
+Export — Changelog</h1>
+<h2 id="v4.6.0-april-2026">v4.6.0 (April 2026)</h2>
+<h3
+id="usage-analytics-overhaul-global-aggregates-replace-detailed-queries">Usage
+Analytics Overhaul — Global Aggregates Replace Detailed Queries</h3>
+<p>The <code>collect_usage_analytics</code> function has been
+fundamentally restructured. Previously it ran ~40 individual SPL search
+jobs (users_most_active, activity_by_role, users_inactive,
+daily_active_users, sourcetypes_searched, indexes_queried, index_sizes,
+daily_volume_by_index, daily_volume_by_sourcetype, daily_volume_summary,
+daily_events_by_index, hourly_volume_pattern, top_indexes_by_volume,
+top_sourcetypes_by_volume, top_hosts_by_volume,
+ingestion_infrastructure/*, alert_migration/*, rbac/*,
+saved_searches_by_owner, scheduler_load). All of those individual jobs
+have been removed.</p>
+<p><strong>What <code>collect_usage_analytics</code> does now:</strong>
+- Ownership mapping: 3 <code>| rest</code> queries (dashboard, saved
+search, alert ownership) - REST metadata: 3 curl calls for supplemental
+metadata - Generates <code>USAGE_INTELLIGENCE_SUMMARY.md</code></p>
+<p><strong>What produces the Explorer data:</strong> - 6 global
+aggregate queries in <code>collect_app_analytics</code> now produce all
+data that the DMA Explorer consumes. These queries run per-app and write
+to <code>dma_analytics/usage_analytics/</code>.</p>
+<h3 id="search-query-improvements">Search Query Improvements</h3>
+<ul>
+<li>Dashboard views now use the <code>provenance</code> field
+(search_type=dashboard was unreliable)</li>
+<li>All <code>_audit</code> queries optimized:
+<code>sourcetype=audittrail</code> + <code>info=granted</code>
+(tsidx-level filtering)</li>
+<li>Search type breakdown derived from
+<code>provenance</code>/<code>search_id</code> (matches Cloud script
+logic)</li>
+<li>Alert firing queries: added <code>| fields</code> before
+<code>| stats</code> (reduces indexer memory on large environments)</li>
+<li>Removed ALL <code>| head N</code> limits from usage queries (was
+silently dropping data on large environments)</li>
+</ul>
+<h3 id="data-collection-changes">Data Collection Changes</h3>
+<ul>
+<li>Default <code>USAGE_PERIOD</code> changed to <code>30d</code> (was
+<code>7d</code>) for comprehensive migration planning</li>
+<li><code>saved_searches_all.json</code>: uses <code>f=</code> field
+selection (was 256MB+ raw REST dump on large environments)</li>
+<li><code>alert_ownership.json</code>: uses <code>f=</code> field
+selection (was duplicate 256MB+ REST dump)</li>
+<li>Usage collection ON by default (now explicit)</li>
+</ul>
+<h3 id="manifest-and-checkpoint-updates">Manifest and Checkpoint
+Updates</h3>
+<ul>
+<li>Updated manifest builder (<code>usage_intelligence</code> section)
+to reference global aggregate files</li>
+<li>Updated <code>has_collected_data</code> check to use
+<code>dashboard_ownership.json</code> instead of
+<code>users_most_active.json</code></li>
+<li>Updated checkpoint clearing to remove old detailed checkpoint
+names</li>
+<li><code>--resume-collect</code> with usage active now clears usage
+checkpoints to force re-collection</li>
+</ul>
+<h3 id="other">Other</h3>
+<ul>
+<li><code>USAGE_INTELLIGENCE_SUMMARY.md</code> content updated to
+reference v4.6.0 global files</li>
+<li>Dynamic <code>daily_avg_gb</code> calculation uses actual
+<code>USAGE_PERIOD</code> days (was hardcoded <code>/7</code>)</li>
+<li>Dramatically reduced failure risk by minimizing the total number of
+search jobs dispatched</li>
+</ul>
+<h2 id="v4.4.0">v4.4.0</h2>
+<ul>
+<li>Added <code>--proxy URL</code> flag: routes all curl calls through
+an HTTP proxy</li>
+<li>Added <code>--skip-internal</code> flag: skips
+<code>index=_audit</code>/<code>_internal</code> searches (for
+restricted accounts)</li>
+<li>Added <code>--test-access</code> flag: pre-flight API check across
+all categories (no export written)</li>
+<li>Added <code>--remask FILE</code> flag: re-anonymizes an existing
+archive without connecting to Splunk</li>
+<li>Added <code>--resume-collect FILE</code> flag: resumes a previously
+interrupted export from archive</li>
+<li>Expanded RBAC: now collects capabilities, LDAP groups/config, SAML
+groups/config</li>
+<li>Progressive analytics checkpointing: each task group saves a
+checkpoint on success; resume skips already-completed groups
+automatically</li>
+<li><code>collect_system_macros</code>, <code>collect_app_configs</code>
+(per-app), <code>collect_dashboard_studio</code>,
+<code>collect_app_analytics</code> (per-app) all wrapped with checkpoint
+guards for resume support</li>
+<li><code>RBAC</code>, <code>usage_analytics</code>,
+<code>system_info</code>, <code>index_stats</code> phases wrapped with
+<code>has_collected_data</code> guards for resume support</li>
+</ul>
+<h2 id="v4.3.0">v4.3.0</h2>
+<ul>
+<li>Added <code>--token TOKEN</code> flag for API token authentication
+(recommended for automation)</li>
+<li>Password authentication now uses Python URL-encoding via stdin (safe
+for special characters: <code>$</code>, backtick, <code>"</code>,
+<code>\</code>)</li>
+<li>Session key auth replaces curl basic auth
+(<code>-u user:pass</code>) throughout all API calls</li>
+<li>Added <code>--analytics-period N</code> flag (e.g. <code>7d</code>,
+<code>30d</code>, <code>90d</code>); skips interactive period prompt
+when provided</li>
+<li>Added <code>--usage</code> and <code>--rbac</code> enable flags to
+match Cloud script interface</li>
+<li>Changed <code>USAGE_PERIOD</code> default from <code>30d</code> to
+<code>7d</code> (matches Cloud default)</li>
+<li>Async search dispatch: analytics searches now use
+<code>exec_mode=normal</code> + <code>dispatchState</code> polling</li>
+<li>Adaptive poll interval (5s→30s) and job cancellation on timeout
+replace fixed 1s polling</li>
+<li>Token-only invocation auto-enables <code>NON_INTERACTIVE</code>
+mode</li>
+<li>All API guards updated to check <code>AUTH_HEADER</code> (works for
+both token and session key auth)</li>
+</ul>
+<h2 id="v4.2.4">v4.2.4</h2>
+<ul>
+<li>Anonymization now creates two archives: original (untouched) +
+<code>_masked</code> (anonymized)</li>
+<li>Preserves original data in case anonymization corrupts files</li>
+<li>RBAC/Users collection now OFF by default (use <code>--rbac</code> to
+enable)</li>
+<li>Usage analytics collection now OFF by default (use
+<code>--usage</code> to enable)</li>
+<li>Faster performance defaults: batch size 250 (was 100), API delay
+50ms (was 250ms)</li>
+<li>Optimized usage analytics queries with sampling for expensive regex
+extractions</li>
+<li>Changed <code>latest()</code> to <code>max()</code> for faster time
+aggregations</li>
+<li>Moved filters to search-time for better performance</li>
+</ul>
     </main>
 
     <footer class="footer">

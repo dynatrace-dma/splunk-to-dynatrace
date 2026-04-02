@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DMA Splunk Cloud Export - Specification | Dynatrace Migration Assistant</title>
+    <title>Cloud Export Technical
+Specification | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -249,8 +250,9 @@
                 <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
-            <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DMA Splunk Cloud Export - Specification</h2></div>
+            <span class="version-badge"><span class="dot"></span>Version 4.6.0</span>
+            <div class="doc-title"><h2>Cloud Export Technical
+Specification</h2></div>
         </div>
     </header>
 
@@ -262,1106 +264,2206 @@
             <a href="SPLUNK-CLOUD-EXPORT-SPECIFICATION.html">Cloud Spec</a>
             <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics Reference</a>
             <a href="EXPORT-SCHEMA.html">Export Schema</a>
+            <a href="INTERACTIVE-WALKTHROUGH.html">Walkthrough</a>
+            <a href="SPLUNK-ENTERPRISE-CHANGELOG.html">Changelog</a>
         </div>
     </nav>
 
     <main class="content">
-<h1>DMA Splunk Cloud Export Script - Technical Specification</h1>
-<h2>Version 4.3.0 | REST API-Only Data Collection for Splunk Cloud</h2>
-<p>
-<strong>Last Updated</strong>: February 2026
-<strong>Related Documents</strong>: <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated Analytics Reference</a> | <a href="README-SPLUNK-CLOUD.md">Cloud README</a> | <a href="EXPORT-SCHEMA.md">Export Schema</a>
-</p>
-<hr>
-<blockquote><p><strong>Developed for Dynatrace One by Enterprise Solutions & Architecture</strong></p></blockquote>
-<blockquote><p><em>An ACE Services Division of Dynatrace</em></p></blockquote>
-<hr>
-<h2>What's New in v4.3.0</h2>
-<h3>Resume Collection (<code>--resume-collect</code> / <code>-ResumeCollect</code>)</h3>
-<p>
-Resume from a previous export archive to fill gaps without re-collecting everything:
-</p>
-<ul>
-<li>Extracts previous <code>.tar.gz</code>, detects already-collected data, and fills gaps</li>
-<li>Versioned output with <code>-v1</code>, <code>-v2</code> suffixes to preserve prior exports</li>
-<li>Bash 4.2+ compatible with full POSIX compliance</li>
-<li><strong>Per-app skip logic</strong>: Skips dashboards, alerts, and knowledge objects for apps that were already fully collected</li>
-<li><strong>Global skip logic</strong>: Skips configs, RBAC, usage analytics, and indexes if already present in the previous archive</li>
-</ul>
-<pre><code class="language-bash"># Resume from a previous export
-./dma-splunk-cloud-export.sh --resume-collect dma_cloud_export_acme_20260115.tar.gz
-
-# PowerShell equivalent
-.\dma-splunk-cloud-export.ps1 -ResumeCollect dma_cloud_export_acme_20260115.tar.gz</code></pre>
-<h3>12-Hour Max Runtime</h3>
-<ul>
-<li><code>MAX<em>TOTAL</em>TIME=43200</code> (43,200 seconds = 12 hours) enforced across all scripts</li>
-<li>Prevents runaway exports on very large Splunk Cloud environments</li>
-<li>Graceful shutdown with partial archive creation when time limit is reached</li>
-</ul>
-<h3>PowerShell Edition</h3>
-<ul>
-<li><strong><code>dma-splunk-cloud-export.ps1</code></strong> v4.3.0 provides identical functionality for Windows environments</li>
-<li>Zero external dependencies (no Python, no curl, no jq required)</li>
-<li>Supports PowerShell 5.1+ (Windows PowerShell) and PowerShell 7+ (cross-platform)</li>
-<li>See the <a href="#powershell-edition">PowerShell Edition</a> section below for full parameter mapping</li>
-</ul>
-<h3>Proxy Support (<code>--proxy</code> / <code>-Proxy</code>)</h3>
-<p>
-Both Cloud scripts support routing all API connections through a corporate proxy server:
-</p>
-<ul>
-<li><strong>Bash</strong>: <code>--proxy http://proxy.company.com:8080</code> sets <code>CURL<em>PROXY</em>ARGS="-x $PROXY_URL"</code> for all curl calls</li>
-<li><strong>PowerShell</strong>: <code>-Proxy "http://proxy.company.com:8080"</code> adds <code>-Proxy</code> parameter to all <code>Invoke-WebRequest</code> calls</li>
-<li>When a proxy is configured, DNS resolution and TCP port connectivity tests are skipped (the proxy handles routing)</li>
-<li>Interactive prompt asks whether a proxy is needed during setup (default: No); skipped in non-interactive mode or when <code>--proxy</code> / <code>-Proxy</code> is provided</li>
-<li>Connectivity failure messages include proxy-specific troubleshooting guidance</li>
-</ul>
-<hr>
-<h2>What's New in v4.2.4</h2>
-<h3>Two-Archive Anonymization (Preserves Original Data)</h3>
-<p>
-When anonymization is enabled, the script now creates <strong>TWO separate archives</strong>:
-</p>
-<ul>
-<li><code>{export_name}.tar.gz</code> - <strong>Original, untouched data</strong> (keep for your records)</li>
-<li><code>{export<em>name}</em>masked.tar.gz</code> - <strong>Anonymized copy</strong> (safe to share with third parties)</li>
-</ul>
-<p>
-This preserves the original data in case anonymization corrupts files. Users can re-run anonymization on the original without re-running the entire export.
-</p>
-<h3>Performance Optimizations</h3>
-<ul>
-<li><strong>RBAC/Users collection now OFF by default</strong> - Use <code>--rbac</code> flag to enable</li>
-<li><strong>Usage analytics now OFF by default</strong> - Use <code>--usage</code> flag to enable</li>
-<li><strong>Faster defaults</strong>: Batch size 250 (was 100), API delay 50ms (was 250ms)</li>
-<li><strong>Optimized queries</strong>: Sampling for expensive regex extractions, <code>max()</code> instead of <code>latest()</code> for faster aggregations</li>
-</ul>
-<hr>
-<h2>What's New in v4.2.0</h2>
-<h3>App-Centric Dashboard Structure (v2)</h3>
-<ul>
-<li><strong>No more flat folders</strong>: Dashboards are now saved to <code>{AppName}/dashboards/classic/</code> and <code>{AppName}/dashboards/studio/</code> instead of root-level <code>dashboards<em>classic/</code> and <code>dashboards</em>studio/</code></li>
-<li><strong>Prevents name collisions</strong>: Multiple apps can now have dashboards with the same name without data loss</li>
-<li><strong>Manifest Schema v4.0</strong>: Added <code>archive<em>structure</em>version: "v2"</code> for DMA to detect and process the new structure</li>
-</ul>
-<hr>
-<h2>Executive Summary</h2>
-<p>
-This specification defines the complete requirements for a <strong>Splunk Cloud-specific</strong> data collection script that operates <strong>100% via REST API</strong> without any file system access.
-</p>
-<h3>Key Differences from Enterprise Script</h3>
-<table>
-<thead>
-<tr><th>Aspect</th><th>Enterprise Script</th><th>Cloud Script</th></tr>
-</thead>
-<tbody>
-<tr><td><strong>Where it runs</strong></td><td>ON the Splunk server</td><td>ANYWHERE with network access</td></tr>
-<tr><td><strong>Access method</strong></td><td>SSH + File system + REST</td><td><strong>REST API ONLY</strong></td></tr>
-<tr><td><strong>Authentication</strong></td><td>Local Splunk creds</td><td>Cloud credentials or API tokens</td></tr>
-<tr><td><strong>SPLUNK_HOME access</strong></td><td>Yes</td><td>No</td></tr>
-<tr><td><strong>File-based configs</strong></td><td>Yes (props.conf, etc.)</td><td>No - must use REST endpoints</td></tr>
-<tr><td><strong>Output format</strong></td><td>Same <code>.tar.gz</code> structure</td><td>Same <code>.tar.gz</code> structure</td></tr>
-</tbody>
-</table>
-<hr>
-<h2>What's New in v4.1.0</h2>
-<h3>App-Scoped Export Mode</h3>
-<ul>
-<li><strong><code>--apps</code> flag</strong>: Export specific apps only (e.g., <code>--apps "search,myapp,security"</code>)</li>
-<li><strong><code>--quick</code> mode</strong>: Skip global analytics for fastest possible export (<strong>TESTING ONLY</strong>)</li>
-<li><strong><code>--scoped</code> mode</strong>: Scope RBAC/usage collection to selected apps only</li>
-<li><strong>Auto-scoped</strong>: When <code>--apps</code> is specified, collections automatically scope to those apps</li>
-</ul>
-<blockquote><p><strong>⚠️ WARNING</strong>: <code>--quick</code> is for <strong>testing/validation only</strong>. It eliminates usage analytics, user data, and RBAC information critical for migration analysis. Always use full or <code>--scoped</code> export for actual migration planning.</p></blockquote>
-<h3>Debug Mode</h3>
-<ul>
-<li><strong><code>--debug</code> flag</strong>: Enable verbose logging for troubleshooting</li>
-<li><strong>Debug log file</strong>: <code>export_debug.log</code> with detailed API/search lifecycle</li>
-<li><strong>Color-coded console output</strong>: ERROR (red), WARN (yellow), API (cyan), SEARCH (magenta), TIMING (blue)</li>
-<li><strong>Sensitive data redaction</strong>: Passwords and tokens automatically redacted in debug output</li>
-</ul>
-<h3>Performance Improvements</h3>
-<ul>
-<li><strong>App-filtered queries</strong>: Usage searches now filter by selected apps</li>
-<li><strong>Reduced scope</strong>: Quick mode can complete in minutes vs hours for large environments</li>
-<li><strong><code>--no-usage</code></strong>: Skip usage analytics collection entirely</li>
-</ul>
-<hr>
-<h2>What's New in v4.0.1</h2>
-<h3>Container Compatibility Improvements</h3>
-<ul>
-<li><strong>Container-friendly progress display</strong>: Progress bars now use newlines at 5% intervals instead of carriage returns, ensuring clean output in kubectl exec, Docker exec, and other containerized environments</li>
-<li><strong>Improved output formatting</strong>: Progress updates print cleanly without overlapping lines in non-TTY environments</li>
-</ul>
-<hr>
-<h2>What's New in v4.0.0</h2>
-<h3>Enterprise Resilience Features (MAJOR UPDATE)</h3>
-<p>
-The Cloud script now has <strong>full feature parity</strong> with the Enterprise script for large-scale environments:
-</p>
-<ul>
-<li><strong>Paginated API calls</strong>: <code>api<em>call</em>paginated()</code> with configurable <code>BATCH_SIZE</code> (default: 100)</li>
-<li><strong>Extended timeouts</strong>: <code>API<em>TIMEOUT=120s</code>, <code>MAX</em>TOTAL_TIME=43200s</code> (12 hours)</li>
-<li><strong>Checkpoint/resume</strong>: Automatic detection and resume of incomplete exports</li>
-<li><strong>Export timing statistics</strong>: Detailed API call tracking and duration reporting</li>
-<li><strong>Zero-configuration reliability</strong>: Defaults tuned for 4000+ dashboards, 10K+ alerts</li>
-</ul>
-<h3>Enterprise-Ready Defaults</h3>
-<table>
-<thead>
-<tr><th>Setting</th><th>Default</th><th>Purpose</th></tr>
-</thead>
-<tbody>
-<tr><td><code>BATCH_SIZE</code></td><td>250</td><td>Items per API request</td></tr>
-<tr><td><code>RATE_LIMIT_DELAY</code></td><td>0.1s</td><td>Between requests (100ms)</td></tr>
-<tr><td><code>API_TIMEOUT</code></td><td>120s</td><td>Per-request timeout</td></tr>
-<tr><td><code>MAX_TOTAL_TIME</code></td><td>43200s</td><td>12 hours max runtime</td></tr>
-<tr><td><code>MAX_RETRIES</code></td><td>3</td><td>Retry with exponential backoff</td></tr>
-<tr><td><code>CHECKPOINT_ENABLED</code></td><td>true</td><td>Enable checkpoint/resume</td></tr>
-</tbody>
-</table>
-<h3>Previous Features (from v3.6.0)</h3>
-<ul>
-<li><strong>Python-based JSON processing</strong>: All JSON parsing uses Python 3</li>
-<li><strong>Container compatibility</strong>: Multiple hostname fallbacks for Docker/Kubernetes</li>
-<li><strong>Aligned rate limiting</strong>: Consistent with Enterprise script</li>
-</ul>
-<hr>
-<h2>Table of Contents</h2>
-<ol>
-<li><a href="#1-splunk-cloud-overview">Splunk Cloud Overview</a></li>
-<li><a href="#2-authentication-methods">Authentication Methods</a></li>
-<li><a href="#3-rest-api-data-collection">REST API Data Collection</a></li>
-<li><a href="#4-api-endpoints-reference">API Endpoints Reference</a></li>
-<li><a href="#5-script-flow">Script Flow</a></li>
-<li><a href="#6-output-structure">Output Structure</a></li>
-<li><a href="#7-usage-intelligence">Usage Intelligence</a></li>
-<li><a href="#8-manifest-schema">Manifest Schema</a></li>
-<li><a href="#9-rate-limiting--throttling">Rate Limiting & Throttling</a></li>
-<li><a href="#10-error-handling">Error Handling</a></li>
-<li><a href="#11-security-considerations">Security Considerations</a></li>
+<h1 id="dma-splunk-cloud-export-technical-specification">DMA Splunk
+Cloud Export – Technical Specification</h1>
+<h2
+id="version-4.6.0-rest-api-only-data-collection-for-splunk-cloud">Version
+4.6.0 | REST API-Only Data Collection for Splunk Cloud</h2>
+<p><strong>Last Updated</strong>: April 2026 <strong>Related
+Documents</strong>: <a
+href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated
+Analytics Reference</a> | <a href="README-SPLUNK-CLOUD.md">Cloud
+README</a> | <a href="EXPORT-SCHEMA.md">Export Schema</a></p>
+<hr />
+<blockquote>
+<p><strong>Developed for Dynatrace One by Enterprise Solutions &amp;
+Architecture</strong> <em>An ACE Services Division of Dynatrace</em></p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">Table of Contents</h2>
+<ol type="1">
+<li><a href="#1-overview">Overview</a></li>
+<li><a href="#2-scripts-and-platforms">Scripts and Platforms</a></li>
+<li><a href="#3-configuration-defaults">Configuration Defaults</a></li>
+<li><a href="#4-authentication">Authentication</a></li>
+<li><a href="#5-api-communication-layer">API Communication
+Layer</a></li>
+<li><a href="#6-connectivity-and-pre-flight-checks">Connectivity and
+Pre-flight Checks</a></li>
+<li><a href="#7-collection-phases">Collection Phases</a></li>
+<li><a href="#8-async-search-dispatch">Async Search Dispatch</a></li>
+<li><a href="#9-global-analytics-queries">Global Analytics
+Queries</a></li>
+<li><a href="#10-usage-analytics-supplementary">Usage Analytics
+(Supplementary)</a></li>
+<li><a href="#11-rest-api-endpoints-reference">REST API Endpoints
+Reference</a></li>
+<li><a href="#12-output-structure-and-archive-format">Output Structure
+and Archive Format</a></li>
+<li><a href="#13-manifest-schema">Manifest Schema</a></li>
+<li><a href="#14-anonymization-algorithm">Anonymization
+Algorithm</a></li>
+<li><a href="#15-rate-limiting-strategy">Rate Limiting Strategy</a></li>
+<li><a href="#16-error-handling">Error Handling</a></li>
+<li><a href="#17-resume-and-checkpoint-system">Resume and Checkpoint
+System</a></li>
+<li><a href="#18-remask-mode">Remask Mode</a></li>
+<li><a href="#19-test-access-mode">Test-Access Mode</a></li>
+<li><a href="#20-cli-reference">CLI Reference</a></li>
+<li><a href="#21-security-considerations">Security
+Considerations</a></li>
 </ol>
-<hr>
-<h2>1. Splunk Cloud Overview</h2>
-<h3>1.1 Splunk Cloud Flavors</h3>
+<hr />
+<h2 id="overview">1. Overview</h2>
+<p>This specification defines the complete technical behavior of the DMA
+Splunk Cloud Export script, version 4.6.0. The script collects Splunk
+Cloud configuration, knowledge objects, dashboards, alerts, RBAC data,
+index metadata, and usage analytics entirely via the Splunk REST API
+(port 8089). No file system access, SSH, or agent installation is
+required.</p>
+<h3 id="key-characteristics">Key Characteristics</h3>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
-<tr><th>Flavor</th><th>Description</th><th>API Access</th><th>Notes</th></tr>
+<tr>
+<th>Aspect</th>
+<th>Detail</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Splunk Cloud Classic</strong></td><td>Original multi-tenant cloud</td><td>Full REST API</td><td>Legacy, being phased out</td></tr>
-<tr><td><strong>Splunk Cloud Victoria</strong></td><td>Latest cloud architecture</td><td>Full REST API</td><td>Current default</td></tr>
-<tr><td><strong>Splunk Cloud on AWS</strong></td><td>AWS-hosted single tenant</td><td>Full REST API</td><td>Enterprise features</td></tr>
-<tr><td><strong>Splunk Cloud on GCP</strong></td><td>GCP-hosted single tenant</td><td>Full REST API</td><td>Enterprise features</td></tr>
+<tr>
+<td><strong>Access method</strong></td>
+<td>REST API only (HTTPS to port 8089)</td>
+</tr>
+<tr>
+<td><strong>Runs from</strong></td>
+<td>Any machine with network access to the Splunk Cloud stack</td>
+</tr>
+<tr>
+<td><strong>Authentication</strong></td>
+<td>Token (Bearer or Splunk prefix, auto-detected) or
+username/password</td>
+</tr>
+<tr>
+<td><strong>Dependencies (Bash)</strong></td>
+<td><code>curl</code>, Python 3 (required); <code>jq</code> (optional,
+improves filtering)</td>
+</tr>
+<tr>
+<td><strong>Dependencies (PowerShell)</strong></td>
+<td>None (uses built-in <code>Invoke-WebRequest</code>)</td>
+</tr>
+<tr>
+<td><strong>Output</strong></td>
+<td><code>.tar.gz</code> archive with JSON files, optionally
+anonymized</td>
+</tr>
+<tr>
+<td><strong>Max runtime</strong></td>
+<td>12 hours (configurable via <code>MAX_TOTAL_TIME</code>)</td>
+</tr>
 </tbody>
 </table>
-<h3>1.2 Cloud Stack URL Patterns</h3>
-<pre><code># Standard Splunk Cloud URL patterns
-https://&lt;stack-name&gt;.splunkcloud.com           # Web UI
-https://&lt;stack-name&gt;.splunkcloud.com:8089      # REST API (management port)
-
-# Examples
-https://acme-corp.splunkcloud.com
-https://acme-corp.splunkcloud.com:8089/services/server/info
-
-# Some stacks use different patterns
-https://inputs.&lt;stack-name&gt;.splunkcloud.com    # HEC endpoint
-https://api.&lt;stack-name&gt;.splunkcloud.com       # API endpoint (some configs)</code></pre>
-<h3>1.3 What's Accessible via REST API</h3>
+<h3 id="what-changed-in-v4.6.0">What Changed in v4.6.0</h3>
 <table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
 <thead>
-<tr><th>Data Type</th><th>REST Endpoint</th><th>Available?</th></tr>
+<tr>
+<th>Change</th>
+<th>Detail</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>Server Info</td><td><code>/services/server/info</code></td><td>✅ Yes</td></tr>
-<tr><td>Installed Apps</td><td><code>/services/apps/local</code></td><td>✅ Yes</td></tr>
-<tr><td>Dashboards</td><td><code>/servicesNS/-/-/data/ui/views</code></td><td>✅ Yes</td></tr>
-<tr><td>Saved Searches/Alerts</td><td><code>/servicesNS/-/-/saved/searches</code></td><td>✅ Yes</td></tr>
-<tr><td>Users</td><td><code>/services/authentication/users</code></td><td>✅ Yes</td></tr>
-<tr><td>Roles</td><td><code>/services/authorization/roles</code></td><td>✅ Yes</td></tr>
-<tr><td>Macros</td><td><code>/servicesNS/-/-/admin/macros</code></td><td>✅ Yes</td></tr>
-<tr><td>Eventtypes</td><td><code>/servicesNS/-/-/saved/eventtypes</code></td><td>✅ Yes</td></tr>
-<tr><td>Tags</td><td><code>/servicesNS/-/-/configs/conf-tags</code></td><td>✅ Yes</td></tr>
-<tr><td>Lookups (definitions)</td><td><code>/servicesNS/-/-/data/lookup-table-files</code></td><td>✅ Yes</td></tr>
-<tr><td>Lookup contents</td><td><code>/servicesNS/-/-/data/lookup-table-files/{name}</code></td><td>✅ Yes</td></tr>
-<tr><td>Field Extractions</td><td><code>/servicesNS/-/-/data/transforms/extractions</code></td><td>✅ Yes</td></tr>
-<tr><td>Props (via conf)</td><td><code>/servicesNS/-/-/configs/conf-props</code></td><td>✅ Yes</td></tr>
-<tr><td>Transforms (via conf)</td><td><code>/servicesNS/-/-/configs/conf-transforms</code></td><td>✅ Yes</td></tr>
-<tr><td>Indexes</td><td><code>/services/data/indexes</code></td><td>✅ Yes</td></tr>
-<tr><td>Index Stats</td><td><code>/services/data/indexes-extended</code></td><td>⚠️ Limited</td></tr>
-<tr><td>Search Jobs</td><td><code>/services/search/jobs</code></td><td>✅ Yes</td></tr>
-<tr><td>KV Store Collections</td><td><code>/servicesNS/-/-/storage/collections/config</code></td><td>✅ Yes</td></tr>
-<tr><td>Audit Logs</td><td><code>index=_audit</code> via search</td><td>⚠️ Requires search</td></tr>
+<tr>
+<td><strong><code>collect_usage_analytics</code> stripped</strong></td>
+<td>No longer runs SPL queries. Now collects only REST-based ownership
+metadata, saved search metadata, and a summary document.</td>
+</tr>
+<tr>
+<td><strong>Global analytics queries</strong></td>
+<td>6 queries in <code>collect_app_analytics</code> with
+<code>by app</code> grouping replace the previous per-app loop (N apps x
+7 queries).</td>
+</tr>
+<tr>
+<td><strong>Async search dispatch</strong></td>
+<td>All analytics SPL queries use <code>exec_mode=normal</code>, poll
+<code>dispatchState</code>, 1-hour max timeout, auto-cancel on
+timeout.</td>
+</tr>
+<tr>
+<td><strong>Blocking search preserved</strong></td>
+<td>Only for fast <code>| rest</code> and <code>| tstats</code> queries
+that complete in seconds (alerts inventory, event counts).</td>
+</tr>
 </tbody>
 </table>
-<h3>1.4 What's NOT Accessible</h3>
+<hr />
+<h2 id="scripts-and-platforms">2. Scripts and Platforms</h2>
+<p>There are exactly <strong>two</strong> Cloud export scripts in
+v4.6.0:</p>
 <table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 31%" />
+<col style="width: 43%" />
+</colgroup>
 <thead>
-<tr><th>Data Type</th><th>Why Not Available</th></tr>
+<tr>
+<th>Script</th>
+<th>Platform</th>
+<th>Dependencies</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>Raw config files</td><td>No file system access</td></tr>
-<tr><td><code>$SPLUNK_HOME/etc/</code></td><td>No file system access</td></tr>
-<tr><td>Audit.log file</td><td>No file system access</td></tr>
-<tr><td>Bucket metadata</td><td>No file system access</td></tr>
-<tr><td>Internal indexes (some)</td><td>Cloud restrictions</td></tr>
-<tr><td>License file</td><td>Cloud-managed</td></tr>
+<tr>
+<td><code>dma-splunk-cloud-export.sh</code></td>
+<td>Bash (macOS, Linux)</td>
+<td><code>curl</code>, Python 3, optional <code>jq</code></td>
+</tr>
+<tr>
+<td><code>dma-splunk-cloud-export.ps1</code></td>
+<td>PowerShell 5.1+ / 7+ (Windows, cross-platform)</td>
+<td>None</td>
+</tr>
 </tbody>
 </table>
-<hr>
-<h2>2. Authentication Methods</h2>
-<h3>2.1 Username/Password Authentication</h3>
-<pre><code class="language-bash"># Basic authentication
-curl -k -u &quot;username:password&quot; \
-  &quot;https://acme.splunkcloud.com:8089/services/server/info&quot; \
-  -d &quot;output_mode=json&quot;</code></pre>
-<p>
-<strong>Requirements</strong>:
-</p>
-<ul>
-<li>Splunk Cloud admin account</li>
-<li>Account must have required capabilities</li>
-<li>May require MFA bypass token for API access</li>
-</ul>
-<h3>2.2 Splunk Authentication Token</h3>
-<pre><code class="language-bash"># Token-based authentication (recommended)
-curl -k -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
-  &quot;https://acme.splunkcloud.com:8089/services/server/info&quot; \
-  -d &quot;output_mode=json&quot;</code></pre>
-<p>
-<strong>Creating an Auth Token</strong>:
-</p>
-<ol>
-<li>Log into Splunk Cloud web UI</li>
-<li>Settings → Tokens</li>
-<li>Create new token with required permissions</li>
-<li>Set appropriate expiration</li>
+<p>The beta file has been deleted. Both scripts implement identical
+collection logic and produce archives with the same structure.</p>
+<hr />
+<h2 id="configuration-defaults">3. Configuration Defaults</h2>
+<p>All defaults can be overridden via environment variables (Bash) or
+parameters (PowerShell).</p>
+<h3 id="pagination-and-batching">Pagination and Batching</h3>
+<table>
+<colgroup>
+<col style="width: 29%" />
+<col style="width: 29%" />
+<col style="width: 41%" />
+</colgroup>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BATCH_SIZE</code></td>
+<td>250</td>
+<td>Items per paginated API request</td>
+</tr>
+<tr>
+<td><code>RATE_LIMIT_DELAY</code></td>
+<td>0.05 (50ms)</td>
+<td>Delay between paginated batch requests</td>
+</tr>
+</tbody>
+</table>
+<h3 id="timeouts">Timeouts</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CONNECT_TIMEOUT</code></td>
+<td>30s</td>
+<td>TCP connection timeout</td>
+</tr>
+<tr>
+<td><code>API_TIMEOUT</code></td>
+<td>120s</td>
+<td>Per-request maximum time</td>
+</tr>
+<tr>
+<td><code>MAX_TOTAL_TIME</code></td>
+<td>43200s (12h)</td>
+<td>Script-wide runtime limit</td>
+</tr>
+<tr>
+<td><code>ANALYTICS_BUDGET</code></td>
+<td>21600s (6h)</td>
+<td>Dedicated analytics time budget</td>
+</tr>
+</tbody>
+</table>
+<h3 id="retry-and-backoff">Retry and Backoff</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MAX_RETRIES</code></td>
+<td>3</td>
+<td>Retry attempts per failed request</td>
+</tr>
+<tr>
+<td><code>BACKOFF_MULTIPLIER</code></td>
+<td>2</td>
+<td>Exponential backoff multiplier</td>
+</tr>
+</tbody>
+</table>
+<h3 id="search-dispatch">Search Dispatch</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>API_DELAY_SECONDS</code></td>
+<td>0.05 (50ms)</td>
+<td>Delay between API calls</td>
+</tr>
+<tr>
+<td><code>MAX_CONCURRENT_SEARCHES</code></td>
+<td>1</td>
+<td>No parallel search jobs</td>
+</tr>
+<tr>
+<td><code>SEARCH_POLL_INTERVAL</code></td>
+<td>1s</td>
+<td>Base poll frequency for job status</td>
+</tr>
+</tbody>
+</table>
+<h3 id="checkpoint">Checkpoint</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CHECKPOINT_ENABLED</code></td>
+<td>true</td>
+<td>Enable checkpoint/resume capability</td>
+</tr>
+<tr>
+<td><code>CHECKPOINT_INTERVAL</code></td>
+<td>50</td>
+<td>Save checkpoint every N items</td>
+</tr>
+</tbody>
+</table>
+<h3 id="collection-flags-defaults">Collection Flags (Defaults)</h3>
+<table>
+<colgroup>
+<col style="width: 21%" />
+<col style="width: 32%" />
+<col style="width: 46%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>COLLECT_CONFIGS</code></td>
+<td>true</td>
+<td>Collect global configurations</td>
+</tr>
+<tr>
+<td><code>COLLECT_DASHBOARDS</code></td>
+<td>true</td>
+<td>Collect dashboards per app</td>
+</tr>
+<tr>
+<td><code>COLLECT_ALERTS</code></td>
+<td>true</td>
+<td>Collect saved searches and alerts per app</td>
+</tr>
+<tr>
+<td><code>COLLECT_RBAC</code></td>
+<td><strong>false</strong></td>
+<td>Global user/role data (use <code>--rbac</code> to enable)</td>
+</tr>
+<tr>
+<td><code>COLLECT_USAGE</code></td>
+<td><strong>true</strong></td>
+<td>Usage analytics collection</td>
+</tr>
+<tr>
+<td><code>COLLECT_INDEXES</code></td>
+<td>true</td>
+<td>Index metadata</td>
+</tr>
+<tr>
+<td><code>COLLECT_LOOKUPS</code></td>
+<td>false</td>
+<td>Download lookup table file contents</td>
+</tr>
+<tr>
+<td><code>COLLECT_AUDIT</code></td>
+<td>false</td>
+<td>Audit log collection</td>
+</tr>
+<tr>
+<td><code>ANONYMIZE_DATA</code></td>
+<td>true</td>
+<td>Run anonymization pass on export</td>
+</tr>
+<tr>
+<td><code>USAGE_PERIOD</code></td>
+<td>30d</td>
+<td>Time window for analytics queries</td>
+</tr>
+<tr>
+<td><code>SKIP_INTERNAL</code></td>
+<td>false</td>
+<td>Skip <code>_internal</code> index searches</td>
+</tr>
+</tbody>
+</table>
+<h3 id="blocked-endpoints">Blocked Endpoints</h3>
+<p>The following endpoints are known to be blocked or restricted in
+Splunk Cloud and are automatically skipped. When a request matches a
+blocked endpoint, the script returns an empty
+<code>{"entry": [], "skipped": true}</code> response without making a
+network call:</p>
+<pre><code>/services/licenser/licenses
+/services/licenser/pools
+/services/deployment/server/clients
+/services/cluster/master/info
+/services/cluster/master/peers
+/services/shcluster/captain/info
+/services/shcluster/captain/members
+/services/data/inputs/monitor
+/services/data/inputs/tcp/raw
+/services/data/inputs/tcp/cooked
+/services/data/inputs/udp</code></pre>
+<hr />
+<h2 id="authentication">4. Authentication</h2>
+<h3 id="token-authentication-recommended">4.1 Token Authentication
+(Recommended)</h3>
+<p>The script probes token validity by calling
+<code>/services/authentication/current-context?output_mode=json</code>
+with two prefixes in sequence:</p>
+<ol type="1">
+<li><strong>Bearer prefix</strong>:
+<code>Authorization: Bearer &lt;token&gt;</code></li>
+<li><strong>Splunk prefix</strong>:
+<code>Authorization: Splunk &lt;token&gt;</code></li>
 </ol>
-<p>
-<strong>Required Token Permissions</strong>:
-</p>
-<ul>
-<li><code>admin<em>all</em>objects</code></li>
-<li><code>list_users</code></li>
-<li><code>list_roles</code></li>
-<li><code>list_indexes</code></li>
-<li><code>search</code></li>
-<li><code>rest_access</code></li>
-</ul>
-<h3>2.3 Session Token Authentication</h3>
-<pre><code class="language-bash"># Step 1: Get session key
-SESSION_KEY=$(curl -k -u &quot;user:pass&quot; \
-  &quot;https://acme.splunkcloud.com:8089/services/auth/login&quot; \
-  -d &quot;username=user&amp;password=pass&quot; \
-  | grep -oP &#039;(?&lt;=&lt;sessionKey&gt;)[^&lt;]+&#039;)
+<p>The probe checks whether the response body contains the string
+<code>"username"</code>. The first prefix that succeeds is stored in
+<code>AUTH_HEADER</code> and used for all subsequent API calls.</p>
+<pre><code>POST https://&lt;stack&gt;:8089/services/authentication/current-context?output_mode=json
+Header: Authorization: Bearer &lt;token&gt;
 
-# Step 2: Use session key
-curl -k -H &quot;Authorization: Splunk $SESSION_KEY&quot; \
-  &quot;https://acme.splunkcloud.com:8089/services/server/info&quot;</code></pre>
-<h3>2.4 Authentication Decision Flow</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────┐
-│                   AUTHENTICATION FLOW                        │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Do you have an API Token?                                   │
-│   └─ YES → Use token-based auth (most secure)               │
-│   └─ NO  → Do you have username/password?                   │
-│             └─ YES → Is MFA required?                       │
-│                       └─ YES → Need MFA bypass or token    │
-│                       └─ NO  → Use basic auth               │
-│             └─ NO  → Cannot authenticate                    │
-└─────────────────────────────────────────────────────────────┘</code></pre>
-<hr>
-<h2>3. REST API Data Collection</h2>
-<h3>3.1 Collection Strategy</h3>
-<p>
-Since we cannot read files, all data must come from REST API endpoints. The strategy is:
-</p>
-<ol>
-<li><strong>Server & Environment Info</strong>: Direct REST calls</li>
-<li><strong>Apps & Configurations</strong>: Use <code>/configs/conf-{name}</code> endpoints</li>
-<li><strong>Knowledge Objects</strong>: Use <code>/servicesNS/-/-/</code> namespace</li>
-<li><strong>Users & RBAC</strong>: Use <code>/services/authentication/</code> and <code>/services/authorization/</code></li>
-<li><strong>Usage Analytics</strong>: Run searches against <code>_audit</code> index</li>
-<li><strong>Dashboards</strong>: Combine views endpoint with KV Store for Dashboard Studio</li>
+If response contains &quot;username&quot; -&gt; success, use Bearer prefix
+If not -&gt; retry with &quot;Splunk&quot; prefix
+If neither works -&gt; error: &quot;Token authentication failed (tried Bearer and Splunk prefixes)&quot;</code></pre>
+<p>Tokens created via Splunk Settings &gt; Tokens require the
+<code>Splunk</code> prefix. OAuth2/JWT tokens use
+<code>Bearer</code>.</p>
+<h3 id="usernamepassword-authentication">4.2 Username/Password
+Authentication</h3>
+<p>Sends a POST to <code>/services/auth/login?output_mode=json</code>
+with URL-encoded credentials:</p>
+<pre><code>POST https://&lt;stack&gt;:8089/services/auth/login?output_mode=json
+Body: username=&lt;url_encoded_user&gt;&amp;password=&lt;url_encoded_pass&gt;
+
+Success response: {&quot;sessionKey&quot;: &quot;&lt;session_key&gt;&quot;}</code></pre>
+<p>The session key is stored and used as
+<code>Authorization: Splunk &lt;session_key&gt;</code> for all
+subsequent calls. Password special characters (<code>$</code>, backtick,
+<code>"</code>, <code>\</code>) are handled via Python
+<code>urllib.parse.quote</code> piped through stdin to avoid shell
+interpretation.</p>
+<h3 id="required-capabilities">4.3 Required Capabilities</h3>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>admin_all_objects</code></td>
+<td>Access all knowledge objects across apps</td>
+</tr>
+<tr>
+<td><code>list_all_users</code></td>
+<td>Read user list</td>
+</tr>
+<tr>
+<td><code>search</code></td>
+<td>Dispatch analytics search jobs</td>
+</tr>
+</tbody>
+</table>
+<p>The script checks capabilities via
+<code>/services/authentication/current-context</code> after
+authentication and warns if any are missing.</p>
+<hr />
+<h2 id="api-communication-layer">5. API Communication Layer</h2>
+<h3 id="api_call-function">5.1 <code>api_call</code> Function</h3>
+<p>Every REST API interaction goes through a single
+<code>api_call</code> function with this signature:</p>
+<pre><code>api_call(endpoint, method, data)</code></pre>
+<p><strong>Request construction:</strong></p>
+<ul>
+<li>GET requests: Query parameters appended to URL
+(<code>${url}?${data}</code>)</li>
+<li>POST requests: Data sent as <code>-d</code> body with
+<code>Content-Type: application/x-www-form-urlencoded</code></li>
+<li>TLS verification disabled (<code>-k</code> flag) for self-signed
+certs</li>
+<li>Proxy support via <code>$CURL_PROXY_ARGS</code> when
+<code>--proxy</code> is set</li>
+</ul>
+<p><strong>Pre-request checks:</strong></p>
+<ol type="1">
+<li>Blocked endpoint list check – returns empty result immediately if
+matched</li>
+<li>Total runtime limit check – returns error if
+<code>MAX_TOTAL_TIME</code> exceeded</li>
+<li>Rate limit delay (<code>RATE_LIMIT_DELAY</code> sleep before each
+call)</li>
 </ol>
-<h3>3.2 Configuration Reconstruction</h3>
-<p>
-Since we can't read <code>props.conf</code> directly, we reconstruct it from REST:
-</p>
-<pre><code class="language-bash"># Get all props stanzas
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/servicesNS/-/-/configs/conf-props&quot; \
-  -d &quot;output_mode=json&quot; -d &quot;count=0&quot;
-
-# Get all transforms stanzas
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/servicesNS/-/-/configs/conf-transforms&quot; \
-  -d &quot;output_mode=json&quot; -d &quot;count=0&quot;</code></pre>
-<h3>3.3 Dashboard Collection</h3>
-<pre><code class="language-bash"># Classic Dashboards (SimpleXML)
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/servicesNS/-/-/data/ui/views&quot; \
-  -d &quot;output_mode=json&quot; -d &quot;count=0&quot;
-
-# For each dashboard, get the full definition
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/servicesNS/-/-/data/ui/views/{dashboard_name}&quot; \
-  -d &quot;output_mode=json&quot;
-
-# Dashboard Studio (stored in KV Store)
-# These are included in the views endpoint with isDashboardStudio=true</code></pre>
-<h3>3.4 Saved Searches & Alerts</h3>
-<pre><code class="language-bash"># Get all saved searches (includes alerts, reports, scheduled searches)
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/servicesNS/-/-/saved/searches&quot; \
-  -d &quot;output_mode=json&quot; -d &quot;count=0&quot;
-
-# Each result includes:
-# - Search query (SPL)
-# - Schedule (cron_schedule)
-# - Alert settings (alert.*, action.*)
-# - Owner and permissions</code></pre>
-<h3>3.5 Usage Analytics via Search</h3>
-<pre><code class="language-bash"># Create a search job to get usage analytics
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/services/search/jobs&quot; \
-  -d &quot;search=search index=_audit action=search earliest=-30d | stats count by user, savedsearch_name&quot; \
-  -d &quot;output_mode=json&quot;
-
-# Poll for completion
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/services/search/jobs/{sid}&quot;
-
-# Get results
-curl -k -u &quot;$USER:$PASS&quot; \
-  &quot;https://$STACK:8089/services/search/jobs/{sid}/results&quot; \
-  -d &quot;output_mode=json&quot; -d &quot;count=0&quot;</code></pre>
-<hr>
-<h2>4. API Endpoints Reference</h2>
-<h3>4.1 System Information</h3>
+<p><strong>Response handling by HTTP status code:</strong></p>
 <table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 62%" />
+</colgroup>
 <thead>
-<tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Code</th>
+<th>Behavior</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>/services/server/info</code></td><td>GET</td><td>Server version, OS, GUID</td></tr>
-<tr><td><code>/services/server/settings</code></td><td>GET</td><td>Server configuration</td></tr>
-<tr><td><code>/services/apps/local</code></td><td>GET</td><td>Installed apps list</td></tr>
-<tr><td><code>/services/licenser/licenses</code></td><td>GET</td><td>License information</td></tr>
+<tr>
+<td>200, 201</td>
+<td>Success – return response body</td>
+</tr>
+<tr>
+<td>000</td>
+<td>Timeout/connection error – retry with linear backoff
+(<code>retries * 2</code> seconds)</td>
+</tr>
+<tr>
+<td>429</td>
+<td>Rate limited – retry with exponential backoff
+(<code>retries * BACKOFF_MULTIPLIER * 2</code>, max 60s)</td>
+</tr>
+<tr>
+<td>401</td>
+<td>Auth failed – return error immediately (special message for session
+key rejection on SHC)</td>
+</tr>
+<tr>
+<td>403</td>
+<td>Forbidden – return error immediately</td>
+</tr>
+<tr>
+<td>404</td>
+<td>Not found – if app-scoped resource endpoint, return empty
+<code>{"entry": []}</code> silently; otherwise return error</td>
+</tr>
+<tr>
+<td>500, 502, 503</td>
+<td>Server error – retry with linear backoff (<code>retries * 2</code>
+seconds)</td>
+</tr>
+<tr>
+<td>Other</td>
+<td>Return error immediately</td>
+</tr>
 </tbody>
 </table>
-<h3>4.2 Knowledge Objects</h3>
+<p>After <code>MAX_RETRIES</code> exhausted, the call returns error.</p>
+<h3 id="api_call_paginated-function">5.2 <code>api_call_paginated</code>
+Function</h3>
+<p>For endpoints that may return large result sets:</p>
+<pre><code>api_call_paginated(endpoint, output_dir, category)</code></pre>
+<p><strong>Flow:</strong></p>
+<ol type="1">
+<li>Initial count request:
+<code>GET {endpoint}?output_mode=json&amp;count=1</code> – extracts
+<code>paging.total</code> from response</li>
+<li>If total is 0, return immediately</li>
+<li>Loop:
+<code>GET {endpoint}?output_mode=json&amp;count={BATCH_SIZE}&amp;offset={offset}</code></li>
+<li>Each batch saved as <code>batch_N.json</code> in
+<code>output_dir</code></li>
+<li>Sleep <code>RATE_LIMIT_DELAY</code> between batches</li>
+<li>Save checkpoint every <code>CHECKPOINT_INTERVAL</code> batches</li>
+<li>Progress displayed as percentage</li>
+</ol>
+<hr />
+<h2 id="connectivity-and-pre-flight-checks">6. Connectivity and
+Pre-flight Checks</h2>
+<h3 id="connectivity-test">6.1 Connectivity Test</h3>
+<p>Three-step diagnostic when connecting to a Splunk Cloud stack:</p>
+<p><strong>Step 1: DNS Resolution</strong> (skipped when proxy
+configured) - Uses <code>nslookup</code>, <code>host</code>, or
+<code>dig +short</code> to resolve the hostname - Extracts first IPv4
+address from output</p>
+<p><strong>Step 2: TCP Port Test</strong> (skipped when proxy
+configured) - Uses <code>nc -zv -w 10 &lt;hostname&gt; 8089</code> -
+Reports whether port 8089 is open or blocked</p>
+<p><strong>Step 3: HTTPS Connection</strong> -
+<code>curl -v -k --connect-timeout 15 --max-time 60 &lt;url&gt;/services/server/info</code>
+- Reports HTTP status code, DNS lookup time, TCP connect time, TLS
+handshake time, total time - Interprets curl exit codes: 6 (DNS), 7
+(connection refused), 28 (timeout), 35 (TLS), 52 (empty response), 56
+(network data failure)</p>
+<h3 id="test-access-mode---test-access">6.2 Test-Access Mode
+(<code>--test-access</code>)</h3>
+<p>Pre-flight check that tests API access across 9 categories without
+exporting any data. Each test makes a minimal API call
+(<code>count=1</code> or short time range) and records
+PASS/FAIL/WARN/SKIP with a severity level (CRITICAL, REQUIRED,
+OPTIONAL).</p>
+<p><strong>9 test categories in order:</strong></p>
 <table>
+<colgroup>
+<col style="width: 8%" />
+<col style="width: 27%" />
+<col style="width: 45%" />
+<col style="width: 18%" />
+</colgroup>
 <thead>
-<tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>#</th>
+<th>Category</th>
+<th>Endpoint Tested</th>
+<th>Level</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>/servicesNS/-/-/data/ui/views</code></td><td>GET</td><td>All dashboards</td></tr>
-<tr><td><code>/servicesNS/-/-/saved/searches</code></td><td>GET</td><td>All saved searches/alerts</td></tr>
-<tr><td><code>/servicesNS/-/-/admin/macros</code></td><td>GET</td><td>All search macros</td></tr>
-<tr><td><code>/servicesNS/-/-/saved/eventtypes</code></td><td>GET</td><td>All eventtypes</td></tr>
-<tr><td><code>/servicesNS/-/-/configs/conf-tags</code></td><td>GET</td><td>All tags</td></tr>
-<tr><td><code>/servicesNS/-/-/data/lookup-table-files</code></td><td>GET</td><td>Lookup file definitions</td></tr>
-<tr><td><code>/servicesNS/-/-/data/transforms/extractions</code></td><td>GET</td><td>Field extractions</td></tr>
+<tr>
+<td>1</td>
+<td>System Info</td>
+<td><code>/services/server/info</code></td>
+<td>CRITICAL</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Configurations</td>
+<td><code>/servicesNS/-/-/configs/conf-indexes</code></td>
+<td>REQUIRED</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Dashboards</td>
+<td><code>/servicesNS/-/{app}/data/ui/views</code></td>
+<td>REQUIRED</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Saved Searches / Alerts</td>
+<td><code>/servicesNS/-/{app}/saved/searches</code></td>
+<td>REQUIRED</td>
+</tr>
+<tr>
+<td>5</td>
+<td>RBAC</td>
+<td><code>/services/authentication/users</code> +
+<code>/services/authorization/roles</code></td>
+<td>OPTIONAL</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Knowledge Objects</td>
+<td><code>/servicesNS/-/{app}/admin/macros</code> +
+<code>conf-props</code> + <code>lookup-table-files</code></td>
+<td>REQUIRED</td>
+</tr>
+<tr>
+<td>7</td>
+<td>App Analytics</td>
+<td><code>search index=_audit action=search ... earliest=-1h \| head 1</code></td>
+<td>OPTIONAL</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Usage Analytics</td>
+<td><code>search index=_internal sourcetype=scheduler earliest=-1h \| head 1</code></td>
+<td>OPTIONAL</td>
+</tr>
+<tr>
+<td>9</td>
+<td>Indexes</td>
+<td><code>/services/data/indexes</code></td>
+<td>REQUIRED</td>
+</tr>
 </tbody>
 </table>
-<h3>4.3 Configurations (Reconstructed)</h3>
+<p><strong>Exit codes:</strong> 0 = all pass, 1 = critical failure, 2 =
+some failures.</p>
+<p>If test #1 (System Info) fails, all remaining tests are skipped and
+the script exits immediately.</p>
+<hr />
+<h2 id="collection-phases">7. Collection Phases</h2>
+<p>The export runs the following phases in strict order. Each phase is
+gated by its corresponding collection flag.</p>
+<h3 id="phase-1-export-directory-setup">Phase 1: Export Directory
+Setup</h3>
+<p>Creates the directory tree:</p>
+<pre><code>dma_cloud_export_&lt;stack&gt;_&lt;YYYYMMDD_HHMMSS&gt;/
+  _export.log
+  dma_analytics/
+    system_info/
+    rbac/
+    usage_analytics/
+      ingestion_infrastructure/
+    indexes/
+  _configs/</code></pre>
+<h3 id="phase-2-system-information-collection">Phase 2: System
+Information Collection</h3>
 <table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 43%" />
+<col style="width: 23%" />
+</colgroup>
 <thead>
-<tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Endpoint</th>
+<th>Output File</th>
+<th>Notes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>/servicesNS/-/-/configs/conf-props</code></td><td>GET</td><td>Props.conf equivalent</td></tr>
-<tr><td><code>/servicesNS/-/-/configs/conf-transforms</code></td><td>GET</td><td>Transforms.conf equivalent</td></tr>
-<tr><td><code>/servicesNS/-/-/configs/conf-indexes</code></td><td>GET</td><td>Indexes.conf equivalent</td></tr>
-<tr><td><code>/servicesNS/-/-/configs/conf-inputs</code></td><td>GET</td><td>Inputs.conf equivalent</td></tr>
-<tr><td><code>/servicesNS/-/-/configs/conf-outputs</code></td><td>GET</td><td>Outputs.conf equivalent</td></tr>
-<tr><td><code>/servicesNS/-/-/configs/conf-savedsearches</code></td><td>GET</td><td>Savedsearches.conf equivalent</td></tr>
+<tr>
+<td><code>/services/server/info</code></td>
+<td><code>dma_analytics/system_info/server_info.json</code></td>
+<td>Version, OS, GUID</td>
+</tr>
+<tr>
+<td><code>/services/apps/local?count=0</code></td>
+<td><code>dma_analytics/system_info/installed_apps.json</code></td>
+<td>All apps</td>
+</tr>
+<tr>
+<td><code>/services/licenser/licenses</code></td>
+<td><code>dma_analytics/system_info/license_info.json</code></td>
+<td>May be blocked</td>
+</tr>
+<tr>
+<td><code>/services/server/settings</code></td>
+<td><code>dma_analytics/system_info/server_settings.json</code></td>
+<td>Server config</td>
+</tr>
 </tbody>
 </table>
-<h3>4.4 Users & RBAC</h3>
+<h3 id="phase-3-configuration-collection">Phase 3: Configuration
+Collection</h3>
+<p>Only truly global configurations are collected here (per-app configs
+are in Phase 6):</p>
 <table>
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 38%" />
+<col style="width: 30%" />
+</colgroup>
 <thead>
-<tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
+<tr>
+<th>Config</th>
+<th>Endpoint</th>
+<th>Output</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>/services/authentication/users</code></td><td>GET</td><td>All users</td></tr>
-<tr><td><code>/services/authorization/roles</code></td><td>GET</td><td>All roles</td></tr>
-<tr><td><code>/services/authentication/current-context</code></td><td>GET</td><td>Current user context</td></tr>
-<tr><td><code>/services/admin/SAML-groups</code></td><td>GET</td><td>SAML group mappings</td></tr>
+<tr>
+<td>indexes</td>
+<td><code>/servicesNS/-/-/configs/conf-indexes?output_mode=json&amp;count=0</code></td>
+<td><code>_configs/indexes.json</code></td>
+</tr>
+<tr>
+<td>inputs</td>
+<td><code>/servicesNS/-/-/configs/conf-inputs?output_mode=json&amp;count=0</code></td>
+<td><code>_configs/inputs.json</code></td>
+</tr>
+<tr>
+<td>outputs</td>
+<td><code>/servicesNS/-/-/configs/conf-outputs?output_mode=json&amp;count=0</code></td>
+<td><code>_configs/outputs.json</code></td>
+</tr>
 </tbody>
 </table>
-<h3>4.5 Indexes & Data</h3>
-<table>
-<thead>
-<tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
-</thead>
-<tbody>
-<tr><td><code>/services/data/indexes</code></td><td>GET</td><td>Index list and settings</td></tr>
-<tr><td><code>/services/data/indexes-extended</code></td><td>GET</td><td>Extended index stats</td></tr>
-<tr><td><code>/services/catalog/metricstore/dimensions</code></td><td>GET</td><td>Metric dimensions</td></tr>
-</tbody>
-</table>
-<h3>4.6 Search for Analytics</h3>
-<table>
-<thead>
-<tr><th>Endpoint</th><th>Method</th><th>Purpose</th></tr>
-</thead>
-<tbody>
-<tr><td><code>/services/search/jobs</code></td><td>POST</td><td>Create search job</td></tr>
-<tr><td><code>/services/search/jobs/{sid}</code></td><td>GET</td><td>Check job status</td></tr>
-<tr><td><code>/services/search/jobs/{sid}/results</code></td><td>GET</td><td>Get search results</td></tr>
-</tbody>
-</table>
-<hr>
-<h2>5. Script Flow</h2>
-<h3>5.1 Complete Script Flow</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────────────┐
-│                         SCRIPT START                                 │
-│                                                                      │
-│  • Display banner                                                   │
-│  • Check prerequisites (curl, jq recommended)                       │
-│  • Explain this is for Splunk Cloud                                 │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 1: SPLUNK CLOUD CONNECTION                                     │
-│                                                                      │
-│ ╔════════════════════════════════════════════════════════════════╗  │
-│ ║  WHY WE ASK:                                                    ║  │
-│ ║  We need to connect to your Splunk Cloud instance via REST API. ║  │
-│ ║  This is the only way to access Splunk Cloud data - there is    ║  │
-│ ║  no file system or SSH access to Splunk Cloud infrastructure.   ║  │
-│ ╚════════════════════════════════════════════════════════════════╝  │
-│                                                                      │
-│ [PROMPT] Enter your Splunk Cloud stack URL:                        │
-│   Example: acme-corp.splunkcloud.com                                │
-│   &gt; _______________                                                  │
-│                                                                      │
-│ Testing connection to https://acme-corp.splunkcloud.com:8089...     │
-│ ✓ Splunk Cloud instance reachable                                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 2: AUTHENTICATION                                              │
-│                                                                      │
-│ ╔════════════════════════════════════════════════════════════════╗  │
-│ ║  WHY WE ASK:                                                    ║  │
-│ ║  REST API access requires authentication. You can use either:   ║  │
-│ ║  • Username/Password (your Splunk Cloud login)                  ║  │
-│ ║  • API Token (more secure, recommended)                         ║  │
-│ ║                                                                 ║  │
-│ ║  REQUIRED PERMISSIONS:                                          ║  │
-│ ║  • admin_all_objects - Access all knowledge objects             ║  │
-│ ║  • list_users, list_roles - Access RBAC data                    ║  │
-│ ║  • search - Run analytics queries                               ║  │
-│ ╚════════════════════════════════════════════════════════════════╝  │
-│                                                                      │
-│ [PROMPT] Authentication method:                                      │
-│   1. Username/Password                                               │
-│   2. API Token (recommended)                                         │
-│                                                                      │
-│ [If option 1]:                                                       │
-│   Enter username: admin                                              │
-│   Enter password: ********                                           │
-│                                                                      │
-│ [If option 2]:                                                       │
-│   Enter API token: ********                                          │
-│                                                                      │
-│ Testing authentication...                                            │
-│ ✓ Authentication successful                                         │
-│ ✓ User: admin@acme-corp.com                                         │
-│ ✓ Capabilities: admin_all_objects, list_users, search               │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 3: ENVIRONMENT DETECTION                                       │
-│                                                                      │
-│ Detecting Splunk Cloud environment...                                │
-│                                                                      │
-│ ┌────────────────────────────────────────────────────────────────┐  │
-│ │ Detected Environment:                                          │  │
-│ │   Stack: acme-corp.splunkcloud.com                             │  │
-│ │   Type: Splunk Cloud Victoria Experience                       │  │
-│ │   Version: 9.1.2312                                            │  │
-│ │   GUID: ABC123-DEF456-...                                      │  │
-│ │   Apps: 45 installed                                           │  │
-│ │   Users: 150                                                   │  │
-│ └────────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│ [PROMPT] Is this the correct environment? (Y/n)                     │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 4: APPLICATION SELECTION                                       │
-│                                                                      │
-│ [Same as Enterprise script - list apps, allow selection]            │
-│                                                                      │
-│   1. Export ALL applications (Recommended)                          │
-│   2. Enter specific app names (comma-separated)                     │
-│   3. Select from numbered list                                      │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 5: DATA CATEGORIES                                             │
-│                                                                      │
-│ [Same categories as Enterprise, but note Cloud limitations]         │
-│                                                                      │
-│ [✓] 1. Configurations (via REST - reconstructed from API)          │
-│ [✓] 2. Dashboards (Classic + Dashboard Studio)                      │
-│ [✓] 3. Alerts &amp; Saved Searches                                      │
-│ [✓] 4. Users &amp; RBAC                                                 │
-│ [✓] 5. Usage Analytics (via search on _audit)                       │
-│ [✓] 6. Index Statistics                                             │
-│ [ ] 7. Lookup Table Contents (may be large)                         │
-│                                                                      │
-│ Note: Some data may be limited due to Cloud restrictions            │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 6: DATA COLLECTION                                             │
-│                                                                      │
-│ [1/10] Collecting server information...              ✓              │
-│ [2/10] Collecting installed apps...                  ✓              │
-│ [3/10] Collecting configurations via REST...         ⏳ 45%         │
-│        └─ props.conf (via /configs/conf-props)                      │
-│        └─ transforms.conf (via /configs/conf-transforms)            │
-│ [4/10] Collecting dashboards...                      ○              │
-│ [5/10] Collecting saved searches &amp; alerts...         ○              │
-│ [6/10] Collecting users and roles...                 ○              │
-│ [7/10] Running usage analytics searches...           ○              │
-│ [8/10] Collecting index statistics...                ○              │
-│ [9/10] Collecting macros &amp; eventtypes...             ○              │
-│ [10/10] Generating summary report...                 ○              │
-│                                                                      │
-│ Note: Some API calls may be rate-limited. Please be patient.        │
-└─────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│ STEP 7: ARCHIVE CREATION &amp; COMPLETION                               │
-│                                                                      │
-│ Creating compressed archive...                                       │
-│ ✓ Archive created: ./dma_cloud_export_acme_20240115.tar.gz  │
-│ ✓ Size: 125 MB                                                      │
-│                                                                      │
-│ NEXT STEPS:                                                         │
-│ 1. Upload this file to DMA in Dynatrace                             │
-│ 2. The export format is compatible with Enterprise exports          │
-└─────────────────────────────────────────────────────────────────────┘</code></pre>
-<hr>
-<h2>6. Output Structure</h2>
-<h3>6.1 Directory Structure</h3>
-<p>
-The output structure matches the Enterprise export for DMA compatibility:
-</p>
-<pre><code>dma_cloud_export_[stack]_[timestamp]/
-│
-├── dma-env-summary.md          # Master summary
-├── _metadata.json                      # Export metadata
-├── _environment_profile.json           # Cloud environment details
-│
-├── _systeminfo/
-│   ├── server_info.json               # From /services/server/info
-│   ├── installed_apps.json            # From /services/apps/local
-│   └── license_info.json              # From /services/licenser/licenses
-│
-├── _rbac/
-│   ├── users.json                     # From /services/authentication/users
-│   ├── roles.json                     # From /services/authorization/roles
-│   └── saml_groups.json               # From /services/admin/SAML-groups
-│
-├── _usage_analytics/
-│   ├── search_activity.json           # From search on _audit
-│   ├── dashboard_usage.json           # From search on _internal
-│   └── alert_metrics.json             # From search on _audit
-│
-├── _indexes/
-│   └── indexes.json                   # From /services/data/indexes
-│
-├── _configs/                          # Reconstructed from REST
-│   ├── props.json                     # From /configs/conf-props
-│   ├── transforms.json                # From /configs/conf-transforms
-│   ├── indexes.json                   # From /configs/conf-indexes
-│   └── inputs.json                    # From /configs/conf-inputs
-│
-└── [app_name]/                        # Per-app data (v2 app-centric structure)
-    ├── app_info.json                  # App metadata
-    ├── dashboards/                    # v2: App-scoped dashboards (v4.2.0+)
-    │   ├── classic/                   # Classic XML dashboards for this app
-    │   │   └── *.xml
-    │   └── studio/                    # Dashboard Studio JSON for this app
-    │       └── *.json
-    ├── savedsearches.json             # Alerts and saved searches
-    ├── macros.json                    # Search macros
-    ├── eventtypes.json                # Event types
-    ├── tags.json                      # Tags
-    ├── lookups/                       # Lookup definitions
-    │   ├── lookup_files.json
-    │   └── [lookup_name].csv          # If content collection enabled
-    └── field_extractions.json         # Field extractions</code></pre>
-<h3>6.2 Updated Output Structure (v4.0.0)</h3>
-<p>
-The v4.0.0 output includes additional usage intelligence files:
-</p>
-<pre><code>dma_cloud_export_[stack]_[timestamp]/
-│
-├── manifest.json                         # Standardized metadata schema
-├── dma-env-summary.md             # Human-readable summary report
-│
-├── _usage_analytics/
-│   ├── search_activity.json              # Search frequency data
-│   ├── dashboard_usage.json              # Dashboard view metrics
-│   ├── alert_metrics.json                # Alert trigger statistics
-│   ├── dashboard_ownership.json          # Dashboard → owner mapping
-│   ├── alert_ownership.json              # Alert → owner mapping
-│   ├── ownership_summary.json            # Ownership by user summary
-│   ├── top_indexes_by_volume.json        # Volume analysis
-│   ├── top_sourcetypes_by_volume.json    # Sourcetype volume data
-│   ├── top_hosts_by_volume.json          # Host volume data
-│   ├── zero_view_dashboards.json         # Elimination candidates
-│   └── never_fired_alerts.json           # Elimination candidates
-│
-└── [other directories as before]</code></pre>
-<hr>
-<h2>7. Usage Intelligence</h2>
-<h3>7.1 Ownership Mapping</h3>
-<p>
-The script collects ownership information for user-centric migration planning:
-</p>
-<pre><code class="language-json">// dashboard_ownership.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;dashboard&quot;: &quot;security_overview&quot;,
-      &quot;app&quot;: &quot;security_app&quot;,
-      &quot;owner&quot;: &quot;security_team&quot;,
-      &quot;sharing&quot;: &quot;app&quot;
-    }
-  ]
-}
-
-// alert_ownership.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;alert&quot;: &quot;critical_security_alert&quot;,
-      &quot;app&quot;: &quot;security_app&quot;,
-      &quot;owner&quot;: &quot;security_team&quot;,
-      &quot;is_scheduled&quot;: true
-    }
-  ]
-}
-
-// ownership_summary.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;owner&quot;: &quot;security_team&quot;,
-      &quot;dashboard_count&quot;: 32,
-      &quot;alert_count&quot;: 45
-    }
-  ]
-}</code></pre>
-<h3>7.2 Volume Analysis</h3>
-<p>
-Daily ingestion volume analysis for capacity planning:
-</p>
-<pre><code class="language-json">// top_indexes_by_volume.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;index&quot;: &quot;main&quot;,
-      &quot;total_gb&quot;: 12.34,
-      &quot;event_count&quot;: 123456789
-    }
-  ]
-}
-
-// top_sourcetypes_by_volume.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;sourcetype&quot;: &quot;access_combined&quot;,
-      &quot;total_gb&quot;: 5.67,
-      &quot;event_count&quot;: 45678901
-    }
-  ]
-}</code></pre>
-<h3>7.3 Elimination Candidates</h3>
-<p>
-Identifies unused assets that may be candidates for retirement:
-</p>
-<p>
-<strong>Dashboards with Zero Views:</strong>
-</p>
-<pre><code class="language-json">// zero_view_dashboards.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;dashboard&quot;: &quot;old_unused_dashboard&quot;,
-      &quot;app&quot;: &quot;legacy_app&quot;,
-      &quot;owner&quot;: &quot;departed_user&quot;,
-      &quot;views_30d&quot;: 0
-    }
-  ]
-}</code></pre>
-<p>
-<strong>Alerts That Never Fired:</strong>
-</p>
-<pre><code class="language-json">// never_fired_alerts.json
-{
-  &quot;results&quot;: [
-    {
-      &quot;alert&quot;: &quot;never_triggered_alert&quot;,
-      &quot;app&quot;: &quot;test_app&quot;,
-      &quot;owner&quot;: &quot;test_user&quot;,
-      &quot;triggers_30d&quot;: 0
-    }
-  ]
-}</code></pre>
-<hr>
-<h2>8. Manifest Schema</h2>
-<h3>8.1 Guaranteed manifest.json Schema</h3>
-<p>
-The script generates a standardized <code>manifest.json</code> file with a guaranteed schema for DMA consumption:
-</p>
-<pre><code class="language-json">{
-  &quot;schemaVersion&quot;: &quot;4.1.0&quot;,
-  &quot;exportType&quot;: &quot;splunk_cloud&quot;,
-  &quot;exportTimestamp&quot;: &quot;2025-12-03T10:30:00Z&quot;,
-  &quot;scriptVersion&quot;: &quot;4.1.0&quot;,
-
-  &quot;cloudEnvironment&quot;: {
-    &quot;stackUrl&quot;: &quot;acme-corp.splunkcloud.com&quot;,
-    &quot;stackType&quot;: &quot;victoria&quot;,
-    &quot;splunkVersion&quot;: &quot;9.1.2312&quot;,
-    &quot;serverGuid&quot;: &quot;ABC123-DEF456-...&quot;,
-    &quot;cloudRegion&quot;: &quot;aws-us-west-2&quot;
-  },
-
-  &quot;authentication&quot;: {
-    &quot;method&quot;: &quot;api_token&quot;,
-    &quot;username&quot;: &quot;admin@acme-corp.com&quot;,
-    &quot;capabilities&quot;: [&quot;admin_all_objects&quot;, &quot;list_users&quot;, &quot;search&quot;]
-  },
-
-  &quot;collection&quot;: {
-    &quot;apps&quot;: 45,
-    &quot;dashboards&quot;: 245,
-    &quot;alerts&quot;: 187,
-    &quot;users&quot;: 150,
-    &quot;indexes&quot;: 32,
-    &quot;apiCallsMade&quot;: 523,
-    &quot;rateLimitHits&quot;: 3,
-    &quot;errors&quot;: 0,
-    &quot;warnings&quot;: 5
-  },
-
-  &quot;usageIntelligence&quot;: {
-    &quot;analysisPeriod&quot;: &quot;30d&quot;,
-    &quot;totalSearches&quot;: 45678,
-    &quot;totalDashboardViews&quot;: 12345,
-    &quot;totalAlertTriggers&quot;: 4567,
-    &quot;topIndexesByVolume&quot;: [...],
-    &quot;topSourcetypesByVolume&quot;: [...],
-    &quot;topHostsByVolume&quot;: [...],
-    &quot;elimination_candidates&quot;: {
-      &quot;zeroDashboards&quot;: 12,
-      &quot;neverFiredAlerts&quot;: 23
-    }
-  },
-
-  &quot;exportDuration&quot;: {
-    &quot;startTime&quot;: &quot;2025-12-03T10:25:00Z&quot;,
-    &quot;endTime&quot;: &quot;2025-12-03T10:32:45Z&quot;,
-    &quot;durationSeconds&quot;: 465
-  }
-}</code></pre>
-<h3>8.2 Schema Versioning</h3>
-<table>
-<thead>
-<tr><th>Schema Version</th><th>Script Version</th><th>Key Changes</th></tr>
-</thead>
-<tbody>
-<tr><td>1.0.0</td><td>1.0.0</td><td>Initial schema</td></tr>
-<tr><td>3.0.0</td><td>3.0.0</td><td>Added usage analytics</td></tr>
-<tr><td>3.5.0</td><td>3.5.0</td><td>Added ownership mapping, elimination candidates, volume analysis</td></tr>
-<tr><td>4.0.0</td><td>4.0.0</td><td>Enterprise resilience: paginated APIs, checkpoints, extended timeouts, timing stats</td></tr>
-</tbody>
-</table>
-<hr>
-<h2>9. Rate Limiting & Throttling</h2>
-<h3>9.1 Splunk Cloud API Limits</h3>
-<p>
-Splunk Cloud may enforce rate limits on REST API calls:
-</p>
-<table>
-<thead>
-<tr><th>Limit Type</th><th>Typical Value</th><th>Handling Strategy</th></tr>
-</thead>
-<tbody>
-<tr><td>Requests per minute</td><td>100-500</td><td>Exponential backoff</td></tr>
-<tr><td>Concurrent connections</td><td>10-50</td><td>Sequential processing</td></tr>
-<tr><td>Response size</td><td>50MB</td><td>Pagination</td></tr>
-<tr><td>Search concurrency</td><td>5-10</td><td>Queue searches</td></tr>
-</tbody>
-</table>
-<h3>9.2 Rate Limit Detection</h3>
-<pre><code class="language-bash"># HTTP 429 indicates rate limiting
-if [ &quot;$http_code&quot; = &quot;429&quot; ]; then
-  retry_after=$(echo &quot;$headers&quot; | grep -i &quot;Retry-After&quot; | cut -d: -f2)
-  sleep $retry_after
-  # Retry request
-fi</code></pre>
-<h3>9.3 Throttling Strategy</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────┐
-│                    THROTTLING STRATEGY                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  1. Start with normal request rate                          │
-│                                                              │
-│  2. On 429 response:                                        │
-│     • Check Retry-After header                              │
-│     • Wait specified time (or default 60s)                  │
-│     • Reduce request rate by 50%                            │
-│     • Retry request                                         │
-│                                                              │
-│  3. Implement exponential backoff:                          │
-│     • 1st retry: wait 1 second                              │
-│     • 2nd retry: wait 2 seconds                             │
-│     • 3rd retry: wait 4 seconds                             │
-│     • Max: wait 60 seconds                                  │
-│                                                              │
-│  4. For large collections (&gt;1000 items):                    │
-│     • Use pagination (count=100, offset=N)                  │
-│     • Add 100ms delay between pages                         │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘</code></pre>
-<hr>
-<h2>10. Error Handling</h2>
-<h3>10.1 Common Errors</h3>
-<table>
-<thead>
-<tr><th>HTTP Code</th><th>Meaning</th><th>Handling</th></tr>
-</thead>
-<tbody>
-<tr><td>401</td><td>Unauthorized</td><td>Check credentials, re-authenticate</td></tr>
-<tr><td>403</td><td>Forbidden</td><td>Check capabilities/permissions</td></tr>
-<tr><td>404</td><td>Not Found</td><td>Skip resource, log warning</td></tr>
-<tr><td>429</td><td>Rate Limited</td><td>Apply backoff, retry</td></tr>
-<tr><td>500</td><td>Server Error</td><td>Retry with backoff</td></tr>
-<tr><td>503</td><td>Service Unavailable</td><td>Wait, retry</td></tr>
-</tbody>
-</table>
-<h3>10.2 Error Response Format</h3>
-<pre><code class="language-json">{
-  &quot;errors&quot;: [
-    {
-      &quot;timestamp&quot;: &quot;2025-12-03T10:32:15Z&quot;,
-      &quot;endpoint&quot;: &quot;/servicesNS/-/-/data/ui/views&quot;,
-      &quot;httpStatus&quot;: 403,
-      &quot;message&quot;: &quot;Capability &#039;admin_all_objects&#039; required&quot;,
-      &quot;severity&quot;: &quot;error&quot;,
-      &quot;impact&quot;: &quot;Dashboards will not be collected&quot;,
-      &quot;resolution&quot;: &quot;Grant &#039;admin_all_objects&#039; to the user/token&quot;
-    }
-  ],
-  &quot;warnings&quot;: [...],
-  &quot;skipped&quot;: [...]
-}</code></pre>
-<h3>10.3 Graceful Degradation</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────┐
-│                   GRACEFUL DEGRADATION                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  If endpoint fails:                                         │
-│  1. Log the error with details                              │
-│  2. Continue with other endpoints                           │
-│  3. Mark that data category as incomplete                   │
-│  4. Include error in summary report                         │
-│  5. Suggest resolution in final output                      │
-│                                                              │
-│  Never fail the entire export for a single endpoint error   │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘</code></pre>
-<hr>
-<h2>11. Security Considerations</h2>
-<h3>11.1 Credential Handling</h3>
-<pre><code>┌─────────────────────────────────────────────────────────────┐
-│                   CREDENTIAL SECURITY                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  DO:                                                        │
-│  ✓ Use API tokens instead of passwords when possible        │
-│  ✓ Clear credentials from memory after use                  │
-│  ✓ Use HTTPS for all API calls                             │
-│  ✓ Validate SSL certificates (warn if skipping)            │
-│                                                              │
-│  DO NOT:                                                    │
-│  ✗ Store credentials in the export file                    │
-│  ✗ Log credentials in any output                           │
-│  ✗ Pass credentials as command-line arguments               │
-│  ✗ Store credentials in environment variables permanently   │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘</code></pre>
-<h3>11.2 Data Sensitivity</h3>
-<table>
-<thead>
-<tr><th>Data Type</th><th>Sensitivity</th><th>Handling</th></tr>
-</thead>
-<tbody>
-<tr><td>API Token</td><td>Critical</td><td>Never stored, cleared after use</td></tr>
-<tr><td>Password</td><td>Critical</td><td>Never stored, cleared after use</td></tr>
-<tr><td>User emails</td><td>Medium</td><td>Collected, marked as PII</td></tr>
-<tr><td>User names</td><td>Medium</td><td>Collected, marked as PII</td></tr>
-<tr><td>Search queries</td><td>Medium</td><td>May contain sensitive terms</td></tr>
-<tr><td>Dashboard names</td><td>Low</td><td>Collected</td></tr>
-<tr><td>Index names</td><td>Low</td><td>Collected</td></tr>
-</tbody>
-</table>
-<h3>11.3 Network Security</h3>
-<pre><code class="language-bash"># Always use HTTPS
-URL=&quot;https://${STACK}.splunkcloud.com:8089&quot;
-
-# Verify SSL certificate (default)
-curl &quot;$URL/services/server/info&quot;
-
-# If custom CA or self-signed (warn user)
-curl -k &quot;$URL/services/server/info&quot;  # Not recommended</code></pre>
-<hr>
-<h2>PowerShell Edition</h2>
-<h3>Overview</h3>
-<p>
-<strong><code>dma-splunk-cloud-export.ps1</code></strong> v4.3.0 provides identical export functionality for Windows environments. It requires zero external dependencies -- no Python, no curl, no jq. It uses native PowerShell cmdlets for all operations.
-</p>
+<p>Props, transforms, and savedsearches are NOT collected globally. They
+are collected per-app in Phase 6 to avoid dumping data from all 400+
+apps.</p>
+<h3 id="phase-4-dashboard-collection">Phase 4: Dashboard Collection</h3>
+<p>For each selected app:</p>
+<ol type="1">
+<li>Create directory structure: <code>{app}/dashboards/classic/</code>
+and <code>{app}/dashboards/studio/</code></li>
+<li>Fetch app dashboards:
+<code>GET /servicesNS/-/{app}/data/ui/views?output_mode=json&amp;count=0&amp;search=eai:acl.app={app}</code></li>
+<li>Save master list to
+<code>{app}/dashboards/dashboard_list.json</code></li>
+<li>For each dashboard name, fetch full detail:
+<code>GET /servicesNS/-/{app}/data/ui/views/{name}?output_mode=json</code></li>
+</ol>
+<p><strong>Dashboard type detection:</strong></p>
 <ul>
-<li><strong>PowerShell 5.1+</strong> (Windows PowerShell, included with Windows 10/Server 2016+)</li>
-<li><strong>PowerShell 7+</strong> (cross-platform -- Windows, macOS, Linux)</li>
+<li><strong>Dashboard Studio v2</strong>: Contains
+<code>version="2"</code> in XML, or <code>splunk-dashboard-studio</code>
+reference, or <code>eai:data</code> starts with <code>{</code></li>
+<li><strong>Classic</strong>: <code>&lt;dashboard&gt;</code> or
+<code>&lt;form&gt;</code> without <code>version="2"</code></li>
 </ul>
-<h3>Parameter Mapping (Bash to PowerShell)</h3>
+<p>Studio dashboards saved to
+<code>{app}/dashboards/studio/{name}.json</code>. If the dashboard has a
+<code>&lt;definition&gt;</code> CDATA block containing JSON, the JSON is
+extracted via Python and saved as
+<code>{name}_definition.json</code>.</p>
+<p>Classic dashboards saved to
+<code>{app}/dashboards/classic/{name}.json</code>.</p>
+<p>Also saves a global master list:
+<code>dma_analytics/system_info/all_dashboards.json</code> from
+<code>GET /servicesNS/-/-/data/ui/views?output_mode=json&amp;count=0</code>.</p>
+<h3 id="phase-5-alert-and-saved-search-collection">Phase 5: Alert and
+Saved Search Collection</h3>
+<p>For each selected app:</p>
+<ol type="1">
+<li>Fetch:
+<code>GET /servicesNS/-/{app}/saved/searches?output_mode=json&amp;count=0</code></li>
+<li>Filter by <code>acl.app == {app}</code> (via <code>jq</code> if
+available) to exclude globally-shared searches</li>
+<li>Save to <code>{app}/savedsearches.json</code></li>
+</ol>
+<p><strong>Alert detection logic</strong> (matches TypeScript parser –
+single source of truth):</p>
+<p>A saved search is classified as an alert if ANY of these are true: -
+<code>alert.track</code> is <code>1</code> or <code>true</code> -
+<code>alert_type</code> is <code>always</code>, <code>custom</code>, or
+starts with <code>number of</code> - <code>alert_condition</code> is
+non-empty - <code>alert_comparator</code> is non-empty -
+<code>alert_threshold</code> is non-empty - <code>counttype</code>
+contains <code>number of</code> - <code>actions</code> has any non-empty
+value - Any <code>action.*</code> key (<code>action.email</code>,
+<code>action.webhook</code>, <code>action.script</code>,
+<code>action.slack</code>, <code>action.pagerduty</code>,
+<code>action.summary_index</code>, <code>action.populate_lookup</code>)
+is <code>1</code> or <code>true</code></p>
+<h3 id="phase-6-knowledge-object-collection">Phase 6: Knowledge Object
+Collection</h3>
+<p>For each selected app, the following endpoints are called. All
+responses are filtered by <code>acl.app == {app}</code> to include only
+objects owned by the app:</p>
 <table>
+<colgroup>
+<col style="width: 41%" />
+<col style="width: 32%" />
+<col style="width: 25%" />
+</colgroup>
 <thead>
-<tr><th>Bash</th><th>PowerShell</th><th>Description</th></tr>
+<tr>
+<th>Object Type</th>
+<th>Endpoint</th>
+<th>Output</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>--stack URL</code></td><td><code>-Stack URL</code></td><td>Splunk Cloud stack URL</td></tr>
-<tr><td><code>--token TOKEN</code></td><td><code>-Token TOKEN</code></td><td>API bearer token</td></tr>
-<tr><td><code>--user USER</code></td><td><code>-User USER</code></td><td>Username for basic auth</td></tr>
-<tr><td><code>--password PASS</code></td><td><code>-Password PASS</code></td><td>Password for basic auth</td></tr>
-<tr><td><code>--all-apps</code></td><td><code>-AllApps</code></td><td>Export all apps</td></tr>
-<tr><td><code>--apps LIST</code></td><td><code>-Apps LIST</code></td><td>Comma-separated app names</td></tr>
-<tr><td><code>--rbac</code></td><td><code>-Rbac</code></td><td>Enable RBAC collection</td></tr>
-<tr><td><code>--usage</code></td><td><code>-Usage</code></td><td>Enable usage analytics collection</td></tr>
-<tr><td><code>--scoped</code></td><td><em>(auto)</em></td><td>Auto-scoped when <code>-Apps</code> is specified</td></tr>
-<tr><td><code>--skip-internal</code></td><td><code>-SkipInternal</code></td><td>Skip <code>_internal</code> searches</td></tr>
-<tr><td><code>--resume-collect FILE</code></td><td><code>-ResumeCollect FILE</code></td><td>Resume from a previous archive</td></tr>
-<tr><td><code>--proxy URL</code></td><td><code>-Proxy URL</code></td><td>Route all connections through a proxy server</td></tr>
-<tr><td><code>-d, --debug</code></td><td><code>-Debug_Mode</code></td><td>Enable debug logging</td></tr>
-<tr><td><code>--output DIR</code></td><td><code>-Output DIR</code></td><td>Output directory</td></tr>
-<tr><td><code>--help</code></td><td><code>-ShowHelp</code></td><td>Show help message</td></tr>
+<tr>
+<td>Macros</td>
+<td><code>/servicesNS/-/{app}/admin/macros?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/macros.json</code></td>
+</tr>
+<tr>
+<td>Eventtypes</td>
+<td><code>/servicesNS/-/{app}/saved/eventtypes?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/eventtypes.json</code></td>
+</tr>
+<tr>
+<td>Tags</td>
+<td><code>/servicesNS/-/{app}/configs/conf-tags?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/tags.json</code></td>
+</tr>
+<tr>
+<td>Field Extractions</td>
+<td><code>/servicesNS/-/{app}/data/transforms/extractions?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/field_extractions.json</code></td>
+</tr>
+<tr>
+<td>Data Inputs</td>
+<td><code>/servicesNS/-/{app}/data/inputs/all?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/inputs.json</code></td>
+</tr>
+<tr>
+<td>Props</td>
+<td><code>/servicesNS/-/{app}/configs/conf-props?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/props.json</code></td>
+</tr>
+<tr>
+<td>Transforms</td>
+<td><code>/servicesNS/-/{app}/configs/conf-transforms?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/transforms.json</code></td>
+</tr>
+<tr>
+<td>Lookups</td>
+<td><code>/servicesNS/-/{app}/data/lookup-table-files?output_mode=json&amp;count=0</code></td>
+<td><code>{app}/lookups.json</code></td>
+</tr>
 </tbody>
 </table>
-<h3>Key Differences from Bash</h3>
+<h3 id="phase-7-rbac-collection-optional---rbac">Phase 7: RBAC
+Collection (optional, <code>--rbac</code>)</h3>
+<p><strong>Users:</strong> - In scoped mode: SPL search
+<code>index=_audit sourcetype=audittrail action=search info=granted</code>
+filtered to selected apps, excluding system users. Output:
+<code>dma_analytics/rbac/users_active_in_apps.json</code> - In full
+mode:
+<code>GET /services/authentication/users?output_mode=json&amp;count=0</code>.
+Output: <code>dma_analytics/rbac/users.json</code></p>
+<p><strong>Roles:</strong> -
+<code>GET /services/authorization/roles?output_mode=json&amp;count=0</code>
+-&gt; <code>dma_analytics/rbac/roles.json</code></p>
+<p><strong>Capabilities:</strong> -
+<code>GET /services/authorization/capabilities?output_mode=json</code>
+-&gt; <code>dma_analytics/rbac/capabilities.json</code></p>
+<p><strong>SAML (graceful 404 handling):</strong> -
+<code>GET /services/admin/SAML-groups?output_mode=json</code> -&gt;
+<code>dma_analytics/rbac/saml_groups.json</code> -
+<code>GET /services/authentication/providers/SAML?output_mode=json</code>
+-&gt; <code>dma_analytics/rbac/saml_config.json</code> - If not
+configured, writes <code>{"configured": false, "note": "..."}</code></p>
+<p><strong>LDAP (graceful 404 handling):</strong> -
+<code>GET /services/admin/LDAP-groups?output_mode=json</code> -&gt;
+<code>dma_analytics/rbac/ldap_groups.json</code> -
+<code>GET /services/authentication/providers/LDAP?output_mode=json</code>
+-&gt; <code>dma_analytics/rbac/ldap_config.json</code> - If not
+configured, writes <code>{"configured": false, "note": "..."}</code></p>
+<p><strong>Current Context:</strong> -
+<code>GET /services/authentication/current-context?output_mode=json</code>
+-&gt; <code>dma_analytics/rbac/current_context.json</code></p>
+<h3 id="phase-8-index-collection">Phase 8: Index Collection</h3>
+<ul>
+<li>Full mode:
+<code>GET /services/data/indexes?output_mode=json&amp;count=0</code>
+-&gt; <code>dma_analytics/indexes/indexes.json</code></li>
+<li>Extended stats:
+<code>GET /services/data/indexes-extended?output_mode=json&amp;count=0</code>
+-&gt; <code>dma_analytics/indexes/indexes_extended.json</code></li>
+<li>Scoped mode: collects index references from per-app data instead of
+global list</li>
+</ul>
+<h3 id="phase-9-app-analytics-global-spl-queries">Phase 9: App Analytics
+(Global SPL Queries)</h3>
+<p>See <a href="#9-global-analytics-queries">Section 9: Global Analytics
+Queries</a>.</p>
+<h3 id="phase-10-usage-analytics-supplementary-rest-data">Phase 10:
+Usage Analytics (Supplementary REST Data)</h3>
+<p>See <a href="#10-usage-analytics-supplementary">Section 10: Usage
+Analytics (Supplementary)</a>.</p>
+<h3 id="phase-11-manifest-generation">Phase 11: Manifest Generation</h3>
+<p>See <a href="#13-manifest-schema">Section 13: Manifest
+Schema</a>.</p>
+<h3 id="phase-12-anonymization">Phase 12: Anonymization</h3>
+<p>See <a href="#14-anonymization-algorithm">Section 14: Anonymization
+Algorithm</a>.</p>
+<h3 id="phase-13-archive-creation">Phase 13: Archive Creation</h3>
+<p>Two archives when anonymization is enabled: 1.
+<code>dma_cloud_export_&lt;stack&gt;_&lt;timestamp&gt;.tar.gz</code> –
+original data 2.
+<code>dma_cloud_export_&lt;stack&gt;_&lt;timestamp&gt;_masked.tar.gz</code>
+– anonymized copy</p>
+<hr />
+<h2 id="async-search-dispatch">8. Async Search Dispatch</h2>
+<h3 id="run_analytics_search-async">8.1
+<code>run_analytics_search</code> (Async)</h3>
+<p>Used for all SPL queries that may take significant time (analytics
+queries against <code>_audit</code>, <code>_internal</code>).</p>
+<p><strong>Dispatch flow:</strong></p>
+<pre><code>Step 1: Dispatch
+  POST /services/search/jobs
+  Body: search=&lt;url_encoded_spl&gt;&amp;output_mode=json&amp;exec_mode=normal&amp;max_time=0
+  Response: {&quot;sid&quot;: &quot;&lt;search_id&gt;&quot;}
+
+Step 2: Poll dispatchState
+  GET /services/search/jobs/&lt;sid&gt;?output_mode=json
+  Read: response.entry[0].content.dispatchState
+
+  States: QUEUED -&gt; PARSING -&gt; RUNNING -&gt; FINALIZING -&gt; DONE
+          (or FAILED at any point)
+
+  Poll interval: starts at 5s, increases by 5s per iteration, caps at 30s
+  Progress log: every ~60s
+
+Step 3: Timeout handling
+  Default max_wait: 3600s (1 hour)
+  On timeout:
+    POST /services/search/jobs/&lt;sid&gt;/control
+    Body: action=cancel
+  Writes error JSON to output file
+
+Step 4: Fetch results (on DONE)
+  GET /services/search/jobs/&lt;sid&gt;/results?output_mode=json&amp;count=0
+  Save complete results to output file
+
+Step 5: Failure handling (on FAILED)
+  Extract error message from response.entry[0].content.messages[0].text
+  Write error JSON to output file</code></pre>
+<p><strong>Error JSON format:</strong></p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;error&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;error_type&gt;&quot;</span><span class="fu">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;label&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;query_description&gt;&quot;</span><span class="fu">,</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;elapsed_seconds&quot;</span><span class="fu">:</span> <span class="dv">42</span><span class="fu">,</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;message&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;detailed_error_message&gt;&quot;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Error types: <code>search_dispatch_failed</code>,
+<code>no_sid_returned</code>, <code>search_timeout</code>,
+<code>search_failed</code>, <code>results_fetch_failed</code></p>
+<h3 id="run_analytics_search_blocking-legacy">8.2
+<code>run_analytics_search_blocking</code> (Legacy)</h3>
+<p>Retained only for fast queries that complete in seconds: -
+<code>| rest</code> queries (alerts inventory) - <code>| tstats</code>
+queries (event counts)</p>
+<p>Uses <code>exec_mode=blocking</code> with a short timeout. Falls back
+to empty result on failure.</p>
+<hr />
+<h2 id="global-analytics-queries">9. Global Analytics Queries</h2>
+<p>The <code>collect_app_analytics</code> function runs 6 global
+aggregate queries. Each query groups results <code>by app</code>, and
+the DMA Curator Server splits them into per-app files after import. This
+replaced the previous approach of N x 7 per-app queries.</p>
+<p>All queries use <code>earliest=-{USAGE_PERIOD}</code> (default 30d).
+Each query checks for a checkpoint before running and saves one on
+success.</p>
+<h3 id="query-1-dashboard-views-critical">Query 1: Dashboard Views
+(CRITICAL)</h3>
+<pre><code>search index=_audit sourcetype=audittrail action=search info=granted
+  {app_filter}
+  (provenance=&quot;UI:Dashboard:*&quot; OR provenance=&quot;UI:dashboard:*&quot;)
+  user!=&quot;splunk-system-user&quot;
+  earliest=-{USAGE_PERIOD}
+| rex field=provenance &quot;UI:[Dd]ashboard:(?&lt;dashboard_name&gt;[\w\-\.]+)&quot;
+| where isnotnull(dashboard_name)
+| eval view_session=user.&quot;_&quot;.floor(_time/30)
+| stats dc(view_session) as view_count, dc(user) as unique_users,
+        values(user) as viewers, latest(_time) as last_viewed
+        by app, dashboard_name
+| sort -view_count</code></pre>
+<ul>
+<li><strong>Timeout</strong>: 3600s (1 hour)</li>
+<li><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/dashboard_views_global.json</code></li>
+<li><strong>Key detail</strong>: Uses <code>provenance</code> field (not
+<code>search_type=dashboard</code>, which is not a native
+<code>_audit</code> field). View session de-duplication uses a 30-second
+window per user to count page loads rather than individual panel
+searches.</li>
+</ul>
+<h3 id="query-2-user-activity">Query 2: User Activity</h3>
+<pre><code>search index=_audit sourcetype=audittrail action=search info=granted
+  {app_filter}
+  user!=&quot;splunk-system-user&quot; user!=&quot;nobody&quot;
+  earliest=-{USAGE_PERIOD}
+| stats count as searches, dc(search_id) as unique_searches,
+        latest(_time) as last_active
+        by app, user
+| sort -searches</code></pre>
+<ul>
+<li><strong>Timeout</strong>: 3600s</li>
+<li><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/user_activity_global.json</code></li>
+</ul>
+<h3 id="query-3-search-type-breakdown">Query 3: Search Type
+Breakdown</h3>
+<pre><code>search index=_audit sourcetype=audittrail action=search info=granted
+  {app_filter}
+  user!=&quot;splunk-system-user&quot;
+  earliest=-{USAGE_PERIOD}
+| eval search_type=case(
+    match(provenance, &quot;^UI:[Dd]ashboard:&quot;), &quot;dashboard&quot;,
+    match(search_id, &quot;^(rt_)?scheduler__&quot;), &quot;scheduled&quot;,
+    match(savedsearch_name, &quot;^_ACCELERATE_&quot;), &quot;acceleration&quot;,
+    match(search_id, &quot;^SummaryDirector_&quot;), &quot;summarization&quot;,
+    isnotnull(provenance) AND match(provenance, &quot;^UI:&quot;), &quot;interactive&quot;,
+    1=1, &quot;other&quot;)
+| stats count as total_searches, dc(user) as unique_users,
+        dc(search_id) as unique_searches
+        by app, search_type
+| sort -total_searches</code></pre>
+<ul>
+<li><strong>Timeout</strong>: 1800s (30 minutes)</li>
+<li><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/search_patterns_global.json</code></li>
+<li><strong>Key detail</strong>: <code>search_type</code> is computed
+from <code>provenance</code> and <code>search_id</code> fields.
+Monitoring Console computes this with eval case(), but the raw
+<code>_audit</code> index does not have a <code>search_type</code>
+field.</li>
+</ul>
+<h3 id="query-4-daily-ingestion-volume">Query 4: Daily Ingestion
+Volume</h3>
+<pre><code>search index=_internal source=*license_usage.log type=Usage
+  earliest=-{USAGE_PERIOD}
+| eval index_name=idx
+| stats sum(b) as total_bytes, dc(st) as sourcetype_count,
+        dc(h) as host_count, min(_time) as earliest_event,
+        max(_time) as latest_event
+        by index_name
+| eval total_gb=round(total_bytes/1024/1024/1024, 2),
+       daily_avg_gb=round(total_gb/{usage_days}, 2)
+| sort -total_gb
+| fields index_name, total_bytes, total_gb, daily_avg_gb,
+         sourcetype_count, host_count, earliest_event, latest_event</code></pre>
+<ul>
+<li><strong>Timeout</strong>: 600s (10 minutes)</li>
+<li><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/index_volume_summary.json</code></li>
+<li><strong>Skipped when</strong>: <code>--skip-internal</code> is set
+(writes skip reason JSON)</li>
+<li><strong>Fallback (4b)</strong>:
+<code>| tstats count where index=* by index, _time span=1d</code> -&gt;
+<code>index_event_counts_daily.json</code> (blocking, 60s timeout)</li>
+</ul>
+<h3 id="query-5-alert-firing-stats">Query 5: Alert Firing Stats</h3>
+<pre><code>search index=_internal sourcetype=scheduler
+  {app_filter}
+  earliest=-{USAGE_PERIOD}
+| fields _time, app, savedsearch_name, status
+| stats count as total_runs,
+        sum(eval(if(status=&quot;success&quot;,1,0))) as successful,
+        sum(eval(if(status=&quot;skipped&quot;,1,0))) as skipped,
+        sum(eval(if(status!=&quot;success&quot; AND status!=&quot;skipped&quot;,1,0))) as failed,
+        latest(_time) as last_run
+        by app, savedsearch_name
+| sort -total_runs</code></pre>
+<ul>
+<li><strong>Timeout</strong>: 3600s</li>
+<li><strong>Output</strong>:
+<code>dma_analytics/usage_analytics/alert_firing_global.json</code></li>
+<li><strong>Skipped when</strong>: <code>--skip-internal</code> is
+set</li>
+</ul>
+<h3 id="query-6-alerts-inventory-per-app-blocking">Query 6: Alerts
+Inventory (per-app, blocking)</h3>
+<p>For each selected app:</p>
+<pre><code>| rest /servicesNS/-/{app}/saved/searches
+| search (is_scheduled=1 OR alert.track=1)
+| table title, cron_schedule, alert.severity, alert.track, actions, disabled
+| rename title as alert_name</code></pre>
+<ul>
+<li><strong>Timeout</strong>: 120s per app (blocking)</li>
+<li><strong>Output</strong>:
+<code>{app}/splunk-analysis/alerts_inventory.json</code></li>
+</ul>
+<hr />
+<h2 id="usage-analytics-supplementary">10. Usage Analytics
+(Supplementary)</h2>
+<p>The <code>collect_usage_analytics</code> function in v4.6.0 collects
+<strong>only REST-based supplementary data</strong>. All SPL analytics
+queries have moved to <code>collect_app_analytics</code> (Phase 9).</p>
+<h3 id="rest-based-metadata">REST-Based Metadata</h3>
 <table>
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 31%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
 <thead>
-<tr><th>Aspect</th><th>Bash Script</th><th>PowerShell Script</th></tr>
+<tr>
+<th>Data</th>
+<th>Endpoint</th>
+<th>Params</th>
+<th>Output</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>HTTP Client</strong></td><td><code>curl</code></td><td><code>Invoke-WebRequest</code> / <code>Invoke-RestMethod</code></td></tr>
-<tr><td><strong>JSON Processing</strong></td><td>Python 3 (<code>json</code> module)</td><td><code>ConvertFrom-Json</code> / <code>ConvertTo-Json</code> (native)</td></tr>
-<tr><td><strong>Archive Creation</strong></td><td><code>tar</code> (system)</td><td><code>tar.exe</code> (built into Windows 10+)</td></tr>
-<tr><td><strong>External Dependencies</strong></td><td>Python 3, curl, tar</td><td>None -- all native PowerShell cmdlets</td></tr>
-<tr><td><strong>Platform</strong></td><td>Linux, macOS</td><td>Windows (5.1+), cross-platform (7+)</td></tr>
+<tr>
+<td>Saved search metadata</td>
+<td><code>/servicesNS/-/-/saved/searches</code></td>
+<td><code>output_mode=json&amp;count=0&amp;f=title&amp;f=eai:acl&amp;f=is_scheduled&amp;f=disabled&amp;f=cron_schedule&amp;f=alert.track&amp;f=alert.severity&amp;f=actions&amp;f=next_scheduled_time&amp;f=dispatch.earliest_time&amp;f=dispatch.latest_time</code></td>
+<td><code>saved_searches_all.json</code></td>
+</tr>
+<tr>
+<td>Recent search jobs</td>
+<td><code>/services/search/jobs</code></td>
+<td><code>output_mode=json&amp;count=100</code></td>
+<td><code>recent_searches.json</code></td>
+</tr>
+<tr>
+<td>KVStore status</td>
+<td><code>/services/kvstore/status</code></td>
+<td><code>output_mode=json</code></td>
+<td><code>kvstore_stats.json</code></td>
+</tr>
 </tbody>
 </table>
-<h3>Usage Examples</h3>
-<pre><code class="language-powershell"># Token-based authentication (recommended)
-.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;your-api-token&quot; -AllApps
-
-# Username/password authentication with specific apps
-.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -User &quot;admin&quot; -Password &quot;pass&quot; -Apps &quot;search,myapp&quot;
-
-# Resume from previous export
-.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;token&quot; -ResumeCollect &quot;dma_cloud_export_acme_20260115.tar.gz&quot;
-
-# Full export with RBAC and usage analytics
-.\dma-splunk-cloud-export.ps1 -Stack &quot;acme-corp.splunkcloud.com&quot; -Token &quot;token&quot; -AllApps -Rbac -Usage</code></pre>
-<hr>
-<h2>Appendix A: Full API Collection Script Outline</h2>
-<pre><code class="language-bash">#!/bin/bash
-# dma-splunk-cloud-export.sh
-
-# 1. Parse arguments and show banner
-# 2. Get stack URL from user
-# 3. Test connectivity
-# 4. Get authentication (token or user/pass)
-# 5. Test authentication and check capabilities
-# 6. Detect environment (version, type)
-# 7. List apps and let user select
-# 8. Select data categories
-# 9. Create output directory
-# 10. Collect data via REST API:
-#     - Server info
-#     - Apps
-#     - Configs (props, transforms, etc.)
-#     - Dashboards
-#     - Saved searches
-#     - Users and roles
-#     - Macros, eventtypes, tags
-#     - Index info
-#     - Usage analytics (via search)
-# 11. Generate summary
-# 12. Create archive
-# 13. Cleanup and display next steps</code></pre>
-<hr>
-<h2>Appendix B: JSON Processing Dependencies</h2>
-<h3>Bash Script (<code>dma-splunk-cloud-export.sh</code>)</h3>
-<p>
-The Bash script uses <strong>Python 3</strong> (not jq) for all JSON processing. Python 3 is typically available on systems where Splunk is installed (Splunk bundles its own Python). The script uses the <code>json</code> module from the Python standard library.
-</p>
-<pre><code class="language-bash"># The script checks for Python 3 at startup
-if command -v python3 &amp;&gt; /dev/null; then
-    PYTHON_CMD=&quot;python3&quot;
-elif command -v python &amp;&gt; /dev/null; then
-    PYTHON_CMD=&quot;python&quot;
-fi</code></pre>
-<p>
-Python 3 is used for:
-</p>
+<p>The <code>f=</code> parameter on saved searches requests only
+metadata fields, preventing the full SPL text from being returned (which
+can exceed 256MB on large environments).</p>
+<p>In scoped mode, <code>saved_searches_all.json</code> is post-filtered
+with <code>jq</code> to include only entries where <code>acl.app</code>
+matches a selected app.</p>
+<h3 id="ownership-mapping">Ownership Mapping</h3>
+<p>Collected via direct REST API calls (not SPL
+<code>| rest</code>):</p>
+<p><strong>Dashboard ownership:</strong> -
+<code>GET /servicesNS/-/-/data/ui/views?output_mode=json&amp;count=0&amp;f=title&amp;f=eai:acl</code>
+- Transformed to:
+<code>{results: [{dashboard, app, owner, sharing}, ...]}</code> -
+Output: <code>dashboard_ownership.json</code></p>
+<p><strong>Alert ownership:</strong> -
+<code>GET /servicesNS/-/-/saved/searches?output_mode=json&amp;count=0&amp;f=title&amp;f=eai:acl&amp;f=is_scheduled&amp;f=alert.track</code>
+- Transformed to:
+<code>{results: [{alert_name, app, owner, sharing, is_scheduled, alert_track}, ...]}</code>
+- Output: <code>alert_ownership.json</code></p>
+<p><strong>Ownership summary:</strong> - Computed from the dashboard and
+alert ownership files - Groups by owner, counts dashboards and alerts
+per owner - Output: <code>ownership_summary.json</code></p>
+<h3 id="usage-intelligence-summary">Usage Intelligence Summary</h3>
+<p>A Markdown file (<code>USAGE_INTELLIGENCE_SUMMARY.md</code>) is
+generated with a migration prioritization framework, describing what
+data was collected and how to interpret it.</p>
+<hr />
+<h2 id="rest-api-endpoints-reference">11. REST API Endpoints
+Reference</h2>
+<h3 id="system-information">System Information</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/server/info</code></td>
+<td>GET</td>
+<td>Server version, OS, GUID</td>
+</tr>
+<tr>
+<td><code>/services/server/settings</code></td>
+<td>GET</td>
+<td>Server configuration</td>
+</tr>
+<tr>
+<td><code>/services/apps/local</code></td>
+<td>GET</td>
+<td>Installed apps list</td>
+</tr>
+<tr>
+<td><code>/services/licenser/licenses</code></td>
+<td>GET</td>
+<td>License information (often blocked)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="knowledge-objects-per-app">Knowledge Objects (per-app)</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/servicesNS/-/{app}/data/ui/views</code></td>
+<td>GET</td>
+<td>Dashboards for app</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/data/ui/views/{name}</code></td>
+<td>GET</td>
+<td>Single dashboard detail</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/saved/searches</code></td>
+<td>GET</td>
+<td>Saved searches and alerts</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/admin/macros</code></td>
+<td>GET</td>
+<td>Search macros</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/saved/eventtypes</code></td>
+<td>GET</td>
+<td>Event types</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/configs/conf-tags</code></td>
+<td>GET</td>
+<td>Tags</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/data/lookup-table-files</code></td>
+<td>GET</td>
+<td>Lookup definitions</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/data/transforms/extractions</code></td>
+<td>GET</td>
+<td>Field extractions</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/data/inputs/all</code></td>
+<td>GET</td>
+<td>Data inputs</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/configs/conf-props</code></td>
+<td>GET</td>
+<td>Props configuration</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/{app}/configs/conf-transforms</code></td>
+<td>GET</td>
+<td>Transforms configuration</td>
+</tr>
+</tbody>
+</table>
+<h3 id="global-knowledge-objects">Global Knowledge Objects</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/servicesNS/-/-/data/ui/views</code></td>
+<td>GET</td>
+<td>All dashboards (master list + ownership)</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/-/saved/searches</code></td>
+<td>GET</td>
+<td>All saved searches (metadata + ownership)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="configurations-global">Configurations (global)</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/servicesNS/-/-/configs/conf-indexes</code></td>
+<td>GET</td>
+<td>Index configuration</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/-/configs/conf-inputs</code></td>
+<td>GET</td>
+<td>Input configuration</td>
+</tr>
+<tr>
+<td><code>/servicesNS/-/-/configs/conf-outputs</code></td>
+<td>GET</td>
+<td>Output configuration</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rbac">RBAC</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/authentication/users</code></td>
+<td>GET</td>
+<td>All users</td>
+</tr>
+<tr>
+<td><code>/services/authorization/roles</code></td>
+<td>GET</td>
+<td>All roles</td>
+</tr>
+<tr>
+<td><code>/services/authentication/current-context</code></td>
+<td>GET</td>
+<td>Current user capabilities</td>
+</tr>
+<tr>
+<td><code>/services/authorization/capabilities</code></td>
+<td>GET</td>
+<td>System capabilities list</td>
+</tr>
+<tr>
+<td><code>/services/admin/SAML-groups</code></td>
+<td>GET</td>
+<td>SAML group-to-role mappings</td>
+</tr>
+<tr>
+<td><code>/services/authentication/providers/SAML</code></td>
+<td>GET</td>
+<td>SAML provider configuration</td>
+</tr>
+<tr>
+<td><code>/services/admin/LDAP-groups</code></td>
+<td>GET</td>
+<td>LDAP group-to-role mappings</td>
+</tr>
+<tr>
+<td><code>/services/authentication/providers/LDAP</code></td>
+<td>GET</td>
+<td>LDAP provider configuration</td>
+</tr>
+</tbody>
+</table>
+<h3 id="indexes">Indexes</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/data/indexes</code></td>
+<td>GET</td>
+<td>Index list and settings</td>
+</tr>
+<tr>
+<td><code>/services/data/indexes-extended</code></td>
+<td>GET</td>
+<td>Extended index statistics</td>
+</tr>
+</tbody>
+</table>
+<h3 id="search-jobs">Search Jobs</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/search/jobs</code></td>
+<td>POST</td>
+<td>Create/dispatch search job</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs</code></td>
+<td>GET</td>
+<td>List recent jobs</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs/{sid}</code></td>
+<td>GET</td>
+<td>Check job status (dispatchState)</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs/{sid}/results</code></td>
+<td>GET</td>
+<td>Fetch search results</td>
+</tr>
+<tr>
+<td><code>/services/search/jobs/{sid}/control</code></td>
+<td>POST</td>
+<td>Control job (cancel, pause, etc.)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="other">Other</h3>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 29%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/services/kvstore/status</code></td>
+<td>GET</td>
+<td>KVStore status</td>
+</tr>
+<tr>
+<td><code>/services/auth/login</code></td>
+<td>POST</td>
+<td>Username/password authentication</td>
+</tr>
+<tr>
+<td><code>/services/authentication/current-context</code></td>
+<td>GET</td>
+<td>Token validation probe</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="output-structure-and-archive-format">12. Output Structure and
+Archive Format</h2>
+<h3 id="archive-naming">Archive Naming</h3>
+<pre><code>dma_cloud_export_&lt;stack_clean&gt;_&lt;YYYYMMDD_HHMMSS&gt;.tar.gz        (original)
+dma_cloud_export_&lt;stack_clean&gt;_&lt;YYYYMMDD_HHMMSS&gt;_masked.tar.gz  (anonymized)</code></pre>
+<p><code>&lt;stack_clean&gt;</code> is the stack hostname with
+<code>.splunkcloud.com</code> stripped and non-alphanumeric characters
+replaced with <code>_</code>.</p>
+<h3 id="directory-structure">Directory Structure</h3>
+<pre><code>dma_cloud_export_&lt;stack&gt;_&lt;timestamp&gt;/
+|
+|-- _export.log                              # Export session log
+|-- _anonymization_report.json               # Anonymization statistics (if enabled)
+|-- _configs/
+|   |-- indexes.json                         # Global indexes config
+|   |-- inputs.json                          # Global inputs config
+|   |-- outputs.json                         # Global outputs config
+|
+|-- dma_analytics/
+|   |-- manifest.json                        # Manifest (schema v4.0)
+|   |-- system_info/
+|   |   |-- server_info.json
+|   |   |-- installed_apps.json
+|   |   |-- license_info.json
+|   |   |-- server_settings.json
+|   |   |-- all_dashboards.json              # Master dashboard list
+|   |
+|   |-- rbac/                                # Only when --rbac enabled
+|   |   |-- users.json
+|   |   |-- roles.json
+|   |   |-- capabilities.json
+|   |   |-- current_context.json
+|   |   |-- saml_groups.json
+|   |   |-- saml_config.json
+|   |   |-- ldap_groups.json
+|   |   |-- ldap_config.json
+|   |   |-- users_active_in_apps.json        # Scoped mode only
+|   |
+|   |-- usage_analytics/
+|   |   |-- dashboard_views_global.json      # Query 1
+|   |   |-- user_activity_global.json        # Query 2
+|   |   |-- search_patterns_global.json      # Query 3
+|   |   |-- index_volume_summary.json        # Query 4
+|   |   |-- index_event_counts_daily.json    # Query 4b (tstats)
+|   |   |-- alert_firing_global.json         # Query 5
+|   |   |-- saved_searches_all.json          # REST metadata
+|   |   |-- recent_searches.json             # REST jobs
+|   |   |-- kvstore_stats.json               # REST KVStore
+|   |   |-- dashboard_ownership.json         # REST ownership
+|   |   |-- alert_ownership.json             # REST ownership
+|   |   |-- ownership_summary.json           # Computed
+|   |   |-- USAGE_INTELLIGENCE_SUMMARY.md    # Migration guide
+|   |
+|   |-- indexes/
+|       |-- indexes.json
+|       |-- indexes_extended.json
+|
+|-- {AppName}/                               # One per selected app
+|   |-- dashboards/
+|   |   |-- dashboard_list.json
+|   |   |-- classic/
+|   |   |   |-- {dashboard_name}.json
+|   |   |-- studio/
+|   |       |-- {dashboard_name}.json
+|   |       |-- {dashboard_name}_definition.json  # Extracted JSON
+|   |
+|   |-- savedsearches.json
+|   |-- macros.json
+|   |-- eventtypes.json
+|   |-- tags.json
+|   |-- field_extractions.json
+|   |-- inputs.json
+|   |-- props.json
+|   |-- transforms.json
+|   |-- lookups.json
+|   |
+|   |-- splunk-analysis/
+|       |-- alerts_inventory.json            # Query 6</code></pre>
+<hr />
+<h2 id="manifest-schema">13. Manifest Schema</h2>
+<p>The manifest (<code>dma_analytics/manifest.json</code>) uses schema
+version 4.0 with archive structure version v2.</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;schema_version&quot;</span><span class="fu">:</span> <span class="st">&quot;4.0&quot;</span><span class="fu">,</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;archive_structure_version&quot;</span><span class="fu">:</span> <span class="st">&quot;v2&quot;</span><span class="fu">,</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_tool&quot;</span><span class="fu">:</span> <span class="st">&quot;dma-splunk-cloud-export&quot;</span><span class="fu">,</span></span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_tool_version&quot;</span><span class="fu">:</span> <span class="st">&quot;4.6.0&quot;</span><span class="fu">,</span></span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_timestamp&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-04-02T12:00:00Z&quot;</span><span class="fu">,</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_duration_seconds&quot;</span><span class="fu">:</span> <span class="dv">1234</span><span class="fu">,</span></span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;archive_structure&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;v2&quot;</span><span class="fu">,</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;description&quot;</span><span class="fu">:</span> <span class="st">&quot;App-centric dashboard organization prevents name collisions&quot;</span><span class="fu">,</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboard_location&quot;</span><span class="fu">:</span> <span class="st">&quot;{AppName}/dashboards/classic/ and {AppName}/dashboards/studio/&quot;</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb17-14"><a href="#cb17-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-15"><a href="#cb17-15" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;source&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-16"><a href="#cb17-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hostname&quot;</span><span class="fu">:</span> <span class="st">&quot;acme-corp.splunkcloud.com&quot;</span><span class="fu">,</span></span>
+<span id="cb17-17"><a href="#cb17-17" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;fqdn&quot;</span><span class="fu">:</span> <span class="st">&quot;acme-corp.splunkcloud.com&quot;</span><span class="fu">,</span></span>
+<span id="cb17-18"><a href="#cb17-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;platform&quot;</span><span class="fu">:</span> <span class="st">&quot;Splunk Cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb17-19"><a href="#cb17-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;platform_version&quot;</span><span class="fu">:</span> <span class="st">&quot;classic|victoria&quot;</span></span>
+<span id="cb17-20"><a href="#cb17-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb17-21"><a href="#cb17-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-22"><a href="#cb17-22" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunk&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-23"><a href="#cb17-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;home&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb17-24"><a href="#cb17-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;9.x.x&quot;</span><span class="fu">,</span></span>
+<span id="cb17-25"><a href="#cb17-25" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;build&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb17-26"><a href="#cb17-26" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;flavor&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb17-27"><a href="#cb17-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;role&quot;</span><span class="fu">:</span> <span class="st">&quot;search_head&quot;</span><span class="fu">,</span></span>
+<span id="cb17-28"><a href="#cb17-28" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;architecture&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb17-29"><a href="#cb17-29" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;is_cloud&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb17-30"><a href="#cb17-30" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;cloud_type&quot;</span><span class="fu">:</span> <span class="st">&quot;classic|victoria&quot;</span><span class="fu">,</span></span>
+<span id="cb17-31"><a href="#cb17-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;server_guid&quot;</span><span class="fu">:</span> <span class="st">&quot;&lt;guid&gt;&quot;</span></span>
+<span id="cb17-32"><a href="#cb17-32" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb17-33"><a href="#cb17-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-34"><a href="#cb17-34" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;collection&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-35"><a href="#cb17-35" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;configs&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb17-36"><a href="#cb17-36" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb17-37"><a href="#cb17-37" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb17-38"><a href="#cb17-38" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;rbac&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb17-39"><a href="#cb17-39" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;usage_analytics&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb17-40"><a href="#cb17-40" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;usage_period&quot;</span><span class="fu">:</span> <span class="st">&quot;30d&quot;</span><span class="fu">,</span></span>
+<span id="cb17-41"><a href="#cb17-41" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;indexes&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb17-42"><a href="#cb17-42" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;lookups&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb17-43"><a href="#cb17-43" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;data_anonymized&quot;</span><span class="fu">:</span> <span class="kw">true</span></span>
+<span id="cb17-44"><a href="#cb17-44" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb17-45"><a href="#cb17-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-46"><a href="#cb17-46" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;statistics&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-47"><a href="#cb17-47" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;apps_exported&quot;</span><span class="fu">:</span> <span class="dv">5</span><span class="fu">,</span></span>
+<span id="cb17-48"><a href="#cb17-48" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_classic&quot;</span><span class="fu">:</span> <span class="dv">120</span><span class="fu">,</span></span>
+<span id="cb17-49"><a href="#cb17-49" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_studio&quot;</span><span class="fu">:</span> <span class="dv">30</span><span class="fu">,</span></span>
+<span id="cb17-50"><a href="#cb17-50" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_total&quot;</span><span class="fu">:</span> <span class="dv">150</span><span class="fu">,</span></span>
+<span id="cb17-51"><a href="#cb17-51" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="dv">45</span><span class="fu">,</span></span>
+<span id="cb17-52"><a href="#cb17-52" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;saved_searches&quot;</span><span class="fu">:</span> <span class="dv">200</span><span class="fu">,</span></span>
+<span id="cb17-53"><a href="#cb17-53" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;users&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb17-54"><a href="#cb17-54" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;roles&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb17-55"><a href="#cb17-55" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;indexes&quot;</span><span class="fu">:</span> <span class="dv">25</span><span class="fu">,</span></span>
+<span id="cb17-56"><a href="#cb17-56" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;api_calls_made&quot;</span><span class="fu">:</span> <span class="dv">1500</span><span class="fu">,</span></span>
+<span id="cb17-57"><a href="#cb17-57" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;rate_limit_hits&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb17-58"><a href="#cb17-58" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;errors&quot;</span><span class="fu">:</span> <span class="dv">2</span><span class="fu">,</span></span>
+<span id="cb17-59"><a href="#cb17-59" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;warnings&quot;</span><span class="fu">:</span> <span class="dv">5</span><span class="fu">,</span></span>
+<span id="cb17-60"><a href="#cb17-60" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;total_files&quot;</span><span class="fu">:</span> <span class="dv">350</span><span class="fu">,</span></span>
+<span id="cb17-61"><a href="#cb17-61" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;total_size_bytes&quot;</span><span class="fu">:</span> <span class="dv">52428800</span></span>
+<span id="cb17-62"><a href="#cb17-62" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb17-63"><a href="#cb17-63" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-64"><a href="#cb17-64" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;apps&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb17-65"><a href="#cb17-65" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb17-66"><a href="#cb17-66" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;myapp&quot;</span><span class="fu">,</span></span>
+<span id="cb17-67"><a href="#cb17-67" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards&quot;</span><span class="fu">:</span> <span class="dv">25</span><span class="fu">,</span></span>
+<span id="cb17-68"><a href="#cb17-68" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards_classic&quot;</span><span class="fu">:</span> <span class="dv">20</span><span class="fu">,</span></span>
+<span id="cb17-69"><a href="#cb17-69" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards_studio&quot;</span><span class="fu">:</span> <span class="dv">5</span><span class="fu">,</span></span>
+<span id="cb17-70"><a href="#cb17-70" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="dv">10</span><span class="fu">,</span></span>
+<span id="cb17-71"><a href="#cb17-71" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;saved_searches&quot;</span><span class="fu">:</span> <span class="dv">40</span></span>
+<span id="cb17-72"><a href="#cb17-72" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb17-73"><a href="#cb17-73" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb17-74"><a href="#cb17-74" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-75"><a href="#cb17-75" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;usage_intelligence&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-76"><a href="#cb17-76" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;prioritization&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-77"><a href="#cb17-77" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;top_dashboards&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb17-78"><a href="#cb17-78" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;top_alerts&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb17-79"><a href="#cb17-79" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;top_users&quot;</span><span class="fu">:</span> <span class="ot">[]</span></span>
+<span id="cb17-80"><a href="#cb17-80" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb17-81"><a href="#cb17-81" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;volume&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb17-82"><a href="#cb17-82" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;index_volume&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb17-83"><a href="#cb17-83" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;index_events&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb17-84"><a href="#cb17-84" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;note&quot;</span><span class="fu">:</span> <span class="st">&quot;See index_volume_summary.json for per-index daily ingestion&quot;</span></span>
+<span id="cb17-85"><a href="#cb17-85" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb17-86"><a href="#cb17-86" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;search_patterns&quot;</span><span class="fu">:</span> <span class="ot">[]</span></span>
+<span id="cb17-87"><a href="#cb17-87" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb17-88"><a href="#cb17-88" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The <code>usage_intelligence</code> section references top-10 slices
+from the global analytics query results.</p>
+<hr />
+<h2 id="anonymization-algorithm">14. Anonymization Algorithm</h2>
+<h3 id="two-archive-workflow">Two-Archive Workflow</h3>
+<p>When <code>ANONYMIZE_DATA=true</code> (default):</p>
+<ol type="1">
+<li>Complete data collection to <code>EXPORT_DIR</code></li>
+<li>Create archive #1: <code>{name}.tar.gz</code> (original, untouched
+data)</li>
+<li>Run anonymization on <code>EXPORT_DIR</code> in-place</li>
+<li>Create archive #2: <code>{name}_masked.tar.gz</code> (anonymized
+copy)</li>
+<li>Delete <code>EXPORT_DIR</code></li>
+</ol>
+<h3 id="python-based-anonymizer">Python-Based Anonymizer</h3>
+<p>A Python script is generated inline at runtime
+(<code>$EXPORT_DIR/.anonymizer.py</code>) and processes all
+<code>.json</code>, <code>.conf</code>, <code>.xml</code>,
+<code>.csv</code>, <code>.txt</code>, and <code>.meta</code> files.
+Binary files are skipped.</p>
+<p><strong>Transformations applied per line:</strong></p>
+<ol type="1">
+<li><p><strong>Email addresses</strong>: Regex
+<code>[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}</code> replaced
+with <code>anon&lt;md5_hash_8chars&gt;@anon.dma.local</code>.
+Already-anonymized emails (<code>@anon.dma.local</code>,
+<code>@example.com</code>, <code>@localhost</code>) are
+skipped.</p></li>
+<li><p><strong>Private IP addresses (RFC 1918 only)</strong>:</p>
 <ul>
-<li>Parsing REST API JSON responses</li>
-<li>Extracting usage intelligence data</li>
-<li>Generating and validating manifest.json</li>
-<li>Building the ownership mapping files</li>
-</ul>
-<p>
-<strong>Note</strong>: <code>jq</code> is NOT required. Earlier versions of this specification referenced jq, but the script has used Python 3 since v3.6.0.
-</p>
-<h3>PowerShell Script (<code>dma-splunk-cloud-export.ps1</code>)</h3>
-<p>
-The PowerShell script uses <strong>native PowerShell cmdlets</strong> for all JSON processing -- no external dependencies are required:
-</p>
+<li><code>10.x.x.x</code> -&gt; <code>[IP-REDACTED]</code></li>
+<li><code>172.16-31.x.x</code> -&gt; <code>[IP-REDACTED]</code></li>
+<li><code>192.168.x.x</code> -&gt; <code>[IP-REDACTED]</code></li>
+<li>Public IPs are NOT redacted (prevents breaking version numbers and
+other dot-separated values)</li>
+</ul></li>
+<li><p><strong>Hostnames in JSON</strong>: Keys <code>host</code>,
+<code>hostname</code>, <code>splunk_server</code>, <code>server</code>,
+<code>serverName</code> have their string values replaced with
+<code>host-&lt;md5_hash_8chars&gt;.anon.local</code>. Reserved values
+(<code>localhost</code>, <code>127.0.0.1</code>, <code>null</code>,
+<code>none</code>, <code>*</code>, empty) are preserved.</p></li>
+<li><p><strong>Hostnames in conf format</strong>:
+<code>key=hostname</code> and <code>key = hostname</code> patterns for
+the same key set.</p></li>
+</ol>
+<h3 id="consistency">Consistency</h3>
+<p>All anonymization uses MD5 hashing
+(<code>hashlib.md5(value.encode()).hexdigest()[:8]</code>) to ensure the
+same input always produces the same output across all files in the
+export. This preserves referential integrity (the same user appears as
+the same anonymized user everywhere).</p>
+<h3 id="json-safety">JSON Safety</h3>
+<p>After processing, the anonymizer: 1. Fixes invalid JSON escape
+sequences created during replacement (e.g., <code>\u</code> followed by
+non-hex, <code>\a</code>, <code>\h</code>) 2. Validates JSON parsability
+before saving 3. If anonymization would corrupt valid JSON, the file is
+left unmodified</p>
+<h3 id="fallback">Fallback</h3>
+<p>If Python is not available, a sed-based fallback handles only IP
+address redaction (no email or hostname anonymization).</p>
+<h3 id="report">Report</h3>
+<p>After anonymization, <code>_anonymization_report.json</code> is
+written:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;anonymization_applied&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;timestamp&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-04-02T12:00:00Z&quot;</span><span class="fu">,</span></span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;statistics&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;files_processed&quot;</span><span class="fu">:</span> <span class="dv">350</span><span class="fu">,</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;unique_emails_anonymized&quot;</span><span class="fu">:</span> <span class="dv">42</span><span class="fu">,</span></span>
+<span id="cb18-7"><a href="#cb18-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;unique_hosts_anonymized&quot;</span><span class="fu">:</span> <span class="dv">15</span><span class="fu">,</span></span>
+<span id="cb18-8"><a href="#cb18-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;ip_addresses&quot;</span><span class="fu">:</span> <span class="st">&quot;all_redacted&quot;</span></span>
+<span id="cb18-9"><a href="#cb18-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb18-10"><a href="#cb18-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;transformations&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb18-11"><a href="#cb18-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;emails&quot;</span><span class="fu">:</span> <span class="st">&quot;original@domain.com -&gt; anon######@anon.dma.local&quot;</span><span class="fu">,</span></span>
+<span id="cb18-12"><a href="#cb18-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hostnames&quot;</span><span class="fu">:</span> <span class="st">&quot;server.example.com -&gt; host-########.anon.local&quot;</span><span class="fu">,</span></span>
+<span id="cb18-13"><a href="#cb18-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;ipv4&quot;</span><span class="fu">:</span> <span class="st">&quot;x.x.x.x -&gt; [IP-REDACTED]&quot;</span></span>
+<span id="cb18-14"><a href="#cb18-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb18-15"><a href="#cb18-15" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="rate-limiting-strategy">15. Rate Limiting Strategy</h2>
+<h3 id="between-api-calls">Between API Calls</h3>
+<p>Every <code>api_call</code> invocation sleeps
+<code>RATE_LIMIT_DELAY</code> (default 50ms) before making the request.
+This applies to all calls including retries.</p>
+<h3 id="between-paginated-batches">Between Paginated Batches</h3>
+<p>After each batch in <code>api_call_paginated</code>, sleep
+<code>RATE_LIMIT_DELAY</code> (50ms).</p>
+<h3 id="on-429-rate-limited">On 429 (Rate Limited)</h3>
+<p>Exponential backoff:
+<code>wait_time = retries * BACKOFF_MULTIPLIER * 2</code>, capped at 60
+seconds. Retry counter increments. After <code>MAX_RETRIES</code>
+exhausted, the call fails.</p>
+<h3 id="on-500502503-server-error">On 500/502/503 (Server Error)</h3>
+<p>Linear backoff: <code>wait_time = retries * 2</code> seconds. Same
+retry limit.</p>
+<h3 id="on-000-timeoutconnection-error">On 000 (Timeout/Connection
+Error)</h3>
+<p>Linear backoff: <code>wait_time = retries * 2</code> seconds.</p>
+<h3 id="search-job-polling">Search Job Polling</h3>
+<p>Adaptive interval for <code>dispatchState</code> polling: - Start at
+5 seconds - Increase by 5 seconds each iteration - Cap at 30 seconds -
+Prevents excessive API load during long-running searches</p>
+<hr />
+<h2 id="error-handling">16. Error Handling</h2>
+<h3 id="error-classification">Error Classification</h3>
+<table>
+<thead>
+<tr>
+<th>Error Type</th>
+<th>Behavior</th>
+<th>Retry</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Network timeout (000)</td>
+<td>Retry with backoff</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Rate limit (429)</td>
+<td>Retry with exponential backoff</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Auth failure (401)</td>
+<td>Fail immediately</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Forbidden (403)</td>
+<td>Fail immediately</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Not found (404) on app resource</td>
+<td>Return empty result</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Not found (404) on other</td>
+<td>Warn and continue</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Server error (5xx)</td>
+<td>Retry with backoff</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Max runtime exceeded</td>
+<td>Graceful shutdown</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Search dispatch failed</td>
+<td>Write error JSON, continue</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Search timeout</td>
+<td>Cancel job, write error JSON, continue</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<h3 id="graceful-degradation">Graceful Degradation</h3>
+<p>The script never aborts on a single collection failure. If dashboards
+fail, alerts still proceed. If analytics searches fail, REST metadata
+still proceeds. Each phase records its errors and continues.</p>
+<h3 id="error-and-warning-tracking">Error and Warning Tracking</h3>
+<p>Global counters track <code>STATS_ERRORS</code>,
+<code>STATS_WARNINGS</code>, <code>STATS_API_CALLS</code>,
+<code>STATS_API_RETRIES</code>, <code>STATS_API_FAILURES</code>,
+<code>STATS_RATE_LIMITS</code>. These appear in the manifest and final
+summary.</p>
+<h3 id="search-error-json">Search Error JSON</h3>
+<p>When a search job fails or times out, the output file receives a
+structured error instead of being left empty:</p>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;error&quot;</span><span class="fu">:</span> <span class="st">&quot;search_timeout&quot;</span><span class="fu">,</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;label&quot;</span><span class="fu">:</span> <span class="st">&quot;Dashboard views (global, provenance-based)&quot;</span><span class="fu">,</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;elapsed_seconds&quot;</span><span class="fu">:</span> <span class="dv">3601</span><span class="fu">,</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;message&quot;</span><span class="fu">:</span> <span class="st">&quot;Exceeded max wait of 3600s. The _audit index may be very large.&quot;</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="resume-and-checkpoint-system">17. Resume and Checkpoint
+System</h2>
+<h3 id="checkpoint-files">Checkpoint Files</h3>
+<p>During collection, checkpoints are saved to
+<code>$EXPORT_DIR/.export_checkpoint</code> at regular intervals
+(<code>CHECKPOINT_INTERVAL=50</code> batches for paginated calls).</p>
+<p>For analytics queries, each completed query saves a checkpoint to
+<code>$EXPORT_DIR/.analytics_checkpoint</code>. On resume, only
+incomplete queries are re-run.</p>
+<h3 id="resume-mode---resume-collect">Resume Mode
+(<code>--resume-collect</code>)</h3>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./dma-splunk-cloud-export.sh</span> <span class="at">--resume-collect</span> previous_export.tar.gz</span></code></pre></div>
+<ol type="1">
+<li>Extracts previous <code>.tar.gz</code> to a working directory</li>
+<li>Detects already-collected data (dashboards, alerts, configs,
+etc.)</li>
+<li>Reconnects to Splunk Cloud and fills gaps</li>
+<li>Creates versioned output with <code>-v1</code>, <code>-v2</code>
+suffixes to preserve prior exports</li>
+<li>Per-app skip logic: skips dashboards, alerts, and knowledge objects
+for already-collected apps</li>
+<li>Global skip logic: skips configs, RBAC, usage analytics, and indexes
+if already present</li>
+</ol>
+<hr />
+<h2 id="remask-mode">18. Remask Mode</h2>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./dma-splunk-cloud-export.sh</span> <span class="at">--remask</span> /path/to/original_export.tar.gz</span></code></pre></div>
+<p>Re-anonymizes an existing archive without connecting to Splunk:</p>
+<ol type="1">
+<li>Extract archive to temp directory</li>
+<li>Check disk space (needs ~2x extracted size)</li>
+<li>Run full anonymization pass on extracted files</li>
+<li>Create new <code>_masked.tar.gz</code> archive</li>
+<li>Clean up temp directory</li>
+<li>Original archive is NOT modified</li>
+</ol>
+<hr />
+<h2 id="test-access-mode">19. Test-Access Mode</h2>
+<p>See <a href="#62-test-access-mode---test-access">Section 6.2</a> for
+the full 9-category test specification.</p>
+<h3 id="usage">Usage</h3>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Bash</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./dma-splunk-cloud-export.sh</span> <span class="at">--stack</span> acme.splunkcloud.com <span class="at">--token</span> XXX <span class="at">--test-access</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a><span class="co"># PowerShell</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="bu">.</span><span class="dt">\d</span>ma-splunk-cloud-export.ps1 <span class="at">-Stack</span> acme.splunkcloud.com <span class="at">-Token</span> XXX <span class="at">-TestAccess</span></span></code></pre></div>
+<h3 id="output-format">Output Format</h3>
+<p>Each test prints a status line:</p>
+<pre><code>  [OK  ]  System Info                          Splunk v9.2.0
+  [OK  ]  Configurations (indexes)             1 entries
+  [FAIL]  RBAC (users/roles)                   Both denied
+  [SKIP]  Usage Analytics (_internal)          Skipped (--skip-internal)</code></pre>
+<p>Summary table printed at the end with PASS/FAIL/WARN/SKIP counts and
+a verdict.</p>
+<hr />
+<h2 id="cli-reference">20. CLI Reference</h2>
+<h3 id="bash-dma-splunk-cloud-export.sh">Bash
+(<code>dma-splunk-cloud-export.sh</code>)</h3>
+<table>
+<colgroup>
+<col style="width: 20%" />
+<col style="width: 34%" />
+<col style="width: 44%" />
+</colgroup>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Argument</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--stack</code></td>
+<td>URL</td>
+<td>Splunk Cloud stack (e.g., <code>acme.splunkcloud.com</code>)</td>
+</tr>
+<tr>
+<td><code>--token</code></td>
+<td>TOKEN</td>
+<td>API token for authentication</td>
+</tr>
+<tr>
+<td><code>--user</code></td>
+<td>USER</td>
+<td>Username (alternative to token)</td>
+</tr>
+<tr>
+<td><code>--password</code></td>
+<td>PASS</td>
+<td>Password (alternative to token)</td>
+</tr>
+<tr>
+<td><code>--all-apps</code></td>
+<td>–</td>
+<td>Export all applications</td>
+</tr>
+<tr>
+<td><code>--apps</code></td>
+<td>LIST</td>
+<td>Comma-separated app names</td>
+</tr>
+<tr>
+<td><code>--output</code></td>
+<td>DIR</td>
+<td>Output directory</td>
+</tr>
+<tr>
+<td><code>--rbac</code></td>
+<td>–</td>
+<td>Enable RBAC/users collection (OFF by default)</td>
+</tr>
+<tr>
+<td><code>--usage</code></td>
+<td>–</td>
+<td>Enable usage analytics collection (ON by default)</td>
+</tr>
+<tr>
+<td><code>--no-usage</code></td>
+<td>–</td>
+<td>Disable usage analytics</td>
+</tr>
+<tr>
+<td><code>--no-rbac</code></td>
+<td>–</td>
+<td>Disable RBAC collection (legacy, already off)</td>
+</tr>
+<tr>
+<td><code>--analytics-period</code></td>
+<td>N</td>
+<td>Analytics time window (e.g., <code>7d</code>, <code>30d</code>,
+<code>90d</code>)</td>
+</tr>
+<tr>
+<td><code>--skip-internal</code></td>
+<td>–</td>
+<td>Skip <code>_internal</code> index searches</td>
+</tr>
+<tr>
+<td><code>--scoped</code></td>
+<td>–</td>
+<td>Scope collections to selected apps only</td>
+</tr>
+<tr>
+<td><code>--proxy</code></td>
+<td>URL</td>
+<td>Route all connections through proxy</td>
+</tr>
+<tr>
+<td><code>--resume-collect</code></td>
+<td>FILE</td>
+<td>Resume from previous <code>.tar.gz</code> archive</td>
+</tr>
+<tr>
+<td><code>--test-access</code></td>
+<td>–</td>
+<td>Pre-flight access check (no export)</td>
+</tr>
+<tr>
+<td><code>--remask</code></td>
+<td>FILE</td>
+<td>Re-anonymize existing archive offline</td>
+</tr>
+<tr>
+<td><code>-d</code>, <code>--debug</code></td>
+<td>–</td>
+<td>Enable verbose debug logging</td>
+</tr>
+<tr>
+<td><code>--help</code></td>
+<td>–</td>
+<td>Show help text</td>
+</tr>
+</tbody>
+</table>
+<h3 id="powershell-dma-splunk-cloud-export.ps1">PowerShell
+(<code>dma-splunk-cloud-export.ps1</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Argument</th>
+<th>Bash Equivalent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-Stack</code></td>
+<td>URL</td>
+<td><code>--stack</code></td>
+</tr>
+<tr>
+<td><code>-Token</code></td>
+<td>TOKEN</td>
+<td><code>--token</code></td>
+</tr>
+<tr>
+<td><code>-User</code></td>
+<td>USER</td>
+<td><code>--user</code></td>
+</tr>
+<tr>
+<td><code>-Password</code></td>
+<td>PASS</td>
+<td><code>--password</code></td>
+</tr>
+<tr>
+<td><code>-AllApps</code></td>
+<td>–</td>
+<td><code>--all-apps</code></td>
+</tr>
+<tr>
+<td><code>-Apps</code></td>
+<td>LIST</td>
+<td><code>--apps</code></td>
+</tr>
+<tr>
+<td><code>-Output</code></td>
+<td>DIR</td>
+<td><code>--output</code></td>
+</tr>
+<tr>
+<td><code>-Rbac</code></td>
+<td>–</td>
+<td><code>--rbac</code></td>
+</tr>
+<tr>
+<td><code>-Usage</code></td>
+<td>–</td>
+<td><code>--usage</code></td>
+</tr>
+<tr>
+<td><code>-NoUsage</code></td>
+<td>–</td>
+<td><code>--no-usage</code></td>
+</tr>
+<tr>
+<td><code>-AnalyticsPeriod</code></td>
+<td>N</td>
+<td><code>--analytics-period</code></td>
+</tr>
+<tr>
+<td><code>-SkipInternal</code></td>
+<td>–</td>
+<td><code>--skip-internal</code></td>
+</tr>
+<tr>
+<td><code>-Scoped</code></td>
+<td>–</td>
+<td><code>--scoped</code></td>
+</tr>
+<tr>
+<td><code>-Proxy</code></td>
+<td>URL</td>
+<td><code>--proxy</code></td>
+</tr>
+<tr>
+<td><code>-ResumeCollect</code></td>
+<td>FILE</td>
+<td><code>--resume-collect</code></td>
+</tr>
+<tr>
+<td><code>-TestAccess</code></td>
+<td>–</td>
+<td><code>--test-access</code></td>
+</tr>
+<tr>
+<td><code>-Remask</code></td>
+<td>FILE</td>
+<td><code>--remask</code></td>
+</tr>
+<tr>
+<td><code>-Debug</code></td>
+<td>–</td>
+<td><code>--debug</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="non-interactive-mode">Non-Interactive Mode</h3>
+<p>Automatically enabled when <code>--stack</code> and
+<code>--token</code> (or <code>--user</code>/<code>--password</code>)
+are provided on the command line. Skips all interactive prompts. When
+<code>--apps</code> is specified, <code>SCOPE_TO_APPS</code> is
+automatically set to true.</p>
+<h3 id="environment-variable-overrides-bash">Environment Variable
+Overrides (Bash)</h3>
+<div class="sourceCode" id="cb24"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="va">BATCH_SIZE</span><span class="op">=</span>50 <span class="va">RATE_LIMIT_DELAY</span><span class="op">=</span>0.5 <span class="va">API_TIMEOUT</span><span class="op">=</span>300 <span class="ex">./dma-splunk-cloud-export.sh</span> ...</span></code></pre></div>
+<hr />
+<h2 id="security-considerations">21. Security Considerations</h2>
+<h3 id="credentials">Credentials</h3>
 <ul>
-<li><code>ConvertFrom-Json</code> -- parses JSON responses from Splunk REST API</li>
-<li><code>ConvertTo-Json</code> -- generates manifest.json and other output files</li>
-<li><code>Invoke-WebRequest</code> / <code>Invoke-RestMethod</code> -- HTTP client (replaces curl)</li>
+<li>Tokens and passwords are never written to log files</li>
+<li>Debug mode redacts sensitive values in output</li>
+<li>Session keys from username/password auth are held in memory
+only</li>
+<li>Password encoding uses Python <code>urllib.parse.quote</code> via
+stdin to prevent shell expansion</li>
 </ul>
-<hr>
-<p>
-<em>End of Splunk Cloud Export Script Technical Specification</em>
-<em>Version 4.3.0</em>
-</p>
+<h3 id="tls">TLS</h3>
+<ul>
+<li>TLS verification is disabled (<code>curl -k</code>) to support
+Splunk Cloud instances with self-signed or custom CA certificates</li>
+<li>TLS version is determined by curl defaults (typically TLS 1.2+)</li>
+</ul>
+<h3 id="data-protection">Data Protection</h3>
+<ul>
+<li>Anonymization enabled by default produces two archives: original
+(for internal use) and masked (safe to share)</li>
+<li>Anonymization mapping is one-way (hash-based) and cannot be reversed
+from the export data alone</li>
+<li>Mapping files (<code>/tmp/dma_email_map_$$</code>,
+<code>/tmp/dma_host_map_$$</code>) are deleted after processing</li>
+<li>The generated Python anonymizer script (<code>.anonymizer.py</code>)
+is included in the export directory and archived</li>
+</ul>
+<h3 id="network">Network</h3>
+<ul>
+<li>All communication is HTTPS on port 8089</li>
+<li>Proxy support available for environments behind corporate
+firewalls</li>
+<li>When proxy is configured, direct DNS and TCP tests are skipped
+(proxy handles routing)</li>
+<li>The script never initiates outbound connections to any host other
+than the specified Splunk Cloud stack (and optionally the configured
+proxy)</li>
+</ul>
+<hr />
+<p><em>Generated for DMA Splunk Cloud Export v4.6.0</em></p>
     </main>
 
     <footer class="footer">

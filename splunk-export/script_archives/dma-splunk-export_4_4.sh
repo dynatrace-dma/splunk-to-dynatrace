@@ -9,21 +9,7 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script v4.6.0
-#
-#  v4.6.0 Changes:
-#    - CRITICAL: Dashboard views now use provenance field (search_type=dashboard was unreliable)
-#    - All _audit queries optimized: sourcetype=audittrail + info=granted (tsidx-level filtering)
-#    - Search type breakdown derived from provenance/search_id (matches Cloud logic)
-#    - Alert firing: added | fields before | stats (reduces indexer memory on large environments)
-#    - Global aggregate queries match Cloud architecture (dma_analytics/usage_analytics/)
-#    - Removed ALL | head N limits from usage queries (was silently dropping data)
-#    - Default USAGE_PERIOD changed to 30d (was 7d) for comprehensive migration planning
-#    - saved_searches_all.json: uses f= field selection (was 256MB+ raw REST dump)
-#    - alert_ownership.json: uses f= field selection (was duplicate 256MB+ REST dump)
-#    - Usage collection ON by default (was already true, now explicit)
-#    - --resume-collect + usage active: clears usage checkpoints to force re-collection
-#    - Dynamic daily_avg_gb calculation uses actual USAGE_PERIOD days (was hardcoded /7)
+#  DMA Splunk Export Script v4.4.0
 #
 #  v4.4.0 Changes:
 #    - Added --proxy URL flag: routes all curl calls through an HTTP proxy
@@ -126,7 +112,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.0"
+SCRIPT_VERSION="4.4.0"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -211,7 +197,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 AUTO_CONFIRM=false
-USAGE_PERIOD="30d"          # Default analytics window (30d recommended for migration; override with --analytics-period)
+USAGE_PERIOD="7d"           # Default analytics window (matches Cloud default; override with --analytics-period)
 ANALYTICS_PERIOD_SET=false  # true when --analytics-period was passed on CLI (skips interactive prompt)
 
 # App-scoped collection mode - when true, limits all collections to selected apps only
@@ -739,19 +725,46 @@ def safe_len(file_path, key='results'):
 if not os.path.isdir(analytics_dir):
     print('{}')
 else:
-    # v4.6.0: Reference global aggregate files only
     result = {
-        'prioritization': {
-            'top_dashboards': safe_get(os.path.join(analytics_dir, 'dashboard_views_global.json'), 'results.[:10]', []),
-            'top_alerts': safe_get(os.path.join(analytics_dir, 'alert_firing_global.json'), 'results.[:10]', []),
-            'top_users': safe_get(os.path.join(analytics_dir, 'user_activity_global.json'), 'results.[:10]', [])
+        'summary': {
+            'dashboards_never_viewed': safe_len(os.path.join(analytics_dir, 'dashboards_never_viewed.json')),
+            'alerts_never_fired': safe_len(os.path.join(analytics_dir, 'alerts_never_fired.json')),
+            'users_inactive_30d': safe_len(os.path.join(analytics_dir, 'users_inactive.json')),
+            'alerts_with_failures': safe_len(os.path.join(analytics_dir, 'alerts_failed.json'))
         },
         'volume': {
-            'index_volume': safe_get(os.path.join(analytics_dir, 'index_volume_summary.json'), 'results.[:50]', []),
-            'index_events': safe_get(os.path.join(analytics_dir, 'index_event_counts_daily.json'), 'results.[:10]', []),
-            'note': 'See index_volume_summary.json for per-index daily ingestion'
+            'avg_daily_gb': safe_get(os.path.join(analytics_dir, 'daily_volume_summary.json'), 'results.[0].avg_daily_gb', 0),
+            'peak_daily_gb': safe_get(os.path.join(analytics_dir, 'daily_volume_summary.json'), 'results.[0].peak_daily_gb', 0),
+            'total_30d_gb': safe_get(os.path.join(analytics_dir, 'daily_volume_summary.json'), 'results.[0].total_30d_gb', 0),
+            'top_indexes_by_volume': safe_get(os.path.join(analytics_dir, 'top_indexes_by_volume.json'), 'results.[:10]', []),
+            'top_sourcetypes_by_volume': safe_get(os.path.join(analytics_dir, 'top_sourcetypes_by_volume.json'), 'results.[:10]', []),
+            'top_hosts_by_volume': safe_get(os.path.join(analytics_dir, 'top_hosts_by_volume.json'), 'results.[:10]', []),
+            'note': 'See _usage_analytics/daily_volume_*.json for full daily breakdown'
         },
-        'search_patterns': safe_get(os.path.join(analytics_dir, 'search_patterns_global.json'), 'results.[:10]', [])
+        'ingestion_infrastructure': {
+            'summary': {
+                'total_forwarding_hosts': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/summary.json'), 'results.[0].total_forwarding_hosts', 0),
+                'daily_ingestion_gb': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/summary.json'), 'results.[0].daily_avg_gb', 0),
+                'hec_enabled': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/hec_usage.json'), 'results.[0].token_count', 0) > 0,
+                'hec_daily_gb': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/hec_usage.json'), 'results.[0].daily_avg_gb', 0)
+            },
+            'by_connection_type': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/by_connection_type.json'), 'results', []),
+            'by_input_method': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/by_input_method.json'), 'results', []),
+            'by_sourcetype_category': safe_get(os.path.join(analytics_dir, 'ingestion_infrastructure/by_sourcetype_category.json'), 'results', []),
+            'note': 'See _usage_analytics/ingestion_infrastructure/ for detailed breakdown'
+        },
+        'prioritization': {
+            'top_dashboards': safe_get(os.path.join(analytics_dir, 'dashboard_views_top100.json'), 'results.[:10]', []),
+            'top_users': safe_get(os.path.join(analytics_dir, 'users_most_active.json'), 'results.[:10]', []),
+            'top_alerts': safe_get(os.path.join(analytics_dir, 'alerts_most_fired.json'), 'results.[:10]', []),
+            'top_sourcetypes': safe_get(os.path.join(analytics_dir, 'sourcetypes_searched.json'), 'results.[:10]', []),
+            'top_indexes': safe_get(os.path.join(analytics_dir, 'indexes_searched.json'), 'results.[:10]', [])
+        },
+        'elimination_candidates': {
+            'dashboards_never_viewed_count': safe_len(os.path.join(analytics_dir, 'dashboards_never_viewed.json')),
+            'alerts_never_fired_count': safe_len(os.path.join(analytics_dir, 'alerts_never_fired.json')),
+            'note': 'See _usage_analytics/ for full lists of candidates'
+        }
     }
     print(json.dumps(result))
 " 2>/dev/null || echo "{}"
@@ -4252,393 +4265,188 @@ get_app_where_clause() {
 }
 
 # =============================================================================
-# ASYNC SEARCH HELPER — used by both collect_app_analytics and collect_usage_analytics
+# APP-SCOPED ANALYTICS COLLECTION
 # =============================================================================
-# Dispatches a Splunk search asynchronously (exec_mode=normal), polls for
-# completion with adaptive interval, and fetches results. Returns detailed
-# error info for remote debugging.
-# =============================================================================
-run_usage_search() {
-  local search_query="$1"
-  local output_file="$2"
-  local description="$3"
-  local max_wait="${4:-3600}"  # Default 1 hour max wait
-
-  debug_log "SEARCH" "Dispatching: $description"
-  debug_log "SEARCH" "Query: $(echo "$search_query" | head -c 200)..."
-
-  local search_start_time=$(date +%s)
-
-  # Rate limiting: pause before making API call
-  sleep "$API_DELAY_SECONDS"
-
-  # Step 1: Dispatch search asynchronously
-  local http_code job_response temp_file
-  temp_file=$(mktemp)
-
-  http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
-    --connect-timeout "$CONNECT_TIMEOUT" \
-    --max-time "$API_TIMEOUT" \
-    $CURL_PROXY_ARGS \
-    -H "$AUTH_HEADER" \
-    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
-    -d "output_mode=json" \
-    -d "exec_mode=normal" \
-    -d "earliest_time=-${USAGE_PERIOD}" \
-    -d "latest_time=now" \
-    --data-urlencode "search=$search_query" \
-    2>/dev/null)
-
-  job_response=$(cat "$temp_file")
-  rm -f "$temp_file"
-
-  # Detailed error handling based on HTTP status
-  case "$http_code" in
-    000)
-      log "NETWORK ERROR for '$description': Could not connect to ${SPLUNK_HOST}:${SPLUNK_PORT}"
-      echo "{\"error\": \"network_error\", \"description\": \"$description\", \"message\": \"Could not connect to Splunk REST API at ${SPLUNK_HOST}:${SPLUNK_PORT}.\", \"http_code\": \"$http_code\"}" > "$output_file"
-      ((STATS_ERRORS++))
-      return 1
-      ;;
-    401)
-      log "AUTH ERROR for '$description': Invalid credentials or expired token"
-      echo "{\"error\": \"auth_error\", \"description\": \"$description\", \"message\": \"Authentication failed.\", \"http_code\": \"$http_code\"}" > "$output_file"
-      ((STATS_ERRORS++))
-      return 1
-      ;;
-    403)
-      log "PERMISSION ERROR for '$description': User lacks required capabilities"
-      echo "{\"error\": \"permission_error\", \"description\": \"$description\", \"message\": \"User lacks permission.\", \"http_code\": \"$http_code\"}" > "$output_file"
-      ((STATS_ERRORS++))
-      return 1
-      ;;
-    404)
-      log "ENDPOINT ERROR for '$description': REST endpoint not found"
-      echo "{\"error\": \"endpoint_not_found\", \"description\": \"$description\", \"http_code\": \"$http_code\"}" > "$output_file"
-      ((STATS_ERRORS++))
-      return 1
-      ;;
-    500|502|503)
-      log "SERVER ERROR for '$description': Splunk server error ($http_code)"
-      local escaped_response
-      escaped_response=$(echo "$job_response" | head -c 500 | \
-        $PYTHON_CMD -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"truncated"')
-      echo "{\"error\": \"server_error\", \"description\": \"$description\", \"http_code\": \"$http_code\", \"response\": $escaped_response}" > "$output_file"
-      ((STATS_ERRORS++))
-      return 1
-      ;;
-  esac
-
-  # Step 2: Extract SID
-  local sid
-  sid=$(echo "$job_response" | \
-    $PYTHON_CMD -c "import json,sys; d=json.load(sys.stdin); print(d.get('sid',''))" 2>/dev/null)
-  if [ -z "$sid" ]; then
-    sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
-  fi
-
-  if [ -z "$sid" ]; then
-    local error_msg
-    error_msg=$(echo "$job_response" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
-    [ -z "$error_msg" ] && error_msg="Unknown error creating search job"
-    debug_log "ERROR" "Search job creation failed for '$description': $error_msg"
-    echo "{\"error\": \"search_create_failed\", \"description\": \"$description\", \"message\": \"$error_msg\", \"http_code\": \"$http_code\"}" > "$output_file"
-    ((STATS_ERRORS++))
-    return 1
-  fi
-
-  debug_log "SEARCH" "Dispatched SID=${sid:0:24} for '$description'"
-
-  # Step 3: Poll dispatchState until DONE or FAILED (adaptive interval: 5s → 30s)
-  local poll_interval=5
-  local elapsed=0
-
-  while true; do
-    sleep "$poll_interval"
-    elapsed=$(( $(date +%s) - search_start_time ))
-
-    if [ "$elapsed" -gt "$max_wait" ]; then
-      debug_log "SEARCH" "TIMEOUT SID=$sid after ${elapsed}s"
-      log "TIMEOUT for '$description': Search did not complete in ${max_wait}s"
-      curl -k -s -H "$AUTH_HEADER" \
-        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/control" \
-        -d "action=cancel" >/dev/null 2>&1
-      echo "{\"error\": \"timeout\", \"description\": \"$description\", \"message\": \"Search timed out after ${max_wait} seconds.\", \"search_id\": \"$sid\"}" > "$output_file"
-      ((STATS_ERRORS++))
-      return 1
-    fi
-
-    local status_response
-    status_response=$(curl -k -s -G \
-      --connect-timeout "$CONNECT_TIMEOUT" \
-      $CURL_PROXY_ARGS \
-      -H "$AUTH_HEADER" \
-      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid" \
-      -d "output_mode=json" 2>/dev/null)
-
-    local dispatch_state
-    dispatch_state=$(echo "$status_response" | \
-      $PYTHON_CMD -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    print(d['entry'][0]['content']['dispatchState'])
-except:
-    print('')
-" 2>/dev/null)
-
-    if [ -z "$dispatch_state" ]; then
-      local is_done
-      is_done=$(echo "$status_response" | grep -o '"isDone":[^,}]*' | cut -d: -f2 | tr -d ' ')
-      [ "$is_done" = "true" ] && dispatch_state="DONE"
-    fi
-
-    case "$dispatch_state" in
-      DONE)
-        log "Search completed (${elapsed}s): $description"
-        break
-        ;;
-      FAILED)
-        local err_msg
-        err_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
-        log "SEARCH FAILED for '$description': $err_msg"
-        echo "{\"error\": \"search_failed\", \"description\": \"$description\", \"search_id\": \"$sid\", \"details\": \"$err_msg\"}" > "$output_file"
-        ((STATS_ERRORS++))
-        return 1
-        ;;
-      QUEUED|PARSING|RUNNING|FINALIZING)
-        if [ "$poll_interval" -lt 30 ]; then
-          poll_interval=$(( poll_interval + 5 ))
-        fi
-        if [ $(( elapsed % 60 )) -lt "$poll_interval" ]; then
-          log "  Still running (${elapsed}s, state=$dispatch_state): $description"
-        fi
-        ;;
-      *)
-        if echo "$status_response" | grep -q '"isFailed":true'; then
-          local fail_msg
-          fail_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
-          log "SEARCH FAILED for '$description': $fail_msg"
-          echo "{\"error\": \"search_failed\", \"description\": \"$description\", \"search_id\": \"$sid\", \"details\": \"$fail_msg\"}" > "$output_file"
-          ((STATS_ERRORS++))
-          return 1
-        fi
-        ;;
-    esac
-  done
-
-  # Step 4: Fetch results
-  http_code=$(curl -k -s -w "%{http_code}" -o "$output_file" \
-    --connect-timeout "$CONNECT_TIMEOUT" \
-    --max-time "$API_TIMEOUT" \
-    $CURL_PROXY_ARGS \
-    -H "$AUTH_HEADER" \
-    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
-    2>/dev/null)
-
-  if [ "$http_code" != "200" ]; then
-    debug_log "ERROR" "Results fetch failed for sid=$sid: HTTP $http_code"
-    log "RESULTS FETCH FAILED for '$description': HTTP $http_code"
-    echo "{\"error\": \"results_fetch_failed\", \"description\": \"$description\", \"http_code\": \"$http_code\"}" > "$output_file"
-    ((STATS_ERRORS++))
-    return 1
-  fi
-
-  local search_duration=$(( $(date +%s) - search_start_time ))
-  debug_log "SEARCH" "COMPLETED SID=$sid in ${search_duration}s"
-  debug_timing "Search: $description" "$search_duration"
-  log "Completed search: $description (${search_duration}s)"
-  return 0
-}
-
-# =============================================================================
-# APP-SCOPED ANALYTICS COLLECTION (v4.6.0 — matches Cloud architecture)
-# =============================================================================
-# Runs GLOBAL aggregate queries (grouped by app) instead of per-app loops,
-# storing results in dma_analytics/usage_analytics/ — the same location and
-# format as the Cloud export script. The DMA Server's stageUsageAnalytics()
-# picks these up and stages them to splunk-resources/analytics/usage/.
+# Collects usage analytics specific to a single app. This is called for each
+# app during export to create app-level usage data that's more actionable
+# for migration prioritization than global aggregates.
 #
-# This reduces ~500+ search jobs to ~6, cutting collection time from 18+ hours
-# to under 1 hour even on very large Splunk environments.
-#
-# Per-app REST queries (alerts inventory) still run individually since | rest
-# requires per-app namespace.
+# Creates: $EXPORT_DIR/$app/splunk-analysis/
+#   - dashboard_views.json      (views for THIS app's dashboards)
+#   - alert_firing.json         (firing stats for THIS app's alerts)
+#   - search_usage.json         (run counts for THIS app's saved searches)
+#   - index_references.json     (which indexes THIS app queries)
 # =============================================================================
 
 collect_app_analytics() {
-  # v4.6.0: This function no longer takes an $app argument.
-  # It runs GLOBAL aggregate queries (by app) instead of per-app loops.
-  # The DMA Server splits global results into per-app data after import.
+  local app="$1"
 
+  # Skip if no REST API access
   if [ -z "$AUTH_HEADER" ]; then
     return 0
   fi
 
-  if [ "$COLLECT_USAGE" != "true" ]; then
+  # Skip if --skip-internal (all app analytics use _audit/_internal)
+  if [ "$SKIP_INTERNAL" = "true" ]; then
     return 0
   fi
 
-  local analytics_dir="$EXPORT_DIR/dma_analytics/usage_analytics"
-  mkdir -p "$analytics_dir"
-
-  # Build app filter for scoped mode (empty string when not scoped)
-  local app_filter=""
-  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
-    app_filter=$(get_app_filter "app")
-    log "  App-scoped analytics: filtering to ${#SELECTED_APPS[@]} apps"
+  # Skip if usage collection disabled
+  if [ "$COLLECT_USAGE" = false ]; then
+    return 0
   fi
 
-  # Compute numeric days from USAGE_PERIOD for daily average calculations
-  local usage_days
-  usage_days=$(echo "$USAGE_PERIOD" | sed 's/d$//')
-  [ -z "$usage_days" ] || ! [[ "$usage_days" =~ ^[0-9]+$ ]] && usage_days=30
-
-  local analytics_start=$(date +%s)
-  info "Running global analytics queries (v4.6.0 — async dispatch)..."
-  echo ""
-  echo -e "    ${DIM}Analytics period: ${USAGE_PERIOD} | Dispatch: async (max 1h per query)${NC}"
-  echo -e "    ${DIM}Queries use verified field names: provenance, sourcetype=audittrail${NC}"
-  echo ""
-
-  # =========================================================================
-  # QUERY 1: DASHBOARD VIEWS (MOST CRITICAL)
-  # Uses provenance field to identify dashboard-triggered searches.
-  # De-duplicates using view_session (30s window per user = 1 page load).
-  # sourcetype=audittrail narrows at tsidx level for massive environments.
-  # =========================================================================
-  if has_analytics_checkpoint "dashboard_views"; then
-    log "  [1/6] Dashboard views — SKIP (checkpoint exists)"
-  else
-    local q1_file="$analytics_dir/dashboard_views_global.json"
-    run_usage_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count" \
-      "$q1_file" \
-      "Dashboard views (global, provenance-based)" \
-      3600
-    save_analytics_checkpoint "dashboard_views" "$q1_file"
+  # Skip if already checkpointed (resume support)
+  if has_analytics_checkpoint "app_analytics:$app"; then
+    log "Skipping app analytics for $app (checkpoint)"
+    return 0
   fi
 
-  # =========================================================================
-  # QUERY 2: USER ACTIVITY
-  # Counts searches per user per app for migration team planning.
-  # sourcetype=audittrail + info=granted narrow at tsidx level.
-  # =========================================================================
-  if has_analytics_checkpoint "user_activity"; then
-    log "  [2/6] User activity — SKIP (checkpoint exists)"
-  else
-    local q2_file="$analytics_dir/user_activity_global.json"
-    run_usage_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" user!=\"nobody\" earliest=-${USAGE_PERIOD} | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user | sort -searches" \
-      "$q2_file" \
-      "User activity (global)" \
-      3600
-    save_analytics_checkpoint "user_activity" "$q2_file"
-  fi
+  local analysis_dir="$EXPORT_DIR/$app/splunk-analysis"
+  mkdir -p "$analysis_dir"
 
-  # =========================================================================
-  # QUERY 3: SEARCH TYPE BREAKDOWN
-  # Derives search_type from provenance/search_id (since search_type is NOT
-  # a native _audit field — it's computed by Monitoring Console eval case()).
-  # sourcetype=audittrail + info=granted narrow at tsidx level.
-  # =========================================================================
-  if has_analytics_checkpoint "search_patterns"; then
-    log "  [3/6] Search patterns — SKIP (checkpoint exists)"
-  else
-    local q3_file="$analytics_dir/search_patterns_global.json"
-    run_usage_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | eval search_type=case(match(provenance, \"^UI:[Dd]ashboard:\"), \"dashboard\", match(search_id, \"^(rt_)?scheduler__\"), \"scheduled\", match(savedsearch_name, \"^_ACCELERATE_\"), \"acceleration\", match(search_id, \"^SummaryDirector_\"), \"summarization\", isnotnull(provenance) AND match(provenance, \"^UI:\"), \"interactive\", 1=1, \"other\") | stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type | sort -total_searches" \
-      "$q3_file" \
-      "Search type breakdown (global)" \
-      1800
-    save_analytics_checkpoint "search_patterns" "$q3_file"
-  fi
+  log "Collecting app-scoped analytics for: $app"
 
-  # =========================================================================
-  # QUERY 4: DAILY INGESTION VOLUME (from _internal license_usage.log)
-  # Critical for Dynatrace Grail storage planning and cost estimation.
-  # =========================================================================
-  if has_analytics_checkpoint "index_volume"; then
-    log "  [4/6] Index volume — SKIP (checkpoint exists)"
-  else
-    local q4_file="$analytics_dir/index_volume_summary.json"
-    if [ "$SKIP_INTERNAL" != "true" ]; then
-      run_usage_search \
-        "search index=_internal source=*license_usage.log type=Usage earliest=-${USAGE_PERIOD} | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/${usage_days}, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event" \
-        "$q4_file" \
-        "Daily ingestion volume (license_usage.log)" \
-        600
-      save_analytics_checkpoint "index_volume" "$q4_file"
-    else
-      echo '{"skipped": true, "reason": "_internal index not accessible (--skip-internal)."}' > "$q4_file"
-      save_analytics_checkpoint "index_volume" "$q4_file"
+  # Helper to run a quick search for this app (shorter timeout for per-app queries)
+  run_app_search() {
+    local search_query="$1"
+    local output_file="$2"
+    local description="$3"
+    local max_wait="${4:-120}"  # 2 minute default for app-specific queries
+
+    # Rate limiting
+    sleep "$API_DELAY_SECONDS"
+
+    local temp_file=$(mktemp)
+    local http_code
+
+    http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" \
+      -d "earliest_time=-${USAGE_PERIOD}" \
+      -d "latest_time=now" \
+      --data-urlencode "search=$search_query" \
+      2>/dev/null)
+
+    local job_response=$(cat "$temp_file")
+    rm -f "$temp_file"
+
+    # Handle HTTP errors
+    if [ "$http_code" != "201" ] && [ "$http_code" != "200" ]; then
+      log "Search failed for $app/$description: HTTP $http_code"
+      echo "{\"error\": \"http_$http_code\", \"app\": \"$app\", \"description\": \"$description\"}" > "$output_file"
+      return 1
     fi
-  fi
 
-  # =========================================================================
-  # QUERY 5: ALERT FIRING STATS (from _internal scheduler)
-  # Shows which saved searches/alerts are actively running and their status.
-  # =========================================================================
-  if has_analytics_checkpoint "alert_firing"; then
-    log "  [5/6] Alert firing — SKIP (checkpoint exists)"
-  else
-    local q5_file="$analytics_dir/alert_firing_global.json"
-    if [ "$SKIP_INTERNAL" != "true" ]; then
-      run_usage_search \
-        "search index=_internal sourcetype=scheduler ${app_filter} earliest=-${USAGE_PERIOD} | fields _time, app, savedsearch_name, status | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
-        "$q5_file" \
-        "Alert firing stats (global)" \
-        3600
-      save_analytics_checkpoint "alert_firing" "$q5_file"
-    else
-      echo '{"skipped": true, "reason": "_internal index not accessible (--skip-internal)."}' > "$q5_file"
-      save_analytics_checkpoint "alert_firing" "$q5_file"
+    local sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
+
+    if [ -z "$sid" ]; then
+      log "No SID returned for $app/$description"
+      echo "{\"error\": \"no_sid\", \"app\": \"$app\", \"description\": \"$description\"}" > "$output_file"
+      return 1
     fi
-  fi
 
-  # =========================================================================
-  # QUERY 6: ALERTS INVENTORY via REST (per-app, uses blocking since | rest is fast)
-  # This is the only per-app query remaining — it uses | rest which is quick.
-  # =========================================================================
-  if has_analytics_checkpoint "alerts_inventory"; then
-    log "  [6/6] Alerts inventory — SKIP (checkpoint exists)"
-  else
-    local q6_count=0
-    for app in "${SELECTED_APPS[@]}"; do
-      local app_analysis_dir="$EXPORT_DIR/$app/splunk-analysis"
-      mkdir -p "$app_analysis_dir"
+    # Wait for completion
+    local waited=0
+    local is_done="false"
 
-      # Quick blocking search for per-app REST data
-      sleep "$API_DELAY_SECONDS"
-      local temp_file=$(mktemp)
-      local http_code
-      http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
-        -H "$AUTH_HEADER" \
-        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
-        -d "output_mode=json" \
-        -d "exec_mode=blocking" \
-        -d "timeout=120" \
-        --data-urlencode "search=| rest /servicesNS/-/$app/saved/searches | search (is_scheduled=1 OR alert.track=1) | table title, cron_schedule, alert.severity, alert.track, actions, disabled | rename title as alert_name" \
-        2>/dev/null)
-      local job_response=$(cat "$temp_file")
-      rm -f "$temp_file"
-      if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        local sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
-        if [ -n "$sid" ]; then
-          curl -k -s -o "$app_analysis_dir/alerts_inventory.json" \
-            -H "$AUTH_HEADER" \
-            "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
-            2>/dev/null
-        fi
-      fi
-      ((q6_count++))
+    while [ "$is_done" != "true" ] && [ "$waited" -lt "$max_wait" ]; do
+      sleep 3
+      waited=$((waited + 3))
+
+      local status=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid" \
+        -d "output_mode=json" 2>/dev/null)
+
+      is_done=$(echo "$status" | grep -o '"isDone":[^,}]*' | cut -d: -f2 | tr -d ' ')
     done
-    echo "{\"completed\": true, \"apps_processed\": $q6_count}" > "$analytics_dir/.alerts_inventory_done"
-    save_analytics_checkpoint "alerts_inventory" "$analytics_dir/.alerts_inventory_done"
-  fi
 
-  local analytics_elapsed=$(($(date +%s) - analytics_start))
-  success "Global analytics completed in ${analytics_elapsed}s (6 queries vs ${#SELECTED_APPS[@]}×8 = $((${#SELECTED_APPS[@]} * 8)) in previous versions)"
+    if [ "$is_done" = "true" ]; then
+      curl -k -s -o "$output_file" \
+        -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
+        2>/dev/null
+      return 0
+    else
+      echo "{\"error\": \"timeout\", \"app\": \"$app\", \"description\": \"$description\"}" > "$output_file"
+      return 1
+    fi
+  }
+
+  # -------------------------------------------------------------------------
+  # 1. DASHBOARD VIEWS - Top dashboards in THIS app by view count
+  # OPTIMIZED: Moved filters to search-time, changed latest() to max()
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_audit action=search search_type=dashboard app=\"$app\" earliest=-${USAGE_PERIOD} user!=splunk-system-user | stats count as view_count, dc(user) as unique_users, max(_time) as last_viewed by dashboard | sort -view_count | head 100" \
+    "$analysis_dir/dashboard_views.json" \
+    "Dashboard views for $app"
+
+  # -------------------------------------------------------------------------
+  # 2. ALERT FIRING STATS - Alert execution stats for THIS app's alerts
+  # OPTIMIZED: Removed status=*, changed latest() to max(), simplified eval
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_internal sourcetype=scheduler app=\"$app\" earliest=-${USAGE_PERIOD} | stats count as total_runs, sum(eval(status=\"success\")) as successful, sum(eval(status=\"skipped\")) as skipped, sum(eval(status!=\"success\" AND status!=\"skipped\")) as failed, max(_time) as last_run by savedsearch_name | sort -total_runs | head 100" \
+    "$analysis_dir/alert_firing.json" \
+    "Alert firing stats for $app"
+
+  # -------------------------------------------------------------------------
+  # 3. SAVED SEARCH USAGE - Run frequency for THIS app's saved searches
+  # OPTIMIZED: Added | fields early, changed latest() to max()
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_internal sourcetype=scheduler app=\"$app\" earliest=-${USAGE_PERIOD} | fields savedsearch_name, run_time, _time | stats count as run_count, avg(run_time) as avg_runtime, max(run_time) as max_runtime, max(_time) as last_run by savedsearch_name | sort -run_count | head 100" \
+    "$analysis_dir/search_usage.json" \
+    "Search usage for $app"
+
+  # -------------------------------------------------------------------------
+  # 4. INDEX REFERENCES - Which indexes does THIS app query?
+  # OPTIMIZED: Added | sample 20 before expensive rex extraction
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_audit action=search app=\"$app\" earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"index\\s*=\\s*(?<idx>[\\w\\*_-]+)\" | stats count as sample_count, dc(user) as unique_users by idx | eval estimated_query_count=sample_count*20 | where isnotnull(idx) | sort -estimated_query_count | head 50" \
+    "$analysis_dir/index_references.json" \
+    "Index references for $app"
+
+  # -------------------------------------------------------------------------
+  # 5. SOURCETYPE REFERENCES - Which sourcetypes does THIS app query?
+  # OPTIMIZED: Added | sample 20 before expensive rex extraction
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_audit action=search app=\"$app\" earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"sourcetype\\s*=\\s*(?<st>[\\w\\*_-]+)\" | stats count as sample_count by st | eval estimated_query_count=sample_count*20 | where isnotnull(st) | sort -estimated_query_count | head 50" \
+    "$analysis_dir/sourcetype_references.json" \
+    "Sourcetype references for $app"
+
+  # -------------------------------------------------------------------------
+  # 6a. DASHBOARD VIEW COUNTS - Simpler query for this app (Curator correlates later)
+  # OPTIMIZED: Provides reliable data for Curator app to compute "never viewed"
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_audit action=search search_type=dashboard app=\"$app\" earliest=-${USAGE_PERIOD} user!=splunk-system-user savedsearch_name=* | stats count as views by savedsearch_name | rename savedsearch_name as dashboard" \
+    "$analysis_dir/dashboard_view_counts.json" \
+    "Dashboard view counts for $app"
+
+  # -------------------------------------------------------------------------
+  # 6b. DASHBOARDS NEVER VIEWED - Legacy query (uses | rest + | append)
+  # Note: Kept for compatibility. Curator app can also compute this from view_counts + manifest
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "index=_audit action=search search_type=dashboard app=\"$app\" earliest=-${USAGE_PERIOD} | stats count by dashboard | append [| rest /servicesNS/-/$app/data/ui/views | table title | rename title as dashboard | eval count=0] | stats sum(count) as total_views by dashboard | where total_views=0 | table dashboard" \
+    "$analysis_dir/dashboards_never_viewed.json" \
+    "Never-viewed dashboards for $app"
+
+  # -------------------------------------------------------------------------
+  # 7. ALERTS NEVER FIRED - Alerts in THIS app that never triggered
+  # -------------------------------------------------------------------------
+  run_app_search \
+    "search index=_internal sourcetype=scheduler app=\"$app\" | stats count by savedsearch_name | append [| rest /servicesNS/-/$app/saved/searches | search is_scheduled=1 | table title | rename title as savedsearch_name | eval count=0] | stats sum(count) as total_runs by savedsearch_name | where total_runs=0 | table savedsearch_name" \
+    "$analysis_dir/alerts_never_fired.json" \
+    "Never-fired alerts for $app"
+
+  save_analytics_checkpoint "app_analytics:$app"
+  log "Completed app-scoped analytics for: $app"
 }
 
 # =============================================================================
@@ -4667,10 +4475,256 @@ collect_usage_analytics() {
   fi
 
   # =========================================================================
-  # v4.6.0: Stripped to ownership + REST metadata + summary.
-  # Detailed per-category usage queries removed — the 6 global aggregate
-  # queries in collect_app_analytics() produce everything the Explorer needs.
+  # APP-SCOPED ANALYTICS
+  # When scoped mode is enabled, filter all searches to selected apps only.
+  # This dramatically reduces search time and result size in large environments.
   # =========================================================================
+  local app_filter=""
+  local app_where=""
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    app_filter=$(get_app_filter "app")
+    app_where=$(get_app_where_clause "app")
+    echo ""
+    echo -e "  ${CYAN}ℹ APP-SCOPED ANALYTICS: Filtering to ${#SELECTED_APPS[@]} app(s)${NC}"
+    echo -e "  ${DIM}  Apps: ${SELECTED_APPS[*]}${NC}"
+    echo ""
+  fi
+
+  # Define collection tasks for progress tracking
+  # NOTE: Per-app analytics (dashboard views, alert firing, search usage) are now
+  # collected in each app's splunk-analysis/ folder. This function collects
+  # GLOBAL/INFRASTRUCTURE analytics that span all apps.
+  local tasks=(
+    "user_activity:User activity metrics (org-level)"
+    "data_source_usage:Data source consumption"
+    "daily_volume:Daily volume analysis"
+    "ingestion_infra:Ingestion infrastructure"
+    "user_role_mapping:User/role mapping (RBAC)"
+    "scheduler_status:Scheduler execution stats"
+  )
+
+  progress_init "Collecting Usage Intelligence (${USAGE_PERIOD})" "${#tasks[@]}"
+
+  local task_num=0
+
+  # Helper function to run a Splunk search and save results
+  # Returns detailed error info for remote debugging
+  # Includes rate limiting to avoid impacting Splunk performance
+  run_usage_search() {
+    local search_query="$1"
+    local output_file="$2"
+    local description="$3"
+    local max_wait="${4:-3600}"  # Default 1 hour max wait
+
+    debug_log "SEARCH" "Dispatching: $description"
+    debug_log "SEARCH" "Query: $(echo "$search_query" | head -c 200)..."
+
+    local search_start_time=$(date +%s)
+
+    # Rate limiting: pause before making API call
+    sleep "$API_DELAY_SECONDS"
+
+    # -------------------------------------------------------------------------
+    # Step 1: Dispatch search asynchronously (exec_mode=normal returns SID immediately).
+    # This prevents timeouts on large _audit/_internal datasets.
+    # -------------------------------------------------------------------------
+    local http_code job_response temp_file
+    temp_file=$(mktemp)
+
+    http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+      --connect-timeout "$CONNECT_TIMEOUT" \
+      --max-time "$API_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" \
+      -d "exec_mode=normal" \
+      -d "earliest_time=-${USAGE_PERIOD}" \
+      -d "latest_time=now" \
+      --data-urlencode "search=$search_query" \
+      2>/dev/null)
+
+    job_response=$(cat "$temp_file")
+    rm -f "$temp_file"
+
+    # Detailed error handling based on HTTP status
+    case "$http_code" in
+      000)
+        log "NETWORK ERROR for '$description': Could not connect to ${SPLUNK_HOST}:${SPLUNK_PORT}"
+        echo "{\"error\": \"network_error\", \"description\": \"$description\", \"message\": \"Could not connect to Splunk REST API at ${SPLUNK_HOST}:${SPLUNK_PORT}. Check: 1) Splunk is running 2) Port 8089 is accessible 3) No firewall blocking\", \"http_code\": \"$http_code\"}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+        ;;
+      401)
+        log "AUTH ERROR for '$description': Invalid credentials or expired token"
+        echo "{\"error\": \"auth_error\", \"description\": \"$description\", \"message\": \"Authentication failed. Check username/password or API token.\", \"http_code\": \"$http_code\"}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+        ;;
+      403)
+        log "PERMISSION ERROR for '$description': User lacks required capabilities"
+        echo "{\"error\": \"permission_error\", \"description\": \"$description\", \"message\": \"User lacks permission. Required capabilities: search, schedule_search. Check role assignments in Splunk.\", \"http_code\": \"$http_code\"}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+        ;;
+      404)
+        log "ENDPOINT ERROR for '$description': REST endpoint not found"
+        echo "{\"error\": \"endpoint_not_found\", \"description\": \"$description\", \"message\": \"REST API endpoint not found.\", \"http_code\": \"$http_code\"}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+        ;;
+      500|502|503)
+        log "SERVER ERROR for '$description': Splunk server error ($http_code)"
+        local escaped_response
+        escaped_response=$(echo "$job_response" | head -c 500 | \
+          $PYTHON_CMD -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"truncated"')
+        echo "{\"error\": \"server_error\", \"description\": \"$description\", \"message\": \"Splunk server error. Check splunkd.log for details.\", \"http_code\": \"$http_code\", \"response\": $escaped_response}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+        ;;
+    esac
+
+    # -------------------------------------------------------------------------
+    # Step 2: Extract SID from the dispatch response.
+    # -------------------------------------------------------------------------
+    local sid
+    sid=$(echo "$job_response" | \
+      $PYTHON_CMD -c "import json,sys; d=json.load(sys.stdin); print(d.get('sid',''))" 2>/dev/null)
+    # Fallback: grep-based extraction
+    if [ -z "$sid" ]; then
+      sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
+    fi
+
+    if [ -z "$sid" ]; then
+      local error_msg
+      error_msg=$(echo "$job_response" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
+      [ -z "$error_msg" ] && error_msg="Unknown error creating search job"
+      debug_log "ERROR" "Search job creation failed for '$description': $error_msg"
+      echo "{\"error\": \"search_create_failed\", \"description\": \"$description\", \"message\": \"$error_msg\", \"http_code\": \"$http_code\", \"query_preview\": \"$(echo "$search_query" | head -c 200)\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+    fi
+
+    debug_log "SEARCH" "Dispatched SID=${sid:0:24} for '$description'"
+
+    # -------------------------------------------------------------------------
+    # Step 3: Poll dispatchState until DONE or FAILED.
+    # Uses adaptive interval: starts at 5s, increases to 30s.
+    # -------------------------------------------------------------------------
+    local poll_interval=5
+    local elapsed=0
+
+    while true; do
+      sleep "$poll_interval"
+      elapsed=$(( $(date +%s) - search_start_time ))
+
+      # Enforce max_wait ceiling; cancel job to free search quota
+      if [ "$elapsed" -gt "$max_wait" ]; then
+        debug_log "SEARCH" "TIMEOUT SID=$sid after ${elapsed}s"
+        log "TIMEOUT for '$description': Search did not complete in ${max_wait}s"
+        curl -k -s -H "$AUTH_HEADER" \
+          "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/control" \
+          -d "action=cancel" >/dev/null 2>&1
+        echo "{\"error\": \"timeout\", \"description\": \"$description\", \"message\": \"Search timed out after ${max_wait} seconds. Consider running manually.\", \"search_id\": \"$sid\"}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+      fi
+
+      local status_response
+      status_response=$(curl -k -s -G \
+        --connect-timeout "$CONNECT_TIMEOUT" \
+        $CURL_PROXY_ARGS \
+        -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid" \
+        -d "output_mode=json" 2>/dev/null)
+
+      local dispatch_state
+      dispatch_state=$(echo "$status_response" | \
+        $PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(d['entry'][0]['content']['dispatchState'])
+except:
+    print('')
+" 2>/dev/null)
+
+      # Fallback if Python parse failed: check isDone
+      if [ -z "$dispatch_state" ]; then
+        local is_done
+        is_done=$(echo "$status_response" | grep -o '"isDone":[^,}]*' | cut -d: -f2 | tr -d ' ')
+        [ "$is_done" = "true" ] && dispatch_state="DONE"
+      fi
+
+      case "$dispatch_state" in
+        DONE)
+          log "Search completed (${elapsed}s): $description"
+          break
+          ;;
+        FAILED)
+          local err_msg
+          err_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
+          log "SEARCH FAILED for '$description': $err_msg"
+          echo "{\"error\": \"search_failed\", \"description\": \"$description\", \"message\": \"Search execution failed\", \"search_id\": \"$sid\", \"details\": \"$err_msg\"}" > "$output_file"
+          ((STATS_ERRORS++))
+          return 1
+          ;;
+        QUEUED|PARSING|RUNNING|FINALIZING)
+          # Increase poll interval gradually (cap at 30s)
+          if [ "$poll_interval" -lt 30 ]; then
+            poll_interval=$(( poll_interval + 5 ))
+          fi
+          # Log progress every ~60s
+          if [ $(( elapsed % 60 )) -lt "$poll_interval" ]; then
+            log "  Still running (${elapsed}s, state=$dispatch_state): $description"
+          fi
+          ;;
+        *)
+          # isFailed check as final fallback
+          if echo "$status_response" | grep -q '"isFailed":true'; then
+            local fail_msg
+            fail_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
+            log "SEARCH FAILED for '$description': $fail_msg"
+            echo "{\"error\": \"search_failed\", \"description\": \"$description\", \"message\": \"Search execution failed\", \"search_id\": \"$sid\", \"details\": \"$fail_msg\"}" > "$output_file"
+            ((STATS_ERRORS++))
+            return 1
+          fi
+          # Unknown state — keep waiting
+          ;;
+      esac
+    done
+
+    # -------------------------------------------------------------------------
+    # Step 4: Fetch results.
+    # -------------------------------------------------------------------------
+    http_code=$(curl -k -s -w "%{http_code}" -o "$output_file" \
+      --connect-timeout "$CONNECT_TIMEOUT" \
+      --max-time "$API_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
+      2>/dev/null)
+
+    if [ "$http_code" != "200" ]; then
+      debug_log "ERROR" "Results fetch failed for sid=$sid: HTTP $http_code"
+      log "RESULTS FETCH FAILED for '$description': HTTP $http_code"
+      echo "{\"error\": \"results_fetch_failed\", \"description\": \"$description\", \"http_code\": \"$http_code\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+    fi
+
+    local search_duration=$(( $(date +%s) - search_start_time ))
+    debug_log "SEARCH" "COMPLETED SID=$sid in ${search_duration}s"
+    debug_timing "Search: $description" "$search_duration"
+    log "Completed search: $description (${search_duration}s)"
+    return 0
+  }
+
+  # Build app filter string for use in searches (empty if not in scoped mode)
+  local app_search_filter=""
+  if [ -n "$app_filter" ]; then
+    app_search_filter="$app_filter "
+  fi
 
   # Build REST app filter for | rest queries (filters by eai:acl.app)
   local app_rest_filter=""
@@ -4678,15 +4732,220 @@ collect_usage_analytics() {
     app_rest_filter=$(get_app_where_clause "eai:acl.app")
   fi
 
-  local tasks=(
-    "ownership:Ownership mapping (REST)"
-    "rest_metadata:REST supplementary metadata"
-  )
-  progress_init "Collecting Usage Intelligence" "${#tasks[@]}"
-  local task_num=0
+  # ==========================================================================
+  # 1. USER ACTIVITY METRICS (Org-level)
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_user_activity"; then
+    info "Collecting user activity metrics..."
+
+    # Most active users (filtered to selected apps in scoped mode)
+    # OPTIMIZED: Moved user filter to search-time, changed latest() to max()
+    run_usage_search \
+      "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=splunk-system-user | stats count as search_count, dc(search) as unique_searches, max(_time) as last_active by user | sort -search_count | head 50" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" \
+      "Most active users"
+
+    # User activity by role
+    # OPTIMIZED: Moved filter to search-time
+    run_usage_search \
+      "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | stats count as searches, dc(user) as users by roles | sort -searches" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/activity_by_role.json" \
+      "Activity by role"
+
+    # Inactive users (no activity in period)
+    # OPTIMIZED: Moved filter to search-time, changed latest() to max()
+    run_usage_search \
+      "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | stats max(_time) as last_active by user | where last_active < relative_time(now(), \"-30d\") | table user, last_active" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/users_inactive.json" \
+      "Inactive users"
+
+    # User sessions per day
+    # OPTIMIZED: Moved filter to search-time
+    run_usage_search \
+      "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} user!=splunk-system-user | timechart span=1d dc(user) as active_users" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_active_users.json" \
+      "Daily active users"
+
+    save_analytics_checkpoint "usage_user_activity"
+  else
+    info "Skipping user activity metrics (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "User activity metrics"
+
+  # NOTE: Alert execution statistics are now collected per-app
+  # See each app's splunk-analysis/alert_firing.json for app-specific data
 
   # ==========================================================================
-  # 1. OWNERSHIP MAPPING (For user-centric migration)
+  # 2. DATA SOURCE USAGE (Infrastructure-level)
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_data_source"; then
+    info "Collecting data source usage patterns..."
+
+    # Sourcetypes actually searched (vs configured)
+    # OPTIMIZED: Added | sample 20 before expensive rex extraction
+    run_usage_search \
+      "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"sourcetype=(?<searched_sourcetype>[\\w:_-]+)\" | stats count as sample_count, dc(user) as users by searched_sourcetype | eval estimated_count=sample_count*20 | sort -estimated_count | head 50" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/sourcetypes_searched.json" \
+      "Most searched sourcetypes"
+
+    # Index usage (which indexes are actually queried)
+    # OPTIMIZED: Added | sample 20 before expensive rex extraction
+    run_usage_search \
+      "index=_audit action=search ${app_search_filter}earliest=-${USAGE_PERIOD} | sample 20 | rex field=search \"index=(?<queried_index>[\\w_-]+)\" | stats count as sample_count, dc(user) as users by queried_index | eval estimated_count=sample_count*20 | sort -estimated_count" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/indexes_queried.json" \
+      "Indexes actually queried"
+
+    # Data volume by index (for capacity planning)
+    run_usage_search \
+      '| dbinspect index=* | stats sum(sizeOnDiskMB) as size_mb, sum(eventCount) as events by index | sort - size_mb' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/index_sizes.json" \
+      "Index sizes and event counts"
+
+    save_analytics_checkpoint "usage_data_source"
+  else
+    info "Skipping data source usage patterns (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "Data source usage patterns"
+
+  # ==========================================================================
+  # 3. DAILY VOLUME ANALYSIS (Infrastructure - capacity planning)
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_daily_volume"; then
+    info "Collecting daily volume statistics (last 30 days)..."
+
+    # Daily volume by index (GB per day)
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by idx | eval gb=round(bytes/1024/1024/1024,2) | fields _time, idx, gb" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_index.json" \
+      "Daily volume by index (GB)"
+
+    # Daily volume by sourcetype
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes by st | eval gb=round(bytes/1024/1024/1024,2) | fields _time, st, gb" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_by_sourcetype.json" \
+      "Daily volume by sourcetype (GB)"
+
+    # Total daily volume (for licensing)
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | timechart span=1d sum(b) as bytes | eval gb=round(bytes/1024/1024/1024,2) | stats avg(gb) as avg_daily_gb, max(gb) as peak_daily_gb, sum(gb) as total_30d_gb" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_volume_summary.json" \
+      "Daily volume summary"
+
+    # Daily event count by index
+    run_usage_search \
+      "search index=_internal source=*metrics.log group=per_index_thruput earliest=-30d@d | timechart span=1d sum(ev) as events by series | rename series as index" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/daily_events_by_index.json" \
+      "Daily event counts by index"
+
+    # Hourly pattern analysis (to identify peak hours)
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-7d | eval hour=strftime(_time, \"%H\") | stats sum(b) as bytes by hour | eval gb=round(bytes/1024/1024/1024,2) | sort hour" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/hourly_volume_pattern.json" \
+      "Hourly volume pattern (last 7 days)"
+
+    # Top 20 indexes by daily average volume
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by idx | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/top_indexes_by_volume.json" \
+      "Top 20 indexes by daily average volume"
+
+    # Top 20 sourcetypes by daily average volume
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by st | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 20" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/top_sourcetypes_by_volume.json" \
+      "Top 20 sourcetypes by daily average volume"
+
+    # Volume by host (top 50)
+    run_usage_search \
+      "search index=_internal source=*license_usage.log type=Usage earliest=-30d@d | stats sum(b) as total_bytes by h | eval daily_avg_gb=round((total_bytes/30)/1024/1024/1024,2) | sort - daily_avg_gb | head 50" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/top_hosts_by_volume.json" \
+      "Top 50 hosts by daily average volume"
+
+    save_analytics_checkpoint "usage_daily_volume"
+  else
+    info "Skipping daily volume statistics (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "Daily volume statistics"
+
+  # ==========================================================================
+  # 5c. INGESTION INFRASTRUCTURE (For understanding data collection methods)
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_ingestion_infra"; then
+    info "Collecting ingestion infrastructure information..."
+
+    # Create subdirectory for ingestion infrastructure
+    mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure"
+
+    # Connection type breakdown (UF cooked vs HF raw vs other)
+    run_usage_search \
+      "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as unique_hosts, sum(kb) as total_kb by connectionType | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_connection_type.json" \
+      "Ingestion by connection type (UF/HF/other)"
+
+    # Input method breakdown (splunktcp, http, udp, tcp, monitor, etc.)
+    run_usage_search \
+      'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | rex field=series "^(?<input_type>[^:]+):" | stats sum(kb) as total_kb, dc(series) as unique_sources by input_type | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2) | sort - total_kb' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_input_method.json" \
+      "Ingestion by input method"
+
+    # HEC (HTTP Event Collector) usage
+    run_usage_search \
+      'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput series=http:* earliest=-7d | stats sum(kb) as total_kb, dc(series) as token_count | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/hec_usage.json" \
+      "HTTP Event Collector usage"
+
+    # Forwarding hosts inventory (unique hosts sending data)
+    run_usage_search \
+      "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats sum(kb) as total_kb, latest(_time) as last_seen, values(connectionType) as connection_types by sourceHost | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb | head 500" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/forwarding_hosts.json" \
+      "Forwarding hosts inventory (top 500)"
+
+    # Sourcetype categorization (detect OTel, cloud, security, etc.)
+    run_usage_search \
+      'search index=_internal source=*license_usage.log type=Usage earliest=-30d | stats sum(b) as bytes, dc(h) as unique_hosts by st | eval daily_avg_gb=round((bytes/30)/1024/1024/1024,2) | eval category=case(match(st,"^otel|^otlp|opentelemetry"),"opentelemetry", match(st,"^aws:|^azure:|^gcp:|^cloud"),"cloud", match(st,"^WinEventLog|^windows|^wmi"),"windows", match(st,"^linux|^syslog|^nix"),"linux_unix", match(st,"^cisco:|^pan:|^juniper:|^fortinet:|^f5:|^checkpoint"),"network_security", match(st,"^access_combined|^nginx|^apache|^iis"),"web", match(st,"^docker|^kube|^container"),"containers", 1=1,"other") | stats sum(daily_avg_gb) as daily_avg_gb, sum(unique_hosts) as unique_hosts, values(st) as sourcetypes by category | sort - daily_avg_gb' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/by_sourcetype_category.json" \
+      "Ingestion by sourcetype category"
+
+    # Data inputs configuration summary
+    run_usage_search \
+      '| rest /servicesNS/-/-/data/inputs/all | stats count by eai:acl.app, disabled | eval status=if(disabled="0","enabled","disabled") | stats count by eai:acl.app, status' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/data_inputs_by_app.json" \
+      "Data inputs by app"
+
+    # Syslog inputs (UDP/TCP)
+    run_usage_search \
+      'search index=_internal sourcetype=splunkd source=*metrics.log group=per_source_thruput earliest=-7d | search series=udp:* OR series=tcp:* | stats sum(kb) as total_kb by series | eval total_gb=round(total_kb/1024/1024,2) | sort - total_kb' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/syslog_inputs.json" \
+      "Syslog inputs (UDP/TCP)"
+
+    # Scripted inputs
+    run_usage_search \
+      '| rest /servicesNS/-/-/data/inputs/script | stats count by eai:acl.app, disabled, interval | eval status=if(disabled="0","enabled","disabled")' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/scripted_inputs.json" \
+      "Scripted inputs inventory"
+
+    # Summary: Total forwarding infrastructure
+    run_usage_search \
+      "search index=_internal sourcetype=splunkd source=*metrics.log group=tcpin_connections earliest=-7d | stats dc(sourceHost) as total_forwarding_hosts, sum(kb) as total_kb | eval total_gb=round(total_kb/1024/1024,2), daily_avg_gb=round(total_gb/7,2)" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure/summary.json" \
+      "Ingestion infrastructure summary"
+
+    save_analytics_checkpoint "usage_ingestion_infra"
+  else
+    info "Skipping ingestion infrastructure (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "Ingestion infrastructure"
+
+  # ==========================================================================
+  # 5d. OWNERSHIP MAPPING (For user-centric migration)
   # ==========================================================================
   ((task_num++))
   if ! has_analytics_checkpoint "usage_ownership"; then
@@ -4718,34 +4977,221 @@ collect_usage_analytics() {
   task_complete "Ownership mapping"
 
   # ==========================================================================
-  # 2. REST SUPPLEMENTARY METADATA (no search jobs)
+  # 5e. ALERT MIGRATION DATA (Critical for Dynatrace Alert Migration)
   # ==========================================================================
   ((task_num++))
-  info "Collecting REST-based supplementary metadata..."
+  if ! has_analytics_checkpoint "usage_alert_migration"; then
+    info "Collecting comprehensive alert migration data..."
 
-  # FIXED v4.6.0: Use f= to request only metadata fields, NOT the full search SPL.
-  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
-    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/saved/searches" \
-    -d "output_mode=json" -d "count=0" \
-    -d "f=title" -d "f=eai:acl" -d "f=is_scheduled" -d "f=disabled" \
-    -d "f=cron_schedule" -d "f=alert.track" -d "f=alert.severity" \
-    -d "f=actions" -d "f=next_scheduled_time" -d "f=dispatch.earliest_time" \
-    -d "f=dispatch.latest_time" \
-    > "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
+    # Create subdirectory for alert migration data
+    mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration"
 
-  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
-    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
-    -d "output_mode=json" -d "count=1000" \
-    > "$EXPORT_DIR/dma_analytics/usage_analytics/recent_searches.json" 2>/dev/null
+    # FULL ALERT DEFINITIONS - Complete alert configuration with ALL fields
+    # This is THE critical file for alert migration - includes schedule, conditions, actions
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search is_scheduled=1 OR alert.track=1 | table title, search, cron_schedule, dispatch.earliest_time, dispatch.latest_time, alert.severity, alert.track, alert.digest_mode, alert.expires, alert_condition, alert_threshold, alert_comparator, alert_type, alert.suppress, alert.suppress.fields, alert.suppress.period, counttype, quantity, relation, actions, disabled, eai:acl.owner, eai:acl.app, eai:acl.sharing, description, next_scheduled_time, triggered_alert_count | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alert_definitions_full.json" \
+      "Full alert definitions (schedules, conditions, thresholds)"
 
-  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
-    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/introspection/kvstore" \
-    -d "output_mode=json" \
-    > "$EXPORT_DIR/dma_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
+    # ALERT ACTION CONFIGURATIONS - Email recipients, webhook URLs, Slack channels, etc.
+    # Critical for Action Dispatcher migration architecture
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search actions!="" | table title, actions, action.email, action.email.to, action.email.cc, action.email.bcc, action.email.subject, action.email.message.alert, action.email.sendresults, action.email.inline, action.email.format, action.webhook, action.webhook.param.url, action.slack, action.slack.channel, action.slack.message, action.pagerduty, action.pagerduty.integration_key, action.script, action.script.filename, action.summary_index, action.summary_index._name, action.notable, action.notable.param.severity, action.lookup, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alert_action_configs.json" \
+      "Alert action configurations (email, webhook, Slack, PagerDuty)"
 
-  success "REST-based supplementary metadata collected"
+    # ALERTS BY ACTION TYPE - Categorize alerts by their action type for migration planning
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search actions!="" | eval action_types=split(actions, ",") | mvexpand action_types | stats count, values(title) as alerts by action_types | sort - count' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_action_type.json" \
+      "Alerts categorized by action type"
+
+    # ALERTS WITH EMAIL ACTIONS - Detailed email configuration for migration
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.email=1 | table title, action.email.to, action.email.cc, action.email.subject, action.email.sendresults, action.email.format, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_email.json" \
+      "Alerts with email action configuration"
+
+    # ALERTS WITH WEBHOOK ACTIONS - Webhook URLs for Dynatrace Workflow migration
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.webhook=1 | table title, action.webhook.param.url, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_webhook.json" \
+      "Alerts with webhook action configuration"
+
+    # ALERTS WITH SLACK ACTIONS - Slack channel configuration
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.slack=1 | table title, action.slack.channel, action.slack.message, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_slack.json" \
+      "Alerts with Slack action configuration"
+
+    # ALERTS WITH PAGERDUTY ACTIONS - PagerDuty integration configuration
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search action.pagerduty=1 | table title, action.pagerduty.integration_key, cron_schedule, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_pagerduty.json" \
+      "Alerts with PagerDuty action configuration"
+
+    # ALERT SUPPRESSION SETTINGS - For deduplication migration
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.suppress=1 | table title, alert.suppress, alert.suppress.fields, alert.suppress.period, cron_schedule, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_with_suppression.json" \
+      "Alerts with suppression/throttling configuration"
+
+    # ALERT SCHEDULE ANALYSIS - Group alerts by schedule frequency for capacity planning
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search is_scheduled=1 | stats count by cron_schedule | sort - count' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_schedule.json" \
+      "Alerts grouped by schedule frequency"
+
+    # ALERT SEVERITY DISTRIBUTION - For priority classification
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.track=1 | stats count by alert.severity | sort - alert.severity' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_by_severity.json" \
+      "Alerts grouped by severity level"
+
+    # HIGH FREQUENCY ALERTS - Alerts that run every minute (need special handling)
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search cron_schedule="* * * * *" OR cron_schedule="*/1 * * * *" | table title, search, cron_schedule, actions, alert.severity, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_high_frequency.json" \
+      "High frequency alerts (1-minute interval)"
+
+    # ALERTS WITH COMPLEX SPL - Alerts using advanced SPL commands
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.track=1 | eval has_join=if(match(search,"\\|\\s*join"),"yes","no"), has_transaction=if(match(search,"\\|\\s*transaction"),"yes","no"), has_eventstats=if(match(search,"\\|\\s*eventstats"),"yes","no"), has_streamstats=if(match(search,"\\|\\s*streamstats"),"yes","no"), has_append=if(match(search,"\\|\\s*append"),"yes","no") | where has_join="yes" OR has_transaction="yes" OR has_eventstats="yes" OR has_streamstats="yes" OR has_append="yes" | table title, has_join, has_transaction, has_eventstats, has_streamstats, has_append, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_complex_spl.json" \
+      "Alerts using complex SPL commands"
+
+    # ALERTS DATA SOURCE ANALYSIS - Which indexes/sourcetypes each alert queries
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | search alert.track=1 | rex field=search "index=(?<queried_index>[\\w_-]+)" | rex field=search "sourcetype=(?<queried_sourcetype>[\\w:_-]+)" | table title, queried_index, queried_sourcetype, eai:acl.owner, eai:acl.app | rename title as alert_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_migration/alerts_data_sources.json" \
+      "Alert data source mapping (index/sourcetype)"
+
+    save_analytics_checkpoint "usage_alert_migration"
+  else
+    info "Skipping alert migration data (checkpoint)"
+  fi
   progress_update "$task_num"
-  task_complete "REST supplementary metadata"
+  task_complete "Alert migration data"
+
+  # ==========================================================================
+  # 5f. USER/ROLE MAPPING (For Ownership Transfer)
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_user_role_mapping"; then
+    info "Collecting user and role mapping data..."
+
+    # Create subdirectory for RBAC data
+    mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/rbac"
+
+    # ALL USERS - Complete user list with roles
+    run_usage_search \
+      '| rest /services/authentication/users | table title, realname, email, roles, defaultApp, type, last_successful_login | rename title as username' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/users_all.json" \
+      "All users with roles"
+
+    # USER ROLE SUMMARY - Which roles are assigned to which users
+    run_usage_search \
+      '| rest /services/authentication/users | eval role_list=split(roles, ";") | mvexpand role_list | stats count, values(title) as users by role_list | sort - count | rename role_list as role' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/users_by_role.json" \
+      "Users grouped by role"
+
+    # ALL ROLES - Complete role definitions with capabilities
+    run_usage_search \
+      '| rest /services/authorization/roles | table title, imported_roles, capabilities, srchIndexesAllowed, srchIndexesDefault | rename title as role_name' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/roles_all.json" \
+      "All roles with capabilities"
+
+    # ROLE CAPABILITIES - Which capabilities each role has
+    run_usage_search \
+      '| rest /services/authorization/roles | eval cap_list=split(capabilities, ";") | mvexpand cap_list | stats values(title) as roles by cap_list | sort cap_list | rename cap_list as capability' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/capabilities_by_role.json" \
+      "Capabilities grouped by role"
+
+    # USERS WITH ADMIN CAPABILITIES - Important for ownership transfer
+    run_usage_search \
+      '| rest /services/authentication/users | search roles="*admin*" | table title, realname, email, roles | rename title as username' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/users_admin.json" \
+      "Users with admin roles"
+
+    # EXTERNAL AUTHENTICATION CONFIGURATION (LDAP/SAML if configured)
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/providers/LDAP" \
+      -d "output_mode=json" \
+      > "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/ldap_config.json" 2>/dev/null
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/providers/SAML" \
+      -d "output_mode=json" \
+      > "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/saml_config.json" 2>/dev/null
+
+    # TEAM MAPPING SUGGESTION - Group assets by app to suggest team ownership
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | stats dc(title) as alerts, values(eai:acl.owner) as owners by eai:acl.app | append [| rest /servicesNS/-/-/data/ui/views '"${app_rest_filter}"' | stats dc(title) as dashboards, values(eai:acl.owner) as owners by eai:acl.app] | stats sum(alerts) as alerts, sum(dashboards) as dashboards, values(owners) as owners by eai:acl.app | rename eai:acl.app as app' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/rbac/team_mapping_by_app.json" \
+      "Team mapping suggestion (by app)"
+
+    save_analytics_checkpoint "usage_user_role_mapping"
+  else
+    info "Skipping user/role mapping (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "User/role mapping"
+
+  # ==========================================================================
+  # 6. SAVED SEARCH METADATA
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_saved_search_metadata"; then
+    info "Collecting saved search metadata..."
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/saved/searches" \
+      -d "output_mode=json" -d "count=0" \
+      > "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
+
+    # Saved searches by owner
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | stats count by eai:acl.owner | sort - count | head 30' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_by_owner.json" \
+      "Saved searches by owner"
+
+    save_analytics_checkpoint "usage_saved_search_metadata"
+  else
+    info "Skipping saved search metadata (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "Saved search metadata"
+
+  # ==========================================================================
+  # 7. SCHEDULER EXECUTION STATS
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_scheduler_stats"; then
+    info "Collecting scheduler execution statistics..."
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" -d "count=1000" \
+      > "$EXPORT_DIR/dma_analytics/usage_analytics/recent_searches.json" 2>/dev/null
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/introspection/kvstore" \
+      -d "output_mode=json" \
+      > "$EXPORT_DIR/dma_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
+
+    # Scheduler load over time
+    # OPTIMIZED: Added | fields early to reduce memory usage
+    run_usage_search \
+      "index=_internal sourcetype=scheduler ${app_search_filter}earliest=-${USAGE_PERIOD} | fields _time, run_time | timechart span=1h count as scheduled_searches, avg(run_time) as avg_runtime" \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/scheduler_load.json" \
+      "Scheduler load over time"
+
+    save_analytics_checkpoint "usage_scheduler_stats"
+  else
+    info "Skipping scheduler execution stats (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "Scheduler execution stats"
 
   progress_complete
 
@@ -4758,49 +5204,119 @@ collect_usage_analytics() {
   local summary_file="$EXPORT_DIR/dma_analytics/usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md"
 
   cat > "$summary_file" << 'USAGE_EOF'
-# Usage Intelligence Summary (v4.6.0)
+# Usage Intelligence Summary
 
-## Migration Prioritization Framework
+This folder contains detailed usage analytics to help prioritize your Splunk-to-Dynatrace migration.
 
-This export includes comprehensive usage analytics to help prioritize your migration to Dynatrace.
+## Key Files for Migration Prioritization
 
-### What's Collected (v4.6.0 Global Queries)
+### HIGH PRIORITY (Migrate First)
+| File | Description | Use For |
+|------|-------------|---------|
+| `dashboard_views_top100.json` | Most viewed dashboards | Prioritize these for migration |
+| `alerts_most_fired.json` | Most active alerts | Critical operational alerts |
+| `users_most_active.json` | Power users | Get their input on requirements |
+| `sourcetypes_searched.json` | Most queried data | Ensure these sources are in Dynatrace |
 
-| File | Purpose | Use For |
-|------|---------|---------|
-| `dashboard_views_global.json` | Dashboard views by app (provenance-based) | Prioritize migration order |
-| `user_activity_global.json` | User activity per app | Training priorities, team planning |
-| `search_patterns_global.json` | Search type breakdown (dashboard/scheduled/ad-hoc) | Workload characterization |
-| `index_volume_summary.json` | Per-index daily ingestion (GB) | Grail storage planning |
-| `index_event_counts_daily.json` | Event counts per index per day | Volume trending |
-| `alert_firing_global.json` | Alert execution stats | Critical alerts to migrate |
+### LOW PRIORITY (Consider Eliminating)
+| File | Description | Use For |
+|------|-------------|---------|
+| `dashboards_never_viewed.json` | Unused dashboards | Skip migration or archive |
+| `alerts_never_fired.json` | Alerts that never trigger | Review if still needed |
+| `users_inactive.json` | Inactive users | Don't migrate their personal content |
+| `alerts_failed.json` | Broken alerts | Fix or remove |
 
-### Key Improvements in v4.6.0
+### CAPACITY PLANNING
+| File | Description | Use For |
+|------|-------------|---------|
+| `index_sizes.json` | Data volume by index | Estimate Dynatrace Grail storage |
+| `indexes_queried.json` | Which indexes are used | Prioritize data ingestion |
+| `scheduler_load.json` | Alert/report load | Plan Dynatrace workflow capacity |
 
-- **Dashboard views now use the `provenance` field** (not `search_type=dashboard` which was broken)
-- **View session de-duplication**: Counts page loads, not individual panel searches
-- **Global aggregate queries**: 6 queries total instead of N×7 per-app queries
-- **Async search dispatch**: Searches can run up to 1 hour (was limited to 5 minutes)
-- **Never-viewed dashboards**: Computed by Curator from dashboard list + view data (no slow `| rest + | join`)
+### ALERT MIGRATION (NEW in v4.0.0)
+| File | Description | Use For |
+|------|-------------|---------|
+| `alert_migration/alert_definitions_full.json` | Complete alert configs | Full SPL, schedules, thresholds, conditions |
+| `alert_migration/alert_action_configs.json` | Action configurations | Email, webhook, Slack, PagerDuty settings |
+| `alert_migration/alerts_by_action_type.json` | Alerts grouped by action | Migration planning by action type |
+| `alert_migration/alerts_with_email.json` | Email alert details | Email recipients, subjects, formats |
+| `alert_migration/alerts_with_webhook.json` | Webhook alert details | Webhook URLs for workflow migration |
+| `alert_migration/alerts_with_slack.json` | Slack alert details | Slack channels and messages |
+| `alert_migration/alerts_with_pagerduty.json` | PagerDuty alert details | Integration keys |
+| `alert_migration/alerts_with_suppression.json` | Suppression settings | Deduplication migration |
+| `alert_migration/alerts_by_schedule.json` | Schedule distribution | Capacity planning |
+| `alert_migration/alerts_by_severity.json` | Severity distribution | Priority classification |
+| `alert_migration/alerts_high_frequency.json` | 1-minute interval alerts | Special handling required |
+| `alert_migration/alerts_complex_spl.json` | Alerts with join/transaction | Complex SPL migration challenges |
+| `alert_migration/alerts_data_sources.json` | Index/sourcetype per alert | Data dependency mapping |
 
-### Decision Matrix
+### USER/ROLE MAPPING (NEW in v4.0.0)
+| File | Description | Use For |
+|------|-------------|---------|
+| `rbac/users_all.json` | All users with roles | User inventory for ownership transfer |
+| `rbac/users_by_role.json` | Users grouped by role | Team identification |
+| `rbac/roles_all.json` | Role definitions | Capability mapping |
+| `rbac/capabilities_by_role.json` | Capabilities by role | Permission analysis |
+| `rbac/users_admin.json` | Admin users | Key stakeholders |
+| `rbac/ldap_config.json` | LDAP configuration | External auth mapping |
+| `rbac/saml_config.json` | SAML configuration | SSO integration details |
+| `rbac/team_mapping_by_app.json` | Assets grouped by app | Team ownership suggestions |
 
-| Category | High Usage | Low/No Usage |
-|----------|------------|--------------|
-| **Dashboards** | Migrate first - users depend on these | Review with stakeholders |
-| **Alerts** | Critical - ensure Dynatrace equivalents | Consider not migrating |
-| **Users** | Key stakeholders for training | May not need Dynatrace access |
-| **Data Sources** | Must ingest into Dynatrace | May not need migration |
+## Migration Decision Framework
 
-### Recommended Migration Order
+```
+                    ┌─────────────────────────────────────┐
+                    │         USAGE FREQUENCY             │
+                    │    High              Low            │
+        ┌───────────┼─────────────────────────────────────┤
+        │   High    │  MIGRATE FIRST    INVESTIGATE      │
+ VALUE  │           │  (Critical)       (Why not used?)  │
+        ├───────────┼─────────────────────────────────────┤
+        │   Low     │  MIGRATE LATER    ELIMINATE        │
+        │           │  (Nice to have)   (Dead weight)    │
+        └───────────┴─────────────────────────────────────┘
+```
 
-1. **Phase 1**: Top 10 dashboards + their dependent alerts
-2. **Phase 2**: Data sources used by Phase 1
-3. **Phase 3**: Remaining active dashboards/alerts
-4. **Phase 4**: Review never-used items with stakeholders
+## Interpreting the Data
 
----
-*Generated by DMA Splunk Enterprise Export v4.6.0*
+### Dashboard Views (`dashboard_views_top100.json`)
+- `view_count`: Total views in the analysis period
+- `unique_users`: Number of different users who viewed it
+- `last_viewed`: When it was last accessed
+- **Migration Priority**: High view_count + multiple unique_users = HIGH priority
+
+### Alert Executions (`alerts_most_fired.json`)
+- `fire_count`: Number of times the alert executed
+- `avg_runtime`: Average execution time (seconds)
+- `last_fired`: Most recent execution
+- **Migration Priority**: Frequent firing + triggered actions = HIGH priority
+
+### User Activity (`users_most_active.json`)
+- `search_count`: Total searches run by user
+- `unique_searches`: Variety of different searches
+- `last_active`: Most recent activity
+- **Stakeholder Priority**: High activity users should be consulted
+
+## Recommended Migration Order
+
+1. **Phase 1 - Critical Operations**
+   - Top 20 most-viewed dashboards
+   - Top 20 most-fired alerts with actions
+   - Data sources used by these dashboards/alerts
+
+2. **Phase 2 - Active Users**
+   - Dashboards used by top 20 most active users
+   - Saved searches from power users
+   - Frequently searched indexes
+
+3. **Phase 3 - Long Tail**
+   - Remaining used dashboards
+   - Remaining active alerts
+   - Archive or document unused items
+
+4. **Phase 4 - Cleanup**
+   - Do NOT migrate items from "never viewed/fired" lists
+   - Document decisions for audit trail
 USAGE_EOF
 
   success "Usage intelligence collected (see _usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md)"
@@ -6596,7 +7112,7 @@ main() {
         echo "  --no-rbac               Disable RBAC/users data collection"
         echo "  --usage                 Collect usage analytics (on by default)"
         echo "  --no-usage              Disable usage analytics collection"
-        echo "  --analytics-period N    Analytics time window (default: 30d; e.g. 7d, 90d, 365d)"
+        echo "  --analytics-period N    Analytics time window (default: 7d; e.g. 30d, 90d)"
         echo "  --skip-internal         Skip index=_audit/_internal searches (restricted accounts)"
         echo "  --test-access           Pre-flight check: test API access and exit (no export)"
         echo "  --remask FILE           Re-anonymize an existing unmasked archive (no Splunk needed)"
@@ -6880,20 +7396,27 @@ main() {
   # APP-SCOPED ANALYTICS COLLECTION
   # Collect usage analytics for each app (dashboard views, alert firing, etc.)
   # This runs after configs so we know which apps have content worth analyzing.
-  #
-  # When COLLECT_USAGE is active and we're in resume mode, clear all usage-
-  # related analytics checkpoints so queries always re-run fresh. Previous
-  # data may be from broken/timed-out queries that wrote error JSON.
   # =========================================================================
   if [ "$SPLUNK_FLAVOR" != "uf" ] && [ "$COLLECT_USAGE" = true ] && [ -n "$SPLUNK_USER" ]; then
-    if [ "$RESUME_MODE" = "true" ] && [ -f "$EXPORT_DIR/.analytics_checkpoint" ]; then
-      info "Usage collection active in resume mode — clearing usage checkpoints to force re-collection"
-      # Remove usage-related checkpoints (keep config/app checkpoints intact)
-      sed -i.bak '/^dashboard_views$/d;/^user_activity$/d;/^search_patterns$/d;/^index_volume$/d;/^alert_firing$/d;/^alerts_inventory$/d;/^usage_ownership$/d' "$EXPORT_DIR/.analytics_checkpoint"
-      rm -f "$EXPORT_DIR/.analytics_checkpoint.bak"
-    fi
     echo ""
-    collect_app_analytics
+    info "Collecting app-scoped usage analytics..."
+
+    progress_init "Collecting App Usage Analytics" "$total_apps"
+
+    local analytics_index=0
+    for app in "${SELECTED_APPS[@]}"; do
+      ((analytics_index++))
+
+      # Only collect analytics for apps that have content
+      if [ -d "$EXPORT_DIR/$app" ]; then
+        collect_app_analytics "$app"
+      fi
+
+      progress_update "$analytics_index"
+    done
+
+    progress_complete
+    success "App-scoped analytics collected (see each app's splunk-analysis/ folder)"
   fi
 
   if [ "$SPLUNK_FLAVOR" != "uf" ]; then
@@ -6908,7 +7431,7 @@ main() {
     else
       info "Skipping rbac (already collected in prior run)"
     fi
-    if [ "$COLLECT_USAGE" = true ] || ! has_collected_data "usage_analytics"; then
+    if ! has_collected_data "usage_analytics"; then
       collect_usage_analytics
     else
       info "Skipping usage_analytics (already collected in prior run)"
@@ -7282,7 +7805,7 @@ has_collected_data() {
   local category="$1"
   case "$category" in
     "rbac")            [ -f "$EXPORT_DIR/dma_analytics/rbac/users.json" ] ;;
-    "usage_analytics") [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" ] ;;
+    "usage_analytics") [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/users_most_active.json" ] ;;
     "system_info")     [ -f "$EXPORT_DIR/dma_analytics/system_info/server_info.json" ] ;;
     "indexes")         [ -f "$EXPORT_DIR/dma_analytics/index_stats.json" ] ;;
     *)                 return 1 ;;

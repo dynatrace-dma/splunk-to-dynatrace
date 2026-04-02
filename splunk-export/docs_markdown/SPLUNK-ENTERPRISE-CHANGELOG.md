@@ -1,5 +1,47 @@
 # DMA Splunk Enterprise Export — Changelog
 
+## v4.6.0 (April 2026)
+
+### Usage Analytics Overhaul — Global Aggregates Replace Detailed Queries
+
+The `collect_usage_analytics` function has been fundamentally restructured. Previously it ran ~40 individual SPL search jobs (users_most_active, activity_by_role, users_inactive, daily_active_users, sourcetypes_searched, indexes_queried, index_sizes, daily_volume_by_index, daily_volume_by_sourcetype, daily_volume_summary, daily_events_by_index, hourly_volume_pattern, top_indexes_by_volume, top_sourcetypes_by_volume, top_hosts_by_volume, ingestion_infrastructure/\*, alert_migration/\*, rbac/\*, saved_searches_by_owner, scheduler_load). All of those individual jobs have been removed.
+
+**What `collect_usage_analytics` does now:**
+- Ownership mapping: 3 `| rest` queries (dashboard, saved search, alert ownership)
+- REST metadata: 3 curl calls for supplemental metadata
+- Generates `USAGE_INTELLIGENCE_SUMMARY.md`
+
+**What produces the Explorer data:**
+- 6 global aggregate queries in `collect_app_analytics` now produce all data that the DMA Explorer consumes. These queries run per-app and write to `dma_analytics/usage_analytics/`.
+
+### Search Query Improvements
+
+- Dashboard views now use the `provenance` field (search_type=dashboard was unreliable)
+- All `_audit` queries optimized: `sourcetype=audittrail` + `info=granted` (tsidx-level filtering)
+- Search type breakdown derived from `provenance`/`search_id` (matches Cloud script logic)
+- Alert firing queries: added `| fields` before `| stats` (reduces indexer memory on large environments)
+- Removed ALL `| head N` limits from usage queries (was silently dropping data on large environments)
+
+### Data Collection Changes
+
+- Default `USAGE_PERIOD` changed to `30d` (was `7d`) for comprehensive migration planning
+- `saved_searches_all.json`: uses `f=` field selection (was 256MB+ raw REST dump on large environments)
+- `alert_ownership.json`: uses `f=` field selection (was duplicate 256MB+ REST dump)
+- Usage collection ON by default (now explicit)
+
+### Manifest and Checkpoint Updates
+
+- Updated manifest builder (`usage_intelligence` section) to reference global aggregate files
+- Updated `has_collected_data` check to use `dashboard_ownership.json` instead of `users_most_active.json`
+- Updated checkpoint clearing to remove old detailed checkpoint names
+- `--resume-collect` with usage active now clears usage checkpoints to force re-collection
+
+### Other
+
+- `USAGE_INTELLIGENCE_SUMMARY.md` content updated to reference v4.6.0 global files
+- Dynamic `daily_avg_gb` calculation uses actual `USAGE_PERIOD` days (was hardcoded `/7`)
+- Dramatically reduced failure risk by minimizing the total number of search jobs dispatched
+
 ## v4.4.0
 
 - Added `--proxy URL` flag: routes all curl calls through an HTTP proxy

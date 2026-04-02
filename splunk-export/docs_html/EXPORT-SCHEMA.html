@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DMA Export Schema Reference | Dynatrace Migration Assistant</title>
+    <title>Export Archive Schema | Dynatrace Migration Assistant</title>
     <style>
         :root {
             --db-header-bg: #14172b;
@@ -249,8 +249,8 @@
                 <div class="logo-text">Dynatrace Migration Assistant</div>
             </div>
             <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
-            <span class="version-badge"><span class="dot"></span>Version 4.0.1</span>
-            <div class="doc-title"><h2>DMA Export Schema Reference</h2></div>
+            <span class="version-badge"><span class="dot"></span>Version 4.6.0</span>
+            <div class="doc-title"><h2>Export Archive Schema</h2></div>
         </div>
     </header>
 
@@ -262,786 +262,1363 @@
             <a href="SPLUNK-CLOUD-EXPORT-SPECIFICATION.html">Cloud Spec</a>
             <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics Reference</a>
             <a href="EXPORT-SCHEMA.html">Export Schema</a>
+            <a href="INTERACTIVE-WALKTHROUGH.html">Walkthrough</a>
+            <a href="SPLUNK-ENTERPRISE-CHANGELOG.html">Changelog</a>
         </div>
     </nav>
 
     <main class="content">
-<h1>DMA Splunk Export Schema v4.3</h1>
-<h2>Purpose</h2>
-<p>
-This document defines the <strong>guaranteed output schema</strong> for all DMA Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DMA can reliably parse them.
-</p>
-<blockquote><p><strong>Applies to all three export scripts:</strong></p></blockquote>
-<blockquote><p>- <code>dma-splunk-export.sh</code> (Enterprise, Bash)</p></blockquote>
-<blockquote><p>- <code>dma-splunk-cloud-export.sh</code> (Cloud, Bash)</p></blockquote>
-<blockquote><p>- <code>dma-splunk-cloud-export.ps1</code> (Cloud, PowerShell)</p></blockquote>
-<hr>
-<h2>Archive Structure</h2>
-<p>
-Every export produces a <code>.tar.gz</code> archive with this <strong>exact</strong> structure:
-</p>
+<h1 id="dma-splunk-export-schema-v4.0">DMA Splunk Export Schema
+v4.0</h1>
+<h2 id="purpose">Purpose</h2>
+<p>This document defines the <strong>guaranteed output schema</strong>
+for all DMA Splunk exports. Regardless of Splunk environment size,
+version, or deployment type, exports MUST conform to this schema so DMA
+can reliably parse them.</p>
+<blockquote>
+<p><strong>Applies to all export scripts (v4.6.0):</strong> -
+<code>dma-splunk-export.sh</code> (Enterprise, Bash) -
+<code>dma-splunk-cloud-export.sh</code> (Cloud, Bash) -
+<code>dma-splunk-cloud-export.ps1</code> (Cloud, PowerShell)</p>
+</blockquote>
+<hr />
+<h2 id="archive-structure">Archive Structure</h2>
+<p>Every export produces a <code>.tar.gz</code> archive with this
+<strong>exact</strong> structure. When anonymization is enabled, a
+second <code>_masked.tar.gz</code> archive is also created.</p>
+<h3 id="enterprise-export">Enterprise Export</h3>
 <pre><code>dma_export_&lt;hostname&gt;_&lt;YYYYMMDD_HHMMSS&gt;.tar.gz
-│
-├── manifest.json                    # REQUIRED - Export metadata
-├── _anonymization_report.json       # OPTIONAL - Only present if anonymization enabled
-├── dma-env-summary.md        # REQUIRED - Human-readable summary
-├── export.log                       # REQUIRED - Export process log
-│
-├── _systeminfo/                     # REQUIRED - System information
-│   ├── environment.json             # REQUIRED - Standardized env info
-│   ├── splunk.version               # OPTIONAL - Raw Splunk version file
-│   ├── server_info.json             # OPTIONAL - REST API server info
-│   ├── installed_apps.json          # OPTIONAL - All installed apps
-│   ├── search_peers.json            # OPTIONAL - Distributed search peers
-│   └── license_info.json            # OPTIONAL - License information
-│
-├── _rbac/                           # OPTIONAL - User/role data
-│   ├── users.json                   # User list
-│   ├── roles.json                   # Role definitions
-│   ├── authentication.conf          # Auth config (passwords redacted)
-│   └── authorize.conf               # Authorization config
-│
-├── _indexes/                        # OPTIONAL - Index information
-│   ├── indexes.conf                 # Index definitions
-│   ├── indexes_detailed.json        # REST API index details
-│   └── data_inputs.json             # Data input configurations
-│
-├── _usage_analytics/                # OPTIONAL - Usage data
-│   ├── recent_searches.json         # Search job history
-│   ├── saved_searches_all.json      # All saved searches
-│   ├── kvstore_stats.json           # KV Store statistics
-│   └── server_status.json           # Server status
-│
-├── _system/                         # OPTIONAL - System-level configs
-│   └── local/
-│       ├── inputs.conf
-│       ├── outputs.conf
-│       └── server.conf
-│
-├── _audit_sample/                   # OPTIONAL - Audit log sample
-│   └── audit_sample.log
-│
-└── &lt;app_name&gt;/                      # One directory per exported app
-    ├── dashboards/                  # v2 app-centric structure (v4.2.0+)
-    │   ├── classic/                 # Classic XML dashboards for this app
-    │   │   └── *.xml
-    │   └── studio/                  # Dashboard Studio JSON for this app
-    │       └── *.json
-    ├── default/
-    │   ├── props.conf
-    │   ├── transforms.conf
-    │   ├── eventtypes.conf
-    │   ├── tags.conf
-    │   ├── indexes.conf
-    │   ├── macros.conf
-    │   ├── savedsearches.conf
-    │   ├── inputs.conf
-    │   ├── outputs.conf
-    │   ├── collections.conf
-    │   ├── fields.conf
-    │   ├── workflow_actions.conf
-    │   ├── commands.conf
-    │   └── data/
-    │       └── ui/
-    │           └── views/           # Legacy location (v1 archives only)
-    │               └── *.xml
-    ├── local/
-    │   └── (same structure as default/)
-    └── lookups/                     # OPTIONAL
-        └── *.csv</code></pre>
-<hr>
-<h2>File Source Categories</h2>
-<p>
-Understanding the origin of each file helps distinguish between <strong>raw Splunk data</strong> and <strong>DMA-generated migration intelligence</strong>.
-</p>
-<h3>Category 1: Script-Generated Analytics (DMA Migration Intelligence)</h3>
-<p>
-These files are <strong>created by the export script</strong> by running SPL queries against Splunk's internal indexes (<code><em>audit</code>, <code></em>internal</code>). They provide migration-specific insights that don't exist natively in Splunk.
-</p>
+|
++-- manifest.json                          # REQUIRED - Export metadata &amp; statistics
++-- _anonymization_report.json             # OPTIONAL - Only in _masked archive
++-- dma-env-summary.md                     # REQUIRED - Human-readable summary
++-- export.log                             # REQUIRED - Export process log
+|
++-- dma_analytics/                         # REQUIRED - All DMA-generated analytics
+|   +-- system_info/                       # REQUIRED - System information
+|   |   +-- environment.json               # REQUIRED - Standardized env info
+|   |   +-- splunk.version                 # OPTIONAL - Raw Splunk version file
+|   |   +-- server_info.json               # OPTIONAL - REST /services/server/info
+|   |   +-- installed_apps.json            # OPTIONAL - REST /services/apps/local
+|   |   +-- search_peers.json              # OPTIONAL - REST distributed search peers
+|   |   +-- license_info.json              # OPTIONAL - REST licenser/licenses
+|   |
+|   +-- rbac/                              # OPTIONAL - User/role data
+|   |   +-- users.json                     # REST /services/authentication/users
+|   |   +-- users_active_in_apps.json      # OPTIONAL - Scoped mode: users with activity
+|   |   +-- roles.json                     # REST /services/authorization/roles
+|   |
+|   +-- indexes/                           # OPTIONAL - Index information
+|   |   +-- indexes.conf                   # System indexes.conf from filesystem
+|   |   +-- indexes_detailed.json          # REST /services/data/indexes
+|   |   +-- data_inputs.json               # REST /services/data/inputs/all
+|   |
+|   +-- usage_analytics/                   # OPTIONAL - Usage analytics data
+|   |   +-- dashboard_views_global.json    # Dashboard views by app (provenance-based)
+|   |   +-- user_activity_global.json      # User activity per app
+|   |   +-- search_patterns_global.json    # Search type breakdown per app
+|   |   +-- index_volume_summary.json      # Per-index daily ingestion (GB)
+|   |   +-- index_event_counts_daily.json  # Event counts per index per day (tstats)
+|   |   +-- alert_firing_global.json       # Alert execution stats per app
+|   |   +-- dashboard_ownership.json       # Dashboard -&gt; owner mapping (REST)
+|   |   +-- alert_ownership.json           # Alert -&gt; owner mapping (REST)
+|   |   +-- ownership_summary.json         # Ownership counts by user
+|   |   +-- saved_searches_all.json        # All saved searches metadata (REST)
+|   |   +-- recent_searches.json           # Recent search jobs (REST)
+|   |   +-- kvstore_stats.json             # KV Store statistics (REST)
+|   |   +-- USAGE_INTELLIGENCE_SUMMARY.md  # Human-readable migration guide
+|   |
+|   +-- index_stats.json                   # OPTIONAL - Legacy index stats
+|
++-- _system/                               # OPTIONAL - System-level configs
+|   +-- local/
+|       +-- inputs.conf
+|       +-- outputs.conf
+|       +-- server.conf
+|       +-- macros.conf                    # System-level macros
+|
++-- &lt;app_name&gt;/                            # One directory per exported app
+    +-- dashboards/                        # v2 app-centric structure (v4.2.0+)
+    |   +-- classic/                       # Classic XML dashboards for this app
+    |   |   +-- *.xml
+    |   +-- studio/                        # Dashboard Studio JSON for this app
+    |       +-- *.json
+    +-- default/                           # Filesystem configs from $SPLUNK_HOME/etc/apps/&lt;app&gt;/default/
+    |   +-- props.conf
+    |   +-- transforms.conf
+    |   +-- eventtypes.conf
+    |   +-- tags.conf
+    |   +-- indexes.conf
+    |   +-- macros.conf
+    |   +-- savedsearches.conf
+    |   +-- inputs.conf
+    |   +-- outputs.conf
+    |   +-- collections.conf
+    |   +-- fields.conf
+    |   +-- workflow_actions.conf
+    |   +-- commands.conf
+    |   +-- data/
+    |       +-- ui/
+    |           +-- views/                 # Legacy dashboard location (filesystem)
+    |               +-- *.xml
+    +-- local/                             # Filesystem configs from $SPLUNK_HOME/etc/apps/&lt;app&gt;/local/
+    |   +-- (same structure as default/)
+    +-- metadata/                          # OPTIONAL - App metadata
+    |   +-- default.meta
+    |   +-- local.meta
+    +-- lookups/                           # OPTIONAL - Lookup table files
+        +-- *.csv</code></pre>
+<h3 id="cloud-export">Cloud Export</h3>
+<p>Cloud exports use REST API JSON responses instead of filesystem
+<code>.conf</code> files. Knowledge objects are stored as JSON at the
+app root level rather than in <code>default/</code> and
+<code>local/</code> subdirectories.</p>
+<pre><code>dma_cloud_export_&lt;stack&gt;_&lt;YYYYMMDD_HHMMSS&gt;.tar.gz
+|
++-- manifest.json                          # REQUIRED - Export metadata &amp; statistics
++-- _anonymization_report.json             # OPTIONAL - Only in _masked archive
++-- dma-env-summary.md                     # REQUIRED - Human-readable summary
++-- _export.log                            # REQUIRED - Export process log
+|
++-- dma_analytics/                         # REQUIRED - All DMA-generated analytics
+|   +-- system_info/                       # REQUIRED - System information
+|   |   +-- environment.json               # REQUIRED - Standardized env info
+|   |   +-- server_info.json               # OPTIONAL - REST /services/server/info
+|   |   +-- installed_apps.json            # OPTIONAL - REST /services/apps/local
+|   |   +-- license_info.json              # OPTIONAL - REST licenser/licenses
+|   |   +-- server_settings.json           # OPTIONAL - REST /services/server/settings
+|   |   +-- all_dashboards.json            # OPTIONAL - Master dashboard list from REST
+|   |
+|   +-- rbac/                              # OPTIONAL - User/role data
+|   |   +-- users.json                     # REST /services/authentication/users
+|   |   +-- users_active_in_apps.json      # OPTIONAL - Scoped mode: users with activity
+|   |   +-- roles.json                     # REST /services/authorization/roles
+|   |
+|   +-- indexes/                           # OPTIONAL - Index information
+|   |   +-- indexes.json                   # REST /services/data/indexes
+|   |   +-- indexes_extended.json          # OPTIONAL - REST /services/data/indexes-extended
+|   |   +-- indexes_used_by_apps.json      # OPTIONAL - Scoped mode: indexes per app
+|   |
+|   +-- usage_analytics/                   # OPTIONAL - Usage analytics data
+|       +-- dashboard_views_global.json    # Dashboard views by app (provenance-based)
+|       +-- user_activity_global.json      # User activity per app
+|       +-- search_patterns_global.json    # Search type breakdown per app
+|       +-- index_volume_summary.json      # Per-index daily ingestion (GB)
+|       +-- index_event_counts_daily.json  # Event counts per index per day (tstats)
+|       +-- alert_firing_global.json       # Alert execution stats per app
+|       +-- dashboard_ownership.json       # Dashboard -&gt; owner mapping (REST)
+|       +-- alert_ownership.json           # Alert -&gt; owner mapping (REST)
+|       +-- ownership_summary.json         # Ownership counts by user
+|       +-- saved_searches_all.json        # All saved searches metadata (REST)
+|       +-- recent_searches.json           # Recent search jobs (REST)
+|       +-- kvstore_stats.json             # KV Store statistics (REST)
+|       +-- USAGE_INTELLIGENCE_SUMMARY.md  # Human-readable migration guide
+|
++-- _configs/                              # OPTIONAL - Global system configs (REST JSON)
+|   +-- indexes.json                       # Global indexes config
+|   +-- inputs.json                        # Global inputs config
+|   +-- outputs.json                       # Global outputs config
+|
++-- &lt;app_name&gt;/                            # One directory per exported app
+    +-- dashboards/                        # v2 app-centric structure (v4.2.0+)
+    |   +-- classic/                       # Classic XML dashboards (saved as JSON from REST)
+    |   |   +-- *.json
+    |   +-- studio/                        # Dashboard Studio JSON for this app
+    |       +-- *.json
+    +-- savedsearches.json                 # Saved searches for this app (REST, filtered by acl.app)
+    +-- props.json                         # Props config for this app (REST)
+    +-- transforms.json                    # Transforms config for this app (REST)
+    +-- macros.json                        # Macros for this app (REST)
+    +-- eventtypes.json                    # Event types for this app (REST)
+    +-- tags.json                          # Tags for this app (REST)
+    +-- field_extractions.json             # Field extractions for this app (REST)
+    +-- inputs.json                        # Data inputs for this app (REST)
+    +-- lookups.json                       # Lookup table metadata (REST)
+    +-- splunk-analysis/                   # OPTIONAL - Per-app analytics
+        +-- alerts_inventory.json          # Alerts inventory for this app (REST)</code></pre>
+<h3 id="key-differences-enterprise-vs-cloud">Key Differences: Enterprise
+vs Cloud</h3>
 <table>
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 42%" />
+<col style="width: 26%" />
+</colgroup>
 <thead>
-<tr><th>Directory</th><th>File</th><th>Purpose</th><th>SPL Query Source</th></tr>
+<tr>
+<th>Aspect</th>
+<th>Enterprise</th>
+<th>Cloud</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>_usage_analytics/</code></td><td><code>dashboard_views_top100.json</code></td><td>Prioritize high-value dashboards</td><td><code>index=_audit action=search search_type=dashboard</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>dashboards_never_viewed.json</code></td><td>Identify elimination candidates</td><td><code>index=_audit</code> + REST comparison</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>users_most_active.json</code></td><td>Identify stakeholders</td><td><code>index=_audit action=search</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>users_inactive.json</code></td><td>Skip inactive user content</td><td><code>index=_audit</code> with time filter</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>alerts_most_fired.json</code></td><td>Critical alerts to migrate</td><td><code>index=_internal sourcetype=scheduler</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>alerts_never_fired.json</code></td><td>Elimination candidates</td><td><code>index=_internal</code> + REST comparison</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>alerts_failed.json</code></td><td>Broken alerts to fix/skip</td><td><code>index=_internal status=failed</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>alerts_with_actions.json</code></td><td>Alerts with triggered actions</td><td><code>index=_internal alert_actions!=''</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>alert_firing_trend.json</code></td><td>Alert activity trends</td><td><code>index=_internal sourcetype=scheduler</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>sourcetypes_searched.json</code></td><td>Data sources actually used</td><td><code>index=_audit</code> with rex extraction</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>indexes_queried.json</code></td><td>Which indexes matter</td><td><code>index=_audit</code> with rex extraction</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>indexes_searched.json</code></td><td>Most searched indexes</td><td><code>index=_audit action=search</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>index_sizes.json</code></td><td>Capacity planning</td><td>`</td><td>dbinspect` or REST</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>daily_volume_by_index.json</code></td><td>Daily ingestion by index</td><td><code>index=_internal</code> metrics</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>daily_volume_by_sourcetype.json</code></td><td>Daily ingestion by sourcetype</td><td><code>index=_internal</code> metrics</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>daily_volume_summary.json</code></td><td>Overall volume metrics</td><td><code>index=_internal</code> aggregation</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>daily_events_by_index.json</code></td><td>Event counts by index</td><td><code>index=_internal</code> metrics</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>hourly_volume_pattern.json</code></td><td>Peak hour identification</td><td><code>index=_internal</code> timechart</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>top_indexes_by_volume.json</code></td><td>High-volume index focus</td><td><code>index=_internal</code> stats</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>top_sourcetypes_by_volume.json</code></td><td>High-volume sourcetype focus</td><td><code>index=_internal</code> stats</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>top_hosts_by_volume.json</code></td><td>Host-level volume analysis</td><td><code>index=_internal</code> stats</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>search_commands_popular.json</code></td><td>Popular SPL commands</td><td><code>index=_audit</code> with rex extraction</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>search_by_type.json</code></td><td>Searches by type</td><td><code>index=_audit</code> stats</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>searches_slow.json</code></td><td>Performance concerns</td><td><code>index=_audit</code> with runtime filter</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>daily_active_users.json</code></td><td>User engagement trends</td><td><code>index=_audit</code> timechart</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>activity_by_role.json</code></td><td>Activity by role</td><td><code>index=_audit</code> by roles</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>dashboard_ownership.json</code></td><td>Dashboard → owner mapping</td><td>REST <code>/servicesNS/-/-/data/ui/views</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>alert_ownership.json</code></td><td>Alert → owner mapping</td><td>REST <code>/servicesNS/-/-/saved/searches</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>ownership_summary.json</code></td><td>Ownership by user</td><td>Aggregation of ownership data</td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>saved_searches_all.json</code></td><td>All saved searches metadata</td><td>REST <code>/servicesNS/-/-/saved/searches</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>recent_searches.json</code></td><td>Recent search jobs</td><td>REST <code>/services/search/jobs</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>kvstore_stats.json</code></td><td>KV Store statistics</td><td>REST <code>/services/kvstore/status</code></td></tr>
-<tr><td><code>_usage_analytics/</code></td><td><code>scheduler_load.json</code></td><td>Alert/report load</td><td><code>index=_internal sourcetype=scheduler</code></td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>by_connection_type.json</code></td><td>Ingestion by connection</td><td><code>index=_internal</code> metrics</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>by_input_method.json</code></td><td>Ingestion by input type</td><td><code>index=_internal</code> metrics</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>hec_usage.json</code></td><td>HEC usage metrics</td><td><code>index=_internal</code> HEC stats</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>forwarding_hosts.json</code></td><td>Forwarder host list</td><td><code>index=_internal</code> host stats</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>by_sourcetype_category.json</code></td><td>Sourcetype categories</td><td><code>index=_internal</code> stats</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>data_inputs_by_app.json</code></td><td>Inputs by app</td><td><code>index=_internal</code> stats</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>syslog_inputs.json</code></td><td>Syslog input metrics</td><td><code>index=_internal</code> syslog stats</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>scripted_inputs.json</code></td><td>Scripted input metrics</td><td><code>index=_internal</code> script stats</td></tr>
-<tr><td><code>_usage_analytics/ingestion_infrastructure/</code></td><td><code>summary.json</code></td><td>Ingestion summary</td><td>Aggregation</td></tr>
-<tr><td>Root</td><td><code>manifest.json</code></td><td>Master manifest with stats</td><td>Script-generated metadata</td></tr>
-<tr><td><code>_systeminfo/</code></td><td><code>environment.json</code></td><td>Script-detected environment</td><td>Script environment detection</td></tr>
+<tr>
+<td>Config format</td>
+<td><code>.conf</code> files (INI) from filesystem</td>
+<td><code>.json</code> files from REST API</td>
+</tr>
+<tr>
+<td>Config location</td>
+<td><code>&lt;app&gt;/default/</code> and
+<code>&lt;app&gt;/local/</code></td>
+<td><code>&lt;app&gt;/</code> (flat, single JSON per type)</td>
+</tr>
+<tr>
+<td>Dashboard format</td>
+<td>Classic: <code>.xml</code>, Studio: <code>.json</code></td>
+<td>Both stored as <code>.json</code> from REST</td>
+</tr>
+<tr>
+<td>System configs</td>
+<td><code>_system/local/*.conf</code> from filesystem</td>
+<td><code>_configs/*.json</code> from REST</td>
+</tr>
+<tr>
+<td>Log file name</td>
+<td><code>export.log</code></td>
+<td><code>_export.log</code></td>
+</tr>
+<tr>
+<td>Search peers</td>
+<td>Collected (distributed search)</td>
+<td>Not applicable (cloud)</td>
+</tr>
+<tr>
+<td>Filesystem access</td>
+<td>Direct file copy</td>
+<td>REST API only</td>
+</tr>
 </tbody>
 </table>
-<p>
-<strong>Total: ~45 script-generated files</strong> providing migration intelligence
-</p>
-<h3>Category 2: Raw Splunk API Exports (Direct Splunk Data)</h3>
-<p>
-These files are <strong>direct dumps from Splunk REST APIs</strong> - essentially reformatted native Splunk data structures with minimal transformation.
-</p>
+<hr />
+<h2 id="file-source-categories">File Source Categories</h2>
+<p>Understanding the origin of each file helps distinguish between
+<strong>raw Splunk data</strong> and <strong>DMA-generated migration
+intelligence</strong>.</p>
+<h3 id="category-1-global-analytics-spl-search-queries">Category 1:
+Global Analytics (SPL Search Queries)</h3>
+<p>These files are generated by running SPL queries against Splunk’s
+internal indexes (<code>_audit</code>, <code>_internal</code>). In
+v4.6.0, these are <strong>6 global aggregate queries</strong> with
+<code>by app</code> grouping, replacing the previous per-app query
+model.</p>
 <table>
+<colgroup>
+<col style="width: 23%" />
+<col style="width: 42%" />
+<col style="width: 34%" />
+</colgroup>
 <thead>
-<tr><th>Directory</th><th>File</th><th>Splunk REST API Source</th><th>Purpose</th></tr>
+<tr>
+<th>File</th>
+<th>SPL Source</th>
+<th>Purpose</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>_systeminfo/</code></td><td><code>server_info.json</code></td><td><code>GET /services/server/info</code></td><td>Splunk version, platform</td></tr>
-<tr><td><code>_systeminfo/</code></td><td><code>installed_apps.json</code></td><td><code>GET /services/apps/local</code></td><td>App inventory</td></tr>
-<tr><td><code>_systeminfo/</code></td><td><code>search_peers.json</code></td><td><code>GET /services/search/distributed/peers</code></td><td>Distributed search topology</td></tr>
-<tr><td><code>_systeminfo/</code></td><td><code>license_info.json</code></td><td><code>GET /services/licenser/licenses</code></td><td>License details</td></tr>
-<tr><td><code>_rbac/</code></td><td><code>users.json</code></td><td><code>GET /services/authentication/users</code></td><td>User accounts</td></tr>
-<tr><td><code>_rbac/</code></td><td><code>roles.json</code></td><td><code>GET /services/authorization/roles</code></td><td>Role definitions</td></tr>
-<tr><td><code>_indexes/</code></td><td><code>indexes_detailed.json</code></td><td><code>GET /services/data/indexes</code></td><td>Index configurations</td></tr>
-<tr><td><code>_indexes/</code></td><td><code>data_inputs.json</code></td><td><code>GET /services/data/inputs/all</code></td><td>Data input definitions</td></tr>
-<tr><td><code><app>/dashboards/studio/</code></td><td><code>{dashboard_name}.json</code></td><td><code>GET /servicesNS/{owner}/{app}/data/ui/views/{name}</code></td><td>Dashboard Studio JSON (v2 structure)</td></tr>
-<tr><td><code><app>/dashboards/classic/</code></td><td><code>{dashboard_name}.xml</code></td><td><code>GET /servicesNS/{owner}/{app}/data/ui/views/{name}</code></td><td>Classic XML dashboards (v2 structure)</td></tr>
+<tr>
+<td><code>dashboard_views_global.json</code></td>
+<td><code>index=_audit provenance="UI:Dashboard:*"</code> with
+view_session de-duplication</td>
+<td>Dashboard usage ranked by views per app</td>
+</tr>
+<tr>
+<td><code>user_activity_global.json</code></td>
+<td><code>index=_audit action=search</code> stats by app, user</td>
+<td>User search activity per app</td>
+</tr>
+<tr>
+<td><code>search_patterns_global.json</code></td>
+<td><code>index=_audit action=search</code> with provenance-based type
+classification</td>
+<td>Search type breakdown (dashboard/scheduled/ad-hoc/other)</td>
+</tr>
+<tr>
+<td><code>index_volume_summary.json</code></td>
+<td><code>index=_internal source=*license_usage.log type=Usage</code></td>
+<td>Per-index daily ingestion volume in GB</td>
+</tr>
+<tr>
+<td><code>index_event_counts_daily.json</code></td>
+<td><code>\| tstats count where index=* by index, _time span=1d</code></td>
+<td>Daily event counts per index (tstats fallback)</td>
+</tr>
+<tr>
+<td><code>alert_firing_global.json</code></td>
+<td><code>index=_internal sourcetype=scheduler</code> stats by app,
+savedsearch_name</td>
+<td>Alert execution counts and success/failure rates</td>
+</tr>
 </tbody>
 </table>
-<p>
-<strong>Total: ~10 base files + N dashboard files</strong> (direct Splunk exports)
-</p>
-<h3>Category 3: Raw File System Exports (Splunk Configuration Files)</h3>
-<p>
-These are <strong>direct copies</strong> of Splunk configuration files from the file system (<code>$SPLUNK_HOME/etc/</code>).
-</p>
+<h3 id="category-2-rest-api-metadata">Category 2: REST API Metadata</h3>
+<p>These files are collected directly from Splunk REST APIs. They
+provide metadata used for ownership mapping, search inventories, and
+supplementary intelligence.</p>
 <table>
+<colgroup>
+<col style="width: 19%" />
+<col style="width: 51%" />
+<col style="width: 29%" />
+</colgroup>
 <thead>
-<tr><th>Directory</th><th>Files</th><th>Source Location</th></tr>
+<tr>
+<th>File</th>
+<th>REST API Source</th>
+<th>Purpose</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code><app_name>/default/</code></td><td><code>*.conf</code> files</td><td><code>$SPLUNK_HOME/etc/apps/<app>/default/</code></td></tr>
-<tr><td><code><app_name>/local/</code></td><td><code>*.conf</code> files</td><td><code>$SPLUNK_HOME/etc/apps/<app>/local/</code></td></tr>
-<tr><td><code><app_name>/default/data/ui/views/</code></td><td><code>*.xml</code> dashboards</td><td>Classic SimpleXML dashboards</td></tr>
-<tr><td><code><app_name>/lookups/</code></td><td><code>*.csv</code> files</td><td>Lookup table data</td></tr>
-<tr><td><code>_system/local/</code></td><td><code>inputs.conf</code>, <code>outputs.conf</code>, etc.</td><td><code>$SPLUNK_HOME/etc/system/local/</code></td></tr>
-<tr><td><code>_rbac/</code></td><td><code>authentication.conf</code>, <code>authorize.conf</code></td><td>System auth configs</td></tr>
-<tr><td><code>_indexes/</code></td><td><code>indexes.conf</code></td><td>Index definitions</td></tr>
+<tr>
+<td><code>dashboard_ownership.json</code></td>
+<td><code>GET /servicesNS/-/-/data/ui/views</code></td>
+<td>Dashboard-to-owner mapping</td>
+</tr>
+<tr>
+<td><code>alert_ownership.json</code></td>
+<td><code>GET /servicesNS/-/-/saved/searches</code></td>
+<td>Alert-to-owner mapping</td>
+</tr>
+<tr>
+<td><code>ownership_summary.json</code></td>
+<td>Computed from ownership data</td>
+<td>Owner counts for dashboards and alerts</td>
+</tr>
+<tr>
+<td><code>saved_searches_all.json</code></td>
+<td><code>GET /servicesNS/-/-/saved/searches</code> (metadata fields
+only)</td>
+<td>All saved search metadata</td>
+</tr>
+<tr>
+<td><code>recent_searches.json</code></td>
+<td><code>GET /services/search/jobs</code></td>
+<td>Recent search job list</td>
+</tr>
+<tr>
+<td><code>kvstore_stats.json</code></td>
+<td><code>GET /services/kvstore/status</code></td>
+<td>KV Store status</td>
+</tr>
 </tbody>
 </table>
-<h3>Summary: File Source Distribution</h3>
+<h3 id="category-3-system-information-rest-api">Category 3: System
+Information (REST API)</h3>
 <table>
+<colgroup>
+<col style="width: 19%" />
+<col style="width: 51%" />
+<col style="width: 29%" />
+</colgroup>
 <thead>
-<tr><th>Category</th><th>Files</th><th>Purpose</th></tr>
+<tr>
+<th>File</th>
+<th>REST API Source</th>
+<th>Purpose</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><strong>Script-Generated Analytics</strong></td><td>~45</td><td>Migration intelligence (prioritization, elimination candidates, usage patterns)</td></tr>
-<tr><td><strong>Raw API Exports</strong></td><td>~10 + dashboards</td><td>Direct Splunk data structures</td></tr>
-<tr><td><strong>Raw File Exports</strong></td><td>Variable (per app)</td><td>Configuration files copied from disk</td></tr>
+<tr>
+<td><code>environment.json</code></td>
+<td>Script-detected</td>
+<td>Hostname, platform, Splunk version</td>
+</tr>
+<tr>
+<td><code>server_info.json</code></td>
+<td><code>GET /services/server/info</code></td>
+<td>Splunk server details</td>
+</tr>
+<tr>
+<td><code>installed_apps.json</code></td>
+<td><code>GET /services/apps/local</code></td>
+<td>App inventory</td>
+</tr>
+<tr>
+<td><code>search_peers.json</code></td>
+<td><code>GET /services/search/distributed/peers</code></td>
+<td>Distributed search topology (Enterprise only)</td>
+</tr>
+<tr>
+<td><code>license_info.json</code></td>
+<td><code>GET /services/licenser/licenses</code></td>
+<td>License details</td>
+</tr>
+<tr>
+<td><code>server_settings.json</code></td>
+<td><code>GET /services/server/settings</code></td>
+<td>Server settings (Cloud only)</td>
+</tr>
 </tbody>
 </table>
-<h3>Why This Matters</h3>
-<ol>
-<li><strong>Script-Generated Analytics</strong> = <strong>Unique DMA Value</strong></li>
-</ol>
+<h3 id="category-4-rbac-data-rest-api">Category 4: RBAC Data (REST
+API)</h3>
+<table>
+<colgroup>
+<col style="width: 19%" />
+<col style="width: 51%" />
+<col style="width: 29%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>REST API Source</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>users.json</code></td>
+<td><code>GET /services/authentication/users</code></td>
+<td>User accounts</td>
+</tr>
+<tr>
+<td><code>users_active_in_apps.json</code></td>
+<td>SPL query on <code>_audit</code> (scoped mode only)</td>
+<td>Users with activity in selected apps</td>
+</tr>
+<tr>
+<td><code>roles.json</code></td>
+<td><code>GET /services/authorization/roles</code></td>
+<td>Role definitions</td>
+</tr>
+</tbody>
+</table>
+<h3 id="category-5-index-data">Category 5: Index Data</h3>
+<table>
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 34%" />
+<col style="width: 39%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>Source</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>indexes.conf</code></td>
+<td>Filesystem (Enterprise)</td>
+<td>Index definitions from config</td>
+</tr>
+<tr>
+<td><code>indexes.json</code></td>
+<td>REST <code>/services/data/indexes</code> (Cloud)</td>
+<td>Index configurations</td>
+</tr>
+<tr>
+<td><code>indexes_detailed.json</code></td>
+<td>REST <code>/services/data/indexes</code> (Enterprise)</td>
+<td>Detailed index info</td>
+</tr>
+<tr>
+<td><code>indexes_extended.json</code></td>
+<td>REST <code>/services/data/indexes-extended</code> (Cloud)</td>
+<td>Extended index stats</td>
+</tr>
+<tr>
+<td><code>data_inputs.json</code></td>
+<td>REST <code>/services/data/inputs/all</code> (Enterprise)</td>
+<td>Data input configurations</td>
+</tr>
+</tbody>
+</table>
+<h3 id="category-6-app-knowledge-objects">Category 6: App Knowledge
+Objects</h3>
+<p><strong>Enterprise</strong> (filesystem <code>.conf</code>
+files):</p>
+<table>
+<colgroup>
+<col style="width: 42%" />
+<col style="width: 26%" />
+<col style="width: 30%" />
+</colgroup>
+<thead>
+<tr>
+<th>Directory</th>
+<th>Files</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;app&gt;/default/</code></td>
+<td><code>props.conf</code>, <code>transforms.conf</code>,
+<code>eventtypes.conf</code>, <code>tags.conf</code>,
+<code>macros.conf</code>, <code>savedsearches.conf</code>,
+<code>inputs.conf</code>, <code>outputs.conf</code>,
+<code>collections.conf</code>, <code>fields.conf</code>,
+<code>workflow_actions.conf</code>, <code>commands.conf</code>,
+<code>indexes.conf</code></td>
+<td><code>$SPLUNK_HOME/etc/apps/&lt;app&gt;/default/</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/local/</code></td>
+<td>Same as default/</td>
+<td><code>$SPLUNK_HOME/etc/apps/&lt;app&gt;/local/</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/lookups/</code></td>
+<td><code>*.csv</code></td>
+<td>Lookup table data files</td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/metadata/</code></td>
+<td><code>default.meta</code>, <code>local.meta</code></td>
+<td>App metadata (export scope)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Cloud</strong> (REST API JSON, filtered by
+<code>acl.app</code>):</p>
+<table>
+<colgroup>
+<col style="width: 27%" />
+<col style="width: 72%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>REST API Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;app&gt;/savedsearches.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/saved/searches</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/props.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/configs/conf-props</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/transforms.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/configs/conf-transforms</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/macros.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/admin/macros</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/eventtypes.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/saved/eventtypes</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/tags.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/configs/conf-tags</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/field_extractions.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/data/transforms/extractions</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/inputs.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/data/inputs/all</code></td>
+</tr>
+<tr>
+<td><code>&lt;app&gt;/lookups.json</code></td>
+<td><code>GET /servicesNS/-/&lt;app&gt;/data/lookup-table-files</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="manifest.json-required">manifest.json (REQUIRED)</h2>
+<p>Every export MUST include a <code>manifest.json</code> at the root.
+The schema is the same for both Enterprise and Cloud exports.</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;schema_version&quot;</span><span class="fu">:</span> <span class="st">&quot;4.0&quot;</span><span class="fu">,</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;archive_structure_version&quot;</span><span class="fu">:</span> <span class="st">&quot;v2&quot;</span><span class="fu">,</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_tool&quot;</span><span class="fu">:</span> <span class="st">&quot;dma-splunk-cloud-export&quot;</span><span class="fu">,</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_tool_version&quot;</span><span class="fu">:</span> <span class="st">&quot;4.6.0&quot;</span><span class="fu">,</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_timestamp&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-03-15T14:25:30Z&quot;</span><span class="fu">,</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_duration_seconds&quot;</span><span class="fu">:</span> <span class="dv">847</span><span class="fu">,</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;archive_structure&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;v2&quot;</span><span class="fu">,</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;description&quot;</span><span class="fu">:</span> <span class="st">&quot;App-centric dashboard organization prevents name collisions&quot;</span><span class="fu">,</span></span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboard_location&quot;</span><span class="fu">:</span> <span class="st">&quot;{AppName}/dashboards/classic/ and {AppName}/dashboards/studio/&quot;</span></span>
+<span id="cb3-13"><a href="#cb3-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb3-14"><a href="#cb3-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-15"><a href="#cb3-15" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;source&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-16"><a href="#cb3-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hostname&quot;</span><span class="fu">:</span> <span class="st">&quot;mystack.splunkcloud.com&quot;</span><span class="fu">,</span></span>
+<span id="cb3-17"><a href="#cb3-17" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;fqdn&quot;</span><span class="fu">:</span> <span class="st">&quot;mystack.splunkcloud.com&quot;</span><span class="fu">,</span></span>
+<span id="cb3-18"><a href="#cb3-18" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;platform&quot;</span><span class="fu">:</span> <span class="st">&quot;Splunk Cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb3-19"><a href="#cb3-19" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;platform_version&quot;</span><span class="fu">:</span> <span class="st">&quot;victoria&quot;</span></span>
+<span id="cb3-20"><a href="#cb3-20" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb3-21"><a href="#cb3-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-22"><a href="#cb3-22" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunk&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-23"><a href="#cb3-23" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;home&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb3-24"><a href="#cb3-24" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;version&quot;</span><span class="fu">:</span> <span class="st">&quot;9.2.2403.100&quot;</span><span class="fu">,</span></span>
+<span id="cb3-25"><a href="#cb3-25" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;build&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb3-26"><a href="#cb3-26" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;flavor&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb3-27"><a href="#cb3-27" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;role&quot;</span><span class="fu">:</span> <span class="st">&quot;search_head&quot;</span><span class="fu">,</span></span>
+<span id="cb3-28"><a href="#cb3-28" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;architecture&quot;</span><span class="fu">:</span> <span class="st">&quot;cloud&quot;</span><span class="fu">,</span></span>
+<span id="cb3-29"><a href="#cb3-29" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;is_cloud&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-30"><a href="#cb3-30" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;cloud_type&quot;</span><span class="fu">:</span> <span class="st">&quot;victoria&quot;</span><span class="fu">,</span></span>
+<span id="cb3-31"><a href="#cb3-31" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;server_guid&quot;</span><span class="fu">:</span> <span class="st">&quot;XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX&quot;</span></span>
+<span id="cb3-32"><a href="#cb3-32" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb3-33"><a href="#cb3-33" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-34"><a href="#cb3-34" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;collection&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-35"><a href="#cb3-35" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;configs&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-36"><a href="#cb3-36" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-37"><a href="#cb3-37" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-38"><a href="#cb3-38" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;rbac&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-39"><a href="#cb3-39" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;usage_analytics&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-40"><a href="#cb3-40" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;usage_period&quot;</span><span class="fu">:</span> <span class="st">&quot;30d&quot;</span><span class="fu">,</span></span>
+<span id="cb3-41"><a href="#cb3-41" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;indexes&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb3-42"><a href="#cb3-42" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;lookups&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb3-43"><a href="#cb3-43" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;data_anonymized&quot;</span><span class="fu">:</span> <span class="kw">false</span></span>
+<span id="cb3-44"><a href="#cb3-44" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb3-45"><a href="#cb3-45" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-46"><a href="#cb3-46" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;statistics&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-47"><a href="#cb3-47" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;apps_exported&quot;</span><span class="fu">:</span> <span class="dv">47</span><span class="fu">,</span></span>
+<span id="cb3-48"><a href="#cb3-48" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_classic&quot;</span><span class="fu">:</span> <span class="dv">312</span><span class="fu">,</span></span>
+<span id="cb3-49"><a href="#cb3-49" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_studio&quot;</span><span class="fu">:</span> <span class="dv">89</span><span class="fu">,</span></span>
+<span id="cb3-50"><a href="#cb3-50" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_total&quot;</span><span class="fu">:</span> <span class="dv">401</span><span class="fu">,</span></span>
+<span id="cb3-51"><a href="#cb3-51" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="dv">156</span><span class="fu">,</span></span>
+<span id="cb3-52"><a href="#cb3-52" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;saved_searches&quot;</span><span class="fu">:</span> <span class="dv">523</span><span class="fu">,</span></span>
+<span id="cb3-53"><a href="#cb3-53" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;users&quot;</span><span class="fu">:</span> <span class="dv">87</span><span class="fu">,</span></span>
+<span id="cb3-54"><a href="#cb3-54" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;roles&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb3-55"><a href="#cb3-55" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;indexes&quot;</span><span class="fu">:</span> <span class="dv">45</span><span class="fu">,</span></span>
+<span id="cb3-56"><a href="#cb3-56" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;api_calls_made&quot;</span><span class="fu">:</span> <span class="dv">1247</span><span class="fu">,</span></span>
+<span id="cb3-57"><a href="#cb3-57" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;rate_limit_hits&quot;</span><span class="fu">:</span> <span class="dv">3</span><span class="fu">,</span></span>
+<span id="cb3-58"><a href="#cb3-58" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;errors&quot;</span><span class="fu">:</span> <span class="dv">2</span><span class="fu">,</span></span>
+<span id="cb3-59"><a href="#cb3-59" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;warnings&quot;</span><span class="fu">:</span> <span class="dv">8</span><span class="fu">,</span></span>
+<span id="cb3-60"><a href="#cb3-60" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;total_files&quot;</span><span class="fu">:</span> <span class="dv">1247</span><span class="fu">,</span></span>
+<span id="cb3-61"><a href="#cb3-61" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;total_size_bytes&quot;</span><span class="fu">:</span> <span class="dv">48923847</span></span>
+<span id="cb3-62"><a href="#cb3-62" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb3-63"><a href="#cb3-63" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-64"><a href="#cb3-64" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;apps&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-65"><a href="#cb3-65" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb3-66"><a href="#cb3-66" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span></span>
+<span id="cb3-67"><a href="#cb3-67" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards&quot;</span><span class="fu">:</span> <span class="dv">87</span><span class="fu">,</span></span>
+<span id="cb3-68"><a href="#cb3-68" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards_classic&quot;</span><span class="fu">:</span> <span class="dv">45</span><span class="fu">,</span></span>
+<span id="cb3-69"><a href="#cb3-69" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards_studio&quot;</span><span class="fu">:</span> <span class="dv">42</span><span class="fu">,</span></span>
+<span id="cb3-70"><a href="#cb3-70" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="dv">45</span><span class="fu">,</span></span>
+<span id="cb3-71"><a href="#cb3-71" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;saved_searches&quot;</span><span class="fu">:</span> <span class="dv">123</span></span>
+<span id="cb3-72"><a href="#cb3-72" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb3-73"><a href="#cb3-73" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb3-74"><a href="#cb3-74" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;ops_monitoring&quot;</span><span class="fu">,</span></span>
+<span id="cb3-75"><a href="#cb3-75" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards&quot;</span><span class="fu">:</span> <span class="dv">45</span><span class="fu">,</span></span>
+<span id="cb3-76"><a href="#cb3-76" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards_classic&quot;</span><span class="fu">:</span> <span class="dv">30</span><span class="fu">,</span></span>
+<span id="cb3-77"><a href="#cb3-77" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboards_studio&quot;</span><span class="fu">:</span> <span class="dv">15</span><span class="fu">,</span></span>
+<span id="cb3-78"><a href="#cb3-78" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;alerts&quot;</span><span class="fu">:</span> <span class="dv">23</span><span class="fu">,</span></span>
+<span id="cb3-79"><a href="#cb3-79" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;saved_searches&quot;</span><span class="fu">:</span> <span class="dv">67</span></span>
+<span id="cb3-80"><a href="#cb3-80" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb3-81"><a href="#cb3-81" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb3-82"><a href="#cb3-82" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-83"><a href="#cb3-83" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;usage_intelligence&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-84"><a href="#cb3-84" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;prioritization&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-85"><a href="#cb3-85" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;top_dashboards&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-86"><a href="#cb3-86" aria-hidden="true" tabindex="-1"></a>        <span class="fu">{</span><span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span> <span class="dt">&quot;dashboard_name&quot;</span><span class="fu">:</span> <span class="st">&quot;security_overview&quot;</span><span class="fu">,</span> <span class="dt">&quot;view_count&quot;</span><span class="fu">:</span> <span class="st">&quot;15234&quot;</span><span class="fu">,</span> <span class="dt">&quot;unique_users&quot;</span><span class="fu">:</span> <span class="st">&quot;45&quot;</span><span class="fu">}</span></span>
+<span id="cb3-87"><a href="#cb3-87" aria-hidden="true" tabindex="-1"></a>      <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb3-88"><a href="#cb3-88" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;top_alerts&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-89"><a href="#cb3-89" aria-hidden="true" tabindex="-1"></a>        <span class="fu">{</span><span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span> <span class="dt">&quot;savedsearch_name&quot;</span><span class="fu">:</span> <span class="st">&quot;critical_error_alert&quot;</span><span class="fu">,</span> <span class="dt">&quot;total_runs&quot;</span><span class="fu">:</span> <span class="st">&quot;8923&quot;</span><span class="fu">,</span> <span class="dt">&quot;successful&quot;</span><span class="fu">:</span> <span class="st">&quot;8900&quot;</span><span class="fu">}</span></span>
+<span id="cb3-90"><a href="#cb3-90" aria-hidden="true" tabindex="-1"></a>      <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb3-91"><a href="#cb3-91" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;top_users&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-92"><a href="#cb3-92" aria-hidden="true" tabindex="-1"></a>        <span class="fu">{</span><span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span> <span class="dt">&quot;user&quot;</span><span class="fu">:</span> <span class="st">&quot;analyst1&quot;</span><span class="fu">,</span> <span class="dt">&quot;searches&quot;</span><span class="fu">:</span> <span class="st">&quot;23456&quot;</span><span class="fu">,</span> <span class="dt">&quot;last_active&quot;</span><span class="fu">:</span> <span class="st">&quot;1711929600&quot;</span><span class="fu">}</span></span>
+<span id="cb3-93"><a href="#cb3-93" aria-hidden="true" tabindex="-1"></a>      <span class="ot">]</span></span>
+<span id="cb3-94"><a href="#cb3-94" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb3-95"><a href="#cb3-95" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;volume&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb3-96"><a href="#cb3-96" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;index_volume&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-97"><a href="#cb3-97" aria-hidden="true" tabindex="-1"></a>        <span class="fu">{</span><span class="dt">&quot;index_name&quot;</span><span class="fu">:</span> <span class="st">&quot;main&quot;</span><span class="fu">,</span> <span class="dt">&quot;total_gb&quot;</span><span class="fu">:</span> <span class="st">&quot;125.50&quot;</span><span class="fu">,</span> <span class="dt">&quot;daily_avg_gb&quot;</span><span class="fu">:</span> <span class="st">&quot;4.18&quot;</span><span class="fu">,</span> <span class="dt">&quot;sourcetype_count&quot;</span><span class="fu">:</span> <span class="st">&quot;23&quot;</span><span class="fu">}</span></span>
+<span id="cb3-98"><a href="#cb3-98" aria-hidden="true" tabindex="-1"></a>      <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb3-99"><a href="#cb3-99" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;index_events&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-100"><a href="#cb3-100" aria-hidden="true" tabindex="-1"></a>        <span class="fu">{</span><span class="dt">&quot;index_name&quot;</span><span class="fu">:</span> <span class="st">&quot;main&quot;</span><span class="fu">,</span> <span class="dt">&quot;count&quot;</span><span class="fu">:</span> <span class="st">&quot;45000000&quot;</span><span class="fu">,</span> <span class="dt">&quot;_time&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-03-15T00:00:00.000+00:00&quot;</span><span class="fu">}</span></span>
+<span id="cb3-101"><a href="#cb3-101" aria-hidden="true" tabindex="-1"></a>      <span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb3-102"><a href="#cb3-102" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;note&quot;</span><span class="fu">:</span> <span class="st">&quot;See index_volume_summary.json for per-index daily ingestion&quot;</span></span>
+<span id="cb3-103"><a href="#cb3-103" aria-hidden="true" tabindex="-1"></a>    <span class="fu">},</span></span>
+<span id="cb3-104"><a href="#cb3-104" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;search_patterns&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb3-105"><a href="#cb3-105" aria-hidden="true" tabindex="-1"></a>      <span class="fu">{</span><span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span> <span class="dt">&quot;search_type&quot;</span><span class="fu">:</span> <span class="st">&quot;dashboard&quot;</span><span class="fu">,</span> <span class="dt">&quot;total_searches&quot;</span><span class="fu">:</span> <span class="st">&quot;45000&quot;</span><span class="fu">,</span> <span class="dt">&quot;unique_users&quot;</span><span class="fu">:</span> <span class="st">&quot;32&quot;</span><span class="fu">}</span></span>
+<span id="cb3-106"><a href="#cb3-106" aria-hidden="true" tabindex="-1"></a>    <span class="ot">]</span></span>
+<span id="cb3-107"><a href="#cb3-107" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb3-108"><a href="#cb3-108" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="manifest-field-descriptions">Manifest Field Descriptions</h3>
+<table>
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 23%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>schema_version</code></td>
+<td>string</td>
+<td>Always <code>"4.0"</code></td>
+</tr>
+<tr>
+<td><code>archive_structure_version</code></td>
+<td>string</td>
+<td>Always <code>"v2"</code> (app-centric dashboards)</td>
+</tr>
+<tr>
+<td><code>export_tool</code></td>
+<td>string</td>
+<td><code>"dma-splunk-export"</code> or
+<code>"dma-splunk-cloud-export"</code></td>
+</tr>
+<tr>
+<td><code>export_tool_version</code></td>
+<td>string</td>
+<td>Script version (e.g., <code>"4.6.0"</code>)</td>
+</tr>
+<tr>
+<td><code>export_timestamp</code></td>
+<td>ISO 8601</td>
+<td>When export was created</td>
+</tr>
+<tr>
+<td><code>export_duration_seconds</code></td>
+<td>number</td>
+<td>Total export time</td>
+</tr>
+<tr>
+<td><code>archive_structure.version</code></td>
+<td>string</td>
+<td>Dashboard organization version</td>
+</tr>
+<tr>
+<td><code>archive_structure.dashboard_location</code></td>
+<td>string</td>
+<td>Where dashboards live</td>
+</tr>
+<tr>
+<td><code>source.hostname</code></td>
+<td>string</td>
+<td>Machine hostname or cloud stack name</td>
+</tr>
+<tr>
+<td><code>splunk.version</code></td>
+<td>string</td>
+<td>Splunk version</td>
+</tr>
+<tr>
+<td><code>splunk.flavor</code></td>
+<td>string</td>
+<td><code>"enterprise"</code>, <code>"cloud"</code>, or
+<code>"uf"</code></td>
+</tr>
+<tr>
+<td><code>splunk.is_cloud</code></td>
+<td>boolean</td>
+<td>Whether this is Splunk Cloud</td>
+</tr>
+<tr>
+<td><code>collection.*</code></td>
+<td>boolean</td>
+<td>Which data categories were collected</td>
+</tr>
+<tr>
+<td><code>collection.usage_period</code></td>
+<td>string</td>
+<td>Analytics time range (e.g., <code>"30d"</code>)</td>
+</tr>
+<tr>
+<td><code>statistics.*</code></td>
+<td>number</td>
+<td>Counts of collected objects</td>
+</tr>
+<tr>
+<td><code>apps</code></td>
+<td>array</td>
+<td>Per-app breakdown of dashboards, alerts, saved searches</td>
+</tr>
+<tr>
+<td><code>usage_intelligence</code></td>
+<td>object</td>
+<td>Programmatic access to analytics for migration prioritization</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="environment.json-required">environment.json (REQUIRED)</h2>
+<p>Located at
+<code>dma_analytics/system_info/environment.json</code>:</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;hostname&quot;</span><span class="fu">:</span> <span class="st">&quot;splunk-sh01&quot;</span><span class="fu">,</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;platform&quot;</span><span class="fu">:</span> <span class="st">&quot;Linux&quot;</span><span class="fu">,</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;platformVersion&quot;</span><span class="fu">:</span> <span class="st">&quot;5.4.0-150-generic&quot;</span><span class="fu">,</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;architecture&quot;</span><span class="fu">:</span> <span class="st">&quot;x86_64&quot;</span><span class="fu">,</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunkHome&quot;</span><span class="fu">:</span> <span class="st">&quot;/opt/splunk&quot;</span><span class="fu">,</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunkFlavor&quot;</span><span class="fu">:</span> <span class="st">&quot;enterprise&quot;</span><span class="fu">,</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunkRole&quot;</span><span class="fu">:</span> <span class="st">&quot;search_head&quot;</span><span class="fu">,</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunkArchitecture&quot;</span><span class="fu">:</span> <span class="st">&quot;distributed&quot;</span><span class="fu">,</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;exportTimestamp&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-03-15T14:25:30Z&quot;</span><span class="fu">,</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;exportVersion&quot;</span><span class="fu">:</span> <span class="st">&quot;4.6.0&quot;</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="anonymization_report.json-optional">_anonymization_report.json
+(OPTIONAL)</h2>
+<p>This file is <strong>only present when data anonymization is
+enabled</strong>. It documents the anonymization process and serves as a
+receipt confirming the export has been sanitized.</p>
+<h3 id="two-archive-approach-v4.2.4">Two-Archive Approach (v4.2.4+)</h3>
+<p>When anonymization is enabled, the export script creates <strong>TWO
+separate archives</strong>:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Archive</th>
+<th>Content</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{export_name}.tar.gz</code></td>
+<td><strong>Original, untouched data</strong></td>
+<td>Keep for your records; re-run anonymization if needed</td>
+</tr>
+<tr>
+<td><code>{export_name}_masked.tar.gz</code></td>
+<td><strong>Anonymized copy</strong></td>
+<td>Safe to share with consultants, support teams, external parties</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Why Two Archives?</strong> - Preserves original data in case
+anonymization corrupts files - Allows re-running anonymization without
+re-running the entire export - Clear naming makes it obvious which file
+is safe to share</p>
+<p>The <code>_anonymization_report.json</code> file is <strong>only
+present in the <code>_masked</code> archive</strong>.</p>
+<h3 id="schema">Schema</h3>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;anonymization_applied&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;timestamp&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-03-15T15:30:45Z&quot;</span><span class="fu">,</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;statistics&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;files_processed&quot;</span><span class="fu">:</span> <span class="dv">847</span><span class="fu">,</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;unique_emails_anonymized&quot;</span><span class="fu">:</span> <span class="dv">156</span><span class="fu">,</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;unique_hosts_anonymized&quot;</span><span class="fu">:</span> <span class="dv">89</span><span class="fu">,</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;ip_addresses&quot;</span><span class="fu">:</span> <span class="st">&quot;all_redacted&quot;</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;transformations&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;emails&quot;</span><span class="fu">:</span> <span class="st">&quot;original@domain.com -&gt; user######@anon.dma.local&quot;</span><span class="fu">,</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hostnames&quot;</span><span class="fu">:</span> <span class="st">&quot;server.example.com -&gt; host-########.anon.local&quot;</span><span class="fu">,</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;ipv4&quot;</span><span class="fu">:</span> <span class="st">&quot;x.x.x.x -&gt; [IP-REDACTED]&quot;</span><span class="fu">,</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;ipv6&quot;</span><span class="fu">:</span> <span class="st">&quot;xxxx:xxxx:... -&gt; [IPv6-REDACTED]&quot;</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;note&quot;</span><span class="fu">:</span> <span class="st">&quot;This export has been anonymized. Original values cannot be recovered from this data.&quot;</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="key-properties">Key Properties</h3>
 <ul>
-<li>These don't exist in Splunk natively</li>
-<li>Enable data-driven migration prioritization</li>
-<li>Identify what to migrate vs. eliminate</li>
+<li><strong>Consistent Mapping</strong>: The same original
+email/hostname always produces the same anonymized value (SHA-256
+hash-based)</li>
+<li><strong>Irreversible</strong>: Hashing means originals cannot be
+recovered</li>
+<li><strong>Preserved Relationships</strong>: Data relationships remain
+intact (all references to <code>server-01</code> become the same
+anonymized value)</li>
+<li><strong>Selective Preservation</strong>: <code>localhost</code> and
+<code>127.0.0.1</code> are NOT anonymized</li>
 </ul>
-<ol>
-<li><strong>Raw Exports</strong> = <strong>Source of Truth</strong></li>
-</ol>
+<h3 id="when-to-expect-this-file">When to Expect This File</h3>
 <ul>
-<li>Exact representation of Splunk configurations</li>
-<li>Required for accurate conversion to Dynatrace</li>
-<li>No transformation applied</li>
+<li>Present when user selects anonymization option</li>
+<li>Absent when anonymization is not selected</li>
+<li>Check <code>manifest.json</code> &gt;
+<code>collection.data_anonymized</code> to programmatically detect</li>
 </ul>
-<hr>
-<h2>manifest.json (REQUIRED)</h2>
-<p>
-Every export MUST include a <code>manifest.json</code> at the root with this exact schema:
-</p>
-<pre><code class="language-json">{
-  &quot;schema_version&quot;: &quot;4.0&quot;,
-  &quot;export_tool&quot;: &quot;dma-splunk-export&quot;,
-  &quot;export_tool_version&quot;: &quot;4.0.0&quot;,
-  &quot;export_timestamp&quot;: &quot;2025-12-03T14:25:30Z&quot;,
-  &quot;export_duration_seconds&quot;: 847,
-
-  &quot;source&quot;: {
-    &quot;hostname&quot;: &quot;splunk-sh01.example.com&quot;,
-    &quot;fqdn&quot;: &quot;splunk-sh01.example.com&quot;,
-    &quot;ip_addresses&quot;: [&quot;10.0.1.50&quot;, &quot;192.168.1.50&quot;],
-    &quot;platform&quot;: &quot;Linux&quot;,
-    &quot;platform_version&quot;: &quot;5.4.0-150-generic&quot;,
-    &quot;architecture&quot;: &quot;x86_64&quot;
-  },
-
-  &quot;splunk&quot;: {
-    &quot;home&quot;: &quot;/opt/splunk&quot;,
-    &quot;version&quot;: &quot;9.1.3&quot;,
-    &quot;build&quot;: &quot;d95b3299fa65&quot;,
-    &quot;flavor&quot;: &quot;enterprise&quot;,
-    &quot;role&quot;: &quot;search_head&quot;,
-    &quot;architecture&quot;: &quot;distributed&quot;,
-    &quot;is_shc_member&quot;: true,
-    &quot;is_shc_captain&quot;: false,
-    &quot;is_idx_cluster&quot;: true,
-    &quot;is_cloud&quot;: false,
-    &quot;license_type&quot;: &quot;enterprise&quot;,
-    &quot;license_quota_gb&quot;: 500
-  },
-
-  &quot;collection&quot;: {
-    &quot;configs&quot;: true,
-    &quot;dashboards&quot;: true,
-    &quot;alerts&quot;: true,
-    &quot;rbac&quot;: true,
-    &quot;usage_analytics&quot;: true,
-    &quot;usage_period&quot;: &quot;30d&quot;,
-    &quot;indexes&quot;: true,
-    &quot;lookups&quot;: false,
-    &quot;audit_sample&quot;: false,
-    &quot;data_anonymized&quot;: false
-  },
-
-  &quot;statistics&quot;: {
-    &quot;apps_exported&quot;: 47,
-    &quot;dashboards_classic&quot;: 312,
-    &quot;dashboards_studio&quot;: 89,
-    &quot;dashboards_total&quot;: 401,
-    &quot;alerts&quot;: 156,
-    &quot;saved_searches&quot;: 523,
-    &quot;users&quot;: 87,
-    &quot;roles&quot;: 23,
-    &quot;indexes&quot;: 45,
-    &quot;data_inputs&quot;: 234,
-    &quot;lookups&quot;: 0,
-    &quot;macros&quot;: 178,
-    &quot;eventtypes&quot;: 45,
-    &quot;props_stanzas&quot;: 892,
-    &quot;transforms_stanzas&quot;: 234,
-    &quot;errors&quot;: 3,
-    &quot;warnings&quot;: 12
-  },
-
-  &quot;apps&quot;: [
-    {
-      &quot;name&quot;: &quot;security_app&quot;,
-      &quot;label&quot;: &quot;Security Operations&quot;,
-      &quot;version&quot;: &quot;2.3.1&quot;,
-      &quot;dashboards&quot;: 87,
-      &quot;alerts&quot;: 45,
-      &quot;saved_searches&quot;: 123,
-      &quot;has_props&quot;: true,
-      &quot;has_transforms&quot;: true,
-      &quot;has_lookups&quot;: false
-    },
-    {
-      &quot;name&quot;: &quot;ops_monitoring&quot;,
-      &quot;label&quot;: &quot;Operations Monitoring&quot;,
-      &quot;version&quot;: &quot;1.5.0&quot;,
-      &quot;dashboards&quot;: 45,
-      &quot;alerts&quot;: 23,
-      &quot;saved_searches&quot;: 67,
-      &quot;has_props&quot;: true,
-      &quot;has_transforms&quot;: false,
-      &quot;has_lookups&quot;: true
-    }
-  ],
-
-  &quot;indexes_summary&quot;: [
-    {
-      &quot;name&quot;: &quot;main&quot;,
-      &quot;size_mb&quot;: 125000,
-      &quot;event_count&quot;: 45000000,
-      &quot;earliest_time&quot;: &quot;2024-01-01T00:00:00Z&quot;,
-      &quot;latest_time&quot;: &quot;2025-12-03T14:00:00Z&quot;
-    },
-    {
-      &quot;name&quot;: &quot;security&quot;,
-      &quot;size_mb&quot;: 89000,
-      &quot;event_count&quot;: 23000000,
-      &quot;earliest_time&quot;: &quot;2024-06-01T00:00:00Z&quot;,
-      &quot;latest_time&quot;: &quot;2025-12-03T14:00:00Z&quot;
-    }
-  ],
-
-  &quot;data_sources_summary&quot;: [
-    {
-      &quot;sourcetype&quot;: &quot;access_combined&quot;,
-      &quot;index&quot;: &quot;web&quot;,
-      &quot;estimated_eps&quot;: 5000,
-      &quot;sample_count&quot;: 1000000
-    },
-    {
-      &quot;sourcetype&quot;: &quot;syslog&quot;,
-      &quot;index&quot;: &quot;main&quot;,
-      &quot;estimated_eps&quot;: 12000,
-      &quot;sample_count&quot;: 5000000
-    }
-  ],
-
-  &quot;checksums&quot;: {
-    &quot;algorithm&quot;: &quot;sha256&quot;,
-    &quot;manifest&quot;: &quot;a1b2c3d4...&quot;,
-    &quot;total_files&quot;: 1247,
-    &quot;total_size_bytes&quot;: 48923847
-  },
-
-  &quot;usage_intelligence&quot;: {
-    &quot;summary&quot;: {
-      &quot;dashboards_never_viewed&quot;: 45,
-      &quot;alerts_never_fired&quot;: 23,
-      &quot;users_inactive_30d&quot;: 12,
-      &quot;alerts_with_failures&quot;: 8
-    },
-    &quot;prioritization&quot;: {
-      &quot;top_dashboards&quot;: [
-        {&quot;dashboard&quot;: &quot;security_overview&quot;, &quot;app&quot;: &quot;security_app&quot;, &quot;views&quot;: 15234},
-        {&quot;dashboard&quot;: &quot;ops_dashboard&quot;, &quot;app&quot;: &quot;ops_monitoring&quot;, &quot;views&quot;: 8901}
-      ],
-      &quot;top_users&quot;: [
-        {&quot;user&quot;: &quot;admin&quot;, &quot;searches&quot;: 45123, &quot;last_active&quot;: &quot;2025-12-03&quot;},
-        {&quot;user&quot;: &quot;analyst1&quot;, &quot;searches&quot;: 23456, &quot;last_active&quot;: &quot;2025-12-02&quot;}
-      ],
-      &quot;top_alerts&quot;: [
-        {&quot;alert&quot;: &quot;critical_error_alert&quot;, &quot;app&quot;: &quot;security_app&quot;, &quot;executions&quot;: 8923},
-        {&quot;alert&quot;: &quot;disk_space_warning&quot;, &quot;app&quot;: &quot;ops_monitoring&quot;, &quot;executions&quot;: 5634}
-      ],
-      &quot;top_sourcetypes&quot;: [
-        {&quot;sourcetype&quot;: &quot;access_combined&quot;, &quot;searches&quot;: 12345},
-        {&quot;sourcetype&quot;: &quot;syslog&quot;, &quot;searches&quot;: 9876}
-      ],
-      &quot;top_indexes&quot;: [
-        {&quot;index&quot;: &quot;main&quot;, &quot;searches&quot;: 34567},
-        {&quot;index&quot;: &quot;security&quot;, &quot;searches&quot;: 23456}
-      ]
-    },
-    &quot;volume&quot;: {
-      &quot;avg_daily_gb&quot;: 125.5,
-      &quot;peak_daily_gb&quot;: 189.2,
-      &quot;total_30d_gb&quot;: 3765.0,
-      &quot;top_indexes_by_volume&quot;: [
-        {&quot;idx&quot;: &quot;main&quot;, &quot;daily_avg_gb&quot;: 45.2},
-        {&quot;idx&quot;: &quot;security&quot;, &quot;daily_avg_gb&quot;: 32.1}
-      ],
-      &quot;top_sourcetypes_by_volume&quot;: [
-        {&quot;st&quot;: &quot;access_combined&quot;, &quot;daily_avg_gb&quot;: 28.5},
-        {&quot;st&quot;: &quot;syslog&quot;, &quot;daily_avg_gb&quot;: 22.3}
-      ],
-      &quot;top_hosts_by_volume&quot;: [
-        {&quot;h&quot;: &quot;webserver01&quot;, &quot;daily_avg_gb&quot;: 5.2},
-        {&quot;h&quot;: &quot;appserver01&quot;, &quot;daily_avg_gb&quot;: 4.8}
-      ],
-      &quot;note&quot;: &quot;See _usage_analytics/daily_volume_*.json for full daily breakdown&quot;
-    },
-    &quot;elimination_candidates&quot;: {
-      &quot;dashboards_never_viewed_count&quot;: 45,
-      &quot;alerts_never_fired_count&quot;: 23,
-      &quot;note&quot;: &quot;See _usage_analytics/ for full lists of candidates&quot;
-    },
-    &quot;ownership&quot;: {
-      &quot;dashboard_owners&quot;: 45,
-      &quot;alert_owners&quot;: 32,
-      &quot;top_owners&quot;: [
-        {&quot;owner&quot;: &quot;admin&quot;, &quot;dashboards&quot;: 87, &quot;alerts&quot;: 45},
-        {&quot;owner&quot;: &quot;analyst1&quot;, &quot;dashboards&quot;: 34, &quot;alerts&quot;: 23},
-        {&quot;owner&quot;: &quot;security_team&quot;, &quot;dashboards&quot;: 28, &quot;alerts&quot;: 18}
-      ],
-      &quot;note&quot;: &quot;See _usage_analytics/dashboard_ownership.json and alert_ownership.json for complete mappings&quot;
-    }
-  }
-}</code></pre>
-<hr>
-<h2>environment.json (REQUIRED)</h2>
-<p>
-Located at <code>_systeminfo/environment.json</code>:
-</p>
-<pre><code class="language-json">{
-  &quot;hostname&quot;: &quot;splunk-sh01&quot;,
-  &quot;fqdn&quot;: &quot;splunk-sh01.example.com&quot;,
-  &quot;platform&quot;: &quot;Linux&quot;,
-  &quot;platform_version&quot;: &quot;5.4.0-150-generic&quot;,
-  &quot;architecture&quot;: &quot;x86_64&quot;,
-  &quot;splunk_home&quot;: &quot;/opt/splunk&quot;,
-  &quot;splunk_flavor&quot;: &quot;enterprise&quot;,
-  &quot;splunk_role&quot;: &quot;search_head&quot;,
-  &quot;splunk_architecture&quot;: &quot;distributed&quot;,
-  &quot;splunk_version&quot;: &quot;9.1.3&quot;,
-  &quot;export_timestamp&quot;: &quot;2025-12-03T14:25:30Z&quot;,
-  &quot;export_version&quot;: &quot;4.0.0&quot;,
-  &quot;timezone&quot;: &quot;UTC&quot;,
-  &quot;locale&quot;: &quot;en_US.UTF-8&quot;
-}</code></pre>
-<hr>
-<h2><em>anonymization</em>report.json (OPTIONAL)</h2>
-<p>
-This file is <strong>only present when data anonymization is enabled</strong> (Option 9 in Enterprise, Option 8 in Cloud). It documents the anonymization process and serves as a receipt confirming the export has been sanitized.
-</p>
-<h3>Two-Archive Approach (v4.2.4+)</h3>
-<p>
-When anonymization is enabled, the export script creates <strong>TWO separate archives</strong>:
-</p>
-<table>
+<hr />
+<h2 id="usage-analytics-v4.6.0">Usage Analytics (v4.6.0)</h2>
+<h3 id="architecture-change-in-v4.6.0">Architecture Change in
+v4.6.0</h3>
+<p>Previous versions ran <strong>per-app analytics queries</strong> (N
+apps x 7 queries = potentially thousands of search jobs). v4.6.0
+replaces this with <strong>6 global aggregate queries</strong> that
+include <code>by app</code> grouping. The DMA Curator server splits
+results into per-app views after import.</p>
+<h3 id="global-analytics-files">Global Analytics Files</h3>
+<p>All 6 files are located in
+<code>dma_analytics/usage_analytics/</code>:</p>
+<table style="width:100%;">
+<colgroup>
+<col style="width: 15%" />
+<col style="width: 28%" />
+<col style="width: 31%" />
+<col style="width: 23%" />
+</colgroup>
 <thead>
-<tr><th>Archive</th><th>Content</th><th>Purpose</th></tr>
+<tr>
+<th>File</th>
+<th>Query Type</th>
+<th>Key Fields</th>
+<th>Use For</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>{export_name}.tar.gz</code></td><td><strong>Original, untouched data</strong></td><td>Keep for your records; re-run anonymization if needed</td></tr>
-<tr><td><code>{export_name}_masked.tar.gz</code></td><td><strong>Anonymized copy</strong></td><td>Safe to share with consultants, support teams, external parties</td></tr>
+<tr>
+<td><code>dashboard_views_global.json</code></td>
+<td><code>_audit</code> with provenance</td>
+<td><code>app</code>, <code>dashboard_name</code>,
+<code>view_count</code>, <code>unique_users</code>,
+<code>viewers</code>, <code>last_viewed</code></td>
+<td>Migration prioritization by dashboard usage</td>
+</tr>
+<tr>
+<td><code>user_activity_global.json</code></td>
+<td><code>_audit</code> action=search</td>
+<td><code>app</code>, <code>user</code>, <code>searches</code>,
+<code>unique_searches</code>, <code>last_active</code></td>
+<td>Stakeholder identification and training planning</td>
+</tr>
+<tr>
+<td><code>search_patterns_global.json</code></td>
+<td><code>_audit</code> with type classification</td>
+<td><code>app</code>, <code>search_type</code>,
+<code>total_searches</code>, <code>unique_users</code>,
+<code>unique_searches</code></td>
+<td>Workload characterization (dashboard/scheduled/ad-hoc/other)</td>
+</tr>
+<tr>
+<td><code>index_volume_summary.json</code></td>
+<td><code>_internal</code> license_usage.log</td>
+<td><code>index_name</code>, <code>total_bytes</code>,
+<code>total_gb</code>, <code>daily_avg_gb</code>,
+<code>sourcetype_count</code>, <code>host_count</code></td>
+<td>Dynatrace Grail storage planning and cost estimation</td>
+</tr>
+<tr>
+<td><code>index_event_counts_daily.json</code></td>
+<td><code>\| tstats</code> (works without _internal)</td>
+<td><code>index_name</code>, <code>count</code>, <code>_time</code></td>
+<td>Volume trending and event rate estimation</td>
+</tr>
+<tr>
+<td><code>alert_firing_global.json</code></td>
+<td><code>_internal</code> sourcetype=scheduler</td>
+<td><code>app</code>, <code>savedsearch_name</code>,
+<code>total_runs</code>, <code>successful</code>, <code>skipped</code>,
+<code>failed</code>, <code>last_run</code></td>
+<td>Critical alert identification and health assessment</td>
+</tr>
 </tbody>
 </table>
-<p>
-<strong>Why Two Archives?</strong>
-</p>
+<h3 id="supplementary-metadata-files">Supplementary Metadata Files</h3>
+<p>Also in <code>dma_analytics/usage_analytics/</code>:</p>
+<table>
+<colgroup>
+<col style="width: 26%" />
+<col style="width: 34%" />
+<col style="width: 39%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>Source</th>
+<th>Use For</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dashboard_ownership.json</code></td>
+<td>REST API</td>
+<td>Dashboard-to-owner mapping for user-centric migration</td>
+</tr>
+<tr>
+<td><code>alert_ownership.json</code></td>
+<td>REST API</td>
+<td>Alert-to-owner mapping for user-centric migration</td>
+</tr>
+<tr>
+<td><code>ownership_summary.json</code></td>
+<td>Computed</td>
+<td>Owner counts for dashboards and alerts</td>
+</tr>
+<tr>
+<td><code>saved_searches_all.json</code></td>
+<td>REST API (metadata fields only)</td>
+<td>Saved search inventory without full SPL</td>
+</tr>
+<tr>
+<td><code>recent_searches.json</code></td>
+<td>REST API</td>
+<td>Recent search job list</td>
+</tr>
+<tr>
+<td><code>kvstore_stats.json</code></td>
+<td>REST API</td>
+<td>KV Store status and statistics</td>
+</tr>
+<tr>
+<td><code>USAGE_INTELLIGENCE_SUMMARY.md</code></td>
+<td>Generated</td>
+<td>Human-readable migration guide</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ownership-files">Ownership Files</h3>
+<p><strong>dashboard_ownership.json example:</strong></p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;results&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;dashboard&quot;</span><span class="fu">:</span> <span class="st">&quot;security_overview&quot;</span><span class="fu">,</span> <span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span> <span class="dt">&quot;owner&quot;</span><span class="fu">:</span> <span class="st">&quot;splunk_user&quot;</span><span class="fu">,</span> <span class="dt">&quot;sharing&quot;</span><span class="fu">:</span> <span class="st">&quot;app&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;dashboard&quot;</span><span class="fu">:</span> <span class="st">&quot;incident_tracker&quot;</span><span class="fu">,</span> <span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;security_app&quot;</span><span class="fu">,</span> <span class="dt">&quot;owner&quot;</span><span class="fu">:</span> <span class="st">&quot;splunk_user&quot;</span><span class="fu">,</span> <span class="dt">&quot;sharing&quot;</span><span class="fu">:</span> <span class="st">&quot;global&quot;</span><span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span><span class="dt">&quot;dashboard&quot;</span><span class="fu">:</span> <span class="st">&quot;system_health&quot;</span><span class="fu">,</span> <span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;ops_monitoring&quot;</span><span class="fu">,</span> <span class="dt">&quot;owner&quot;</span><span class="fu">:</span> <span class="st">&quot;admin&quot;</span><span class="fu">,</span> <span class="dt">&quot;sharing&quot;</span><span class="fu">:</span> <span class="st">&quot;app&quot;</span><span class="fu">}</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p><strong>Use Case - User-Centric Migration:</strong></p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="co">// Filter dashboards for current user</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="kw">const</span> userDashboards <span class="op">=</span> ownership<span class="op">.</span><span class="at">results</span><span class="op">.</span><span class="fu">filter</span>(d <span class="kw">=&gt;</span> d<span class="op">.</span><span class="at">owner</span> <span class="op">===</span> currentUser)<span class="op">;</span></span></code></pre></div>
+<h3 id="per-app-analytics-cloud">Per-App Analytics (Cloud)</h3>
+<p>In Cloud exports, each app directory may contain a
+<code>splunk-analysis/</code> subdirectory with:</p>
+<table>
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>alerts_inventory.json</code></td>
+<td>Scheduled alerts and their configuration for this app (via
+<code>\| rest</code> command)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="v4.6.0-key-improvements">v4.6.0 Key Improvements</h3>
 <ul>
-<li>Preserves original data in case anonymization corrupts files</li>
-<li>Allows re-running anonymization without re-running the entire export</li>
-<li>Clear naming makes it obvious which file is safe to share</li>
+<li><strong>Dashboard views use the <code>provenance</code>
+field</strong> (not <code>search_type=dashboard</code> which was
+unreliable)</li>
+<li><strong>View session de-duplication</strong>: Counts page loads (30s
+window), not individual panel searches</li>
+<li><strong>Global aggregate queries</strong>: 6 queries total instead
+of N x 7 per-app queries</li>
+<li><strong>Async search dispatch</strong>: Searches can run up to 1
+hour (was limited to 5 minutes with
+<code>exec_mode=blocking</code>)</li>
+<li><strong>Never-viewed dashboards</strong>: Computed by the Curator
+from dashboard list + view data (no slow
+<code>| rest + | join</code>)</li>
 </ul>
-<p>
-The <code><em>anonymization</em>report.json</code> file is <strong>only present in the <code>_masked</code> archive</strong>.
-</p>
-<h3>Schema</h3>
-<pre><code class="language-json">{
-  &quot;anonymization_applied&quot;: true,
-  &quot;timestamp&quot;: &quot;2025-12-10T15:30:45Z&quot;,
-  &quot;statistics&quot;: {
-    &quot;files_processed&quot;: 847,
-    &quot;unique_emails_anonymized&quot;: 156,
-    &quot;unique_hosts_anonymized&quot;: 89,
-    &quot;ip_addresses&quot;: &quot;all_redacted&quot;
-  },
-  &quot;transformations&quot;: {
-    &quot;emails&quot;: &quot;original@domain.com → user######@anon.dma.local&quot;,
-    &quot;hostnames&quot;: &quot;server.example.com → host-########.anon.local&quot;,
-    &quot;ipv4&quot;: &quot;x.x.x.x → [IP-REDACTED]&quot;,
-    &quot;ipv6&quot;: &quot;xxxx:xxxx:... → [IPv6-REDACTED]&quot;
-  },
-  &quot;note&quot;: &quot;This export has been anonymized. Original values cannot be recovered from this data.&quot;
-}</code></pre>
-<h3>Field Descriptions</h3>
+<h3 id="migration-decision-matrix">Migration Decision Matrix</h3>
+<pre><code>                    HIGH USAGE                    LOW USAGE
+                +-------------------------+-------------------------+
+   HIGH VALUE   | MIGRATE FIRST           | Review with stakeholders|
+                | Top dashboards, alerts  | May have seasonal use   |
+                +-------------------------+-------------------------+
+   LOW VALUE    | Consider migrating      | ELIMINATE               |
+                | Users depend on these   | Never viewed/fired      |
+                +-------------------------+-------------------------+</code></pre>
+<hr />
+<h2 id="guaranteed-fields-by-category">Guaranteed Fields by
+Category</h2>
+<h3 id="apps-per-app-directory">Apps (per app directory)</h3>
+<p><strong>Enterprise (.conf files):</strong></p>
 <table>
+<colgroup>
+<col style="width: 18%" />
+<col style="width: 59%" />
+<col style="width: 21%" />
+</colgroup>
 <thead>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+<tr>
+<th>File</th>
+<th>Guaranteed Fields</th>
+<th>Notes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td><code>anonymization_applied</code></td><td>boolean</td><td>Always <code>true</code> when this file exists</td></tr>
-<tr><td><code>timestamp</code></td><td>ISO 8601</td><td>When anonymization was performed</td></tr>
-<tr><td><code>statistics.files_processed</code></td><td>number</td><td>Total text files scanned</td></tr>
-<tr><td><code>statistics.unique_emails_anonymized</code></td><td>number</td><td>Unique email addresses replaced</td></tr>
-<tr><td><code>statistics.unique_hosts_anonymized</code></td><td>number</td><td>Unique hostnames replaced</td></tr>
-<tr><td><code>statistics.ip_addresses</code></td><td>string</td><td>Always "all_redacted"</td></tr>
-<tr><td><code>transformations</code></td><td>object</td><td>Example mappings showing the pattern used</td></tr>
-<tr><td><code>note</code></td><td>string</td><td>Warning about irreversibility</td></tr>
+<tr>
+<td><code>savedsearches.conf</code></td>
+<td><code>[stanza_name]</code>, <code>search</code>,
+<code>cron_schedule</code>, <code>alert.*</code></td>
+<td>Alerts have <code>alert.track = 1</code></td>
+</tr>
+<tr>
+<td><code>props.conf</code></td>
+<td><code>[stanza_name]</code>, <code>TRANSFORMS-*</code>,
+<code>EXTRACT-*</code>, <code>REPORT-*</code></td>
+<td>Field extractions</td>
+</tr>
+<tr>
+<td><code>transforms.conf</code></td>
+<td><code>[stanza_name]</code>, <code>REGEX</code>, <code>FORMAT</code>,
+<code>DEST_KEY</code></td>
+<td>Transform definitions</td>
+</tr>
+<tr>
+<td><code>macros.conf</code></td>
+<td><code>[macro_name]</code>, <code>definition</code>,
+<code>args</code></td>
+<td>Search macros</td>
+</tr>
+<tr>
+<td><code>eventtypes.conf</code></td>
+<td><code>[eventtype_name]</code>, <code>search</code></td>
+<td>Event classifications</td>
+</tr>
+<tr>
+<td><code>tags.conf</code></td>
+<td><code>[source/sourcetype/eventtype]</code>,
+<code>tag=value</code></td>
+<td>Tags</td>
+</tr>
 </tbody>
 </table>
-<h3>Key Properties</h3>
-<ul>
-<li><strong>Consistent Mapping</strong>: The same original email/hostname always produces the same anonymized value (hash-based)</li>
-<li><strong>Irreversible</strong>: SHA-256 hashing means originals cannot be recovered</li>
-<li><strong>Preserved Relationships</strong>: Data relationships remain intact (e.g., all references to <code>server-01</code> become the same anonymized value)</li>
-<li><strong>Selective Preservation</strong>: <code>localhost</code> and <code>127.0.0.1</code> are NOT anonymized</li>
-</ul>
-<h3>When to Expect This File</h3>
-<ul>
-<li>✅ Present when user selects anonymization option</li>
-<li>❌ Absent when anonymization is not selected</li>
-<li>Check <code>manifest.json.collection.data_anonymized</code> to programmatically detect</li>
-</ul>
-<hr>
-<h2>usage_intelligence (OPTIONAL)</h2>
-<p>
-The <code>usage_intelligence</code> section in <code>manifest.json</code> provides programmatic access to usage analytics for migration prioritization. This data is only available if usage collection was enabled during export.
-</p>
-<h3>Purpose</h3>
-<p>
-This section helps answer critical migration questions:
-</p>
-<ul>
-<li><strong>What should we migrate first?</strong> → <code>prioritization.top_*</code> arrays</li>
-<li><strong>What can we skip?</strong> → <code>elimination_candidates.*</code> counts</li>
-<li><strong>Where are the active users?</strong> → <code>prioritization.top_users</code></li>
-<li><strong>Which data sources matter?</strong> → <code>prioritization.top_sourcetypes/indexes</code></li>
-<li><strong>How much data per day?</strong> → <code>volume.avg<em>daily</em>gb</code>, <code>volume.peak<em>daily</em>gb</code></li>
-<li><strong>What are the biggest data sources?</strong> → <code>volume.top<em>*</em>by_volume</code> arrays</li>
-<li><strong>Who owns what?</strong> → <code>ownership.*</code> for user-centric migration</li>
-</ul>
-<h3>Schema</h3>
-<table>
-<thead>
-<tr><th>Field</th><th>Type</th><th>Description</th></tr>
-</thead>
-<tbody>
-<tr><td><code>summary.dashboards_never_viewed</code></td><td>number</td><td>Count of dashboards with zero views in 30d</td></tr>
-<tr><td><code>summary.alerts_never_fired</code></td><td>number</td><td>Count of alerts that never executed in 30d</td></tr>
-<tr><td><code>summary.users_inactive_30d</code></td><td>number</td><td>Count of users with no activity in 30d</td></tr>
-<tr><td><code>summary.alerts_with_failures</code></td><td>number</td><td>Count of alerts with execution failures</td></tr>
-<tr><td><code>volume.avg_daily_gb</code></td><td>number</td><td>Average daily ingestion volume in GB</td></tr>
-<tr><td><code>volume.peak_daily_gb</code></td><td>number</td><td>Peak daily ingestion volume in GB</td></tr>
-<tr><td><code>volume.total_30d_gb</code></td><td>number</td><td>Total ingestion volume over 30 days in GB</td></tr>
-<tr><td><code>volume.top_indexes_by_volume</code></td><td>array</td><td>Top 10 indexes by daily average volume</td></tr>
-<tr><td><code>volume.top_sourcetypes_by_volume</code></td><td>array</td><td>Top 10 sourcetypes by daily average volume</td></tr>
-<tr><td><code>volume.top_hosts_by_volume</code></td><td>array</td><td>Top 10 hosts by daily average volume</td></tr>
-<tr><td><code>prioritization.top_dashboards</code></td><td>array</td><td>Top 10 most viewed dashboards</td></tr>
-<tr><td><code>prioritization.top_users</code></td><td>array</td><td>Top 10 most active users</td></tr>
-<tr><td><code>prioritization.top_alerts</code></td><td>array</td><td>Top 10 most fired alerts</td></tr>
-<tr><td><code>prioritization.top_sourcetypes</code></td><td>array</td><td>Top 10 most searched sourcetypes</td></tr>
-<tr><td><code>prioritization.top_indexes</code></td><td>array</td><td>Top 10 most queried indexes</td></tr>
-<tr><td><code>elimination_candidates.note</code></td><td>string</td><td>Reference to full data in <code>_usage_analytics/</code></td></tr>
-<tr><td><code>ownership.dashboard_owners</code></td><td>number</td><td>Count of unique dashboard owners</td></tr>
-<tr><td><code>ownership.alert_owners</code></td><td>number</td><td>Count of unique alert owners</td></tr>
-<tr><td><code>ownership.top_owners</code></td><td>array</td><td>Top owners with dashboard and alert counts</td></tr>
-<tr><td><code>ownership.note</code></td><td>string</td><td>Reference to ownership files in <code>_usage_analytics/</code></td></tr>
-</tbody>
-</table>
-<h3>Volume Files Reference</h3>
-<table>
-<thead>
-<tr><th>File</th><th>Content</th><th>Use For</th></tr>
-</thead>
-<tbody>
-<tr><td><code>daily_volume_by_index.json</code></td><td>Daily GB by index (30 days)</td><td>Capacity planning by index</td></tr>
-<tr><td><code>daily_volume_by_sourcetype.json</code></td><td>Daily GB by sourcetype (30 days)</td><td>Capacity planning by data type</td></tr>
-<tr><td><code>daily_volume_summary.json</code></td><td>Avg, peak, total volume</td><td>License planning</td></tr>
-<tr><td><code>daily_events_by_index.json</code></td><td>Daily event counts by index</td><td>Event rate estimation</td></tr>
-<tr><td><code>hourly_volume_pattern.json</code></td><td>Volume by hour (7 days)</td><td>Peak hour identification</td></tr>
-<tr><td><code>top_indexes_by_volume.json</code></td><td>Top 20 indexes by daily avg</td><td>High-volume index focus</td></tr>
-<tr><td><code>top_sourcetypes_by_volume.json</code></td><td>Top 20 sourcetypes by daily avg</td><td>High-volume sourcetype focus</td></tr>
-<tr><td><code>top_hosts_by_volume.json</code></td><td>Top 50 hosts by daily avg</td><td>Host-level volume analysis</td></tr>
-</tbody>
-</table>
-<h3>Ownership Files Reference</h3>
-<table>
-<thead>
-<tr><th>File</th><th>Content</th><th>Use For</th></tr>
-</thead>
-<tbody>
-<tr><td><code>dashboard_ownership.json</code></td><td>All dashboards with owner, app, sharing</td><td>Show users their own dashboards</td></tr>
-<tr><td><code>alert_ownership.json</code></td><td>All alerts with owner, app, sharing, schedule</td><td>Show users their own alerts</td></tr>
-<tr><td><code>ownership_summary.json</code></td><td>Owners with dashboard and alert counts</td><td>Identify major content creators</td></tr>
-</tbody>
-</table>
-<p>
-<strong>Example dashboard_ownership.json:</strong>
-</p>
-<pre><code class="language-json">{
-  &quot;results&quot;: [
-    {&quot;dashboard&quot;: &quot;security_overview&quot;, &quot;app&quot;: &quot;security_app&quot;, &quot;owner&quot;: &quot;splunk_user&quot;, &quot;sharing&quot;: &quot;app&quot;},
-    {&quot;dashboard&quot;: &quot;incident_tracker&quot;, &quot;app&quot;: &quot;security_app&quot;, &quot;owner&quot;: &quot;splunk_user&quot;, &quot;sharing&quot;: &quot;global&quot;},
-    {&quot;dashboard&quot;: &quot;system_health&quot;, &quot;app&quot;: &quot;ops_monitoring&quot;, &quot;owner&quot;: &quot;admin&quot;, &quot;sharing&quot;: &quot;app&quot;}
-  ]
-}</code></pre>
-<p>
-<strong>Use Case - User-Centric Migration:</strong>
-When a user logs into Dynatrace, show them only their Splunk dashboards:
-</p>
-<pre><code class="language-typescript">// Filter dashboards for current user
-const userDashboards = ownership.results.filter(d =&gt; d.owner === currentUser);</code></pre>
-<h3>Migration Decision Matrix</h3>
-<pre><code>HIGH USAGE                    LOW USAGE
-                ┌─────────────────────────┬─────────────────────────┐
-   HIGH VALUE   │ ★ MIGRATE FIRST         │ Review with stakeholders│
-                │ Top dashboards, alerts  │ May have seasonal use   │
-                ├─────────────────────────┼─────────────────────────┤
-   LOW VALUE    │ Consider migrating      │ ✗ ELIMINATE             │
-                │ Users depend on these   │ Never viewed/fired      │
-                └─────────────────────────┴─────────────────────────┘</code></pre>
-<hr>
-<h2>Guaranteed Fields by Category</h2>
-<h3>Apps (per app directory)</h3>
-<table>
-<thead>
-<tr><th>File</th><th>Guaranteed Fields</th><th>Notes</th></tr>
-</thead>
-<tbody>
-<tr><td><code>savedsearches.conf</code></td><td><code>[stanza_name]</code>, <code>search</code>, <code>cron_schedule</code>, <code>alert.*</code></td><td>Alerts have <code>alert.track = 1</code></td></tr>
-<tr><td><code>props.conf</code></td><td><code>[stanza_name]</code>, <code>TRANSFORMS-<em></code>, <code>EXTRACT-</em></code>, <code>REPORT-*</code></td><td>Field extractions</td></tr>
-<tr><td><code>transforms.conf</code></td><td><code>[stanza_name]</code>, <code>REGEX</code>, <code>FORMAT</code>, <code>DEST_KEY</code></td><td>Transform definitions</td></tr>
-<tr><td><code>macros.conf</code></td><td><code>[macro_name]</code>, <code>definition</code>, <code>args</code></td><td>Search macros</td></tr>
-<tr><td><code>eventtypes.conf</code></td><td><code>[eventtype_name]</code>, <code>search</code></td><td>Event classifications</td></tr>
-<tr><td><code>tags.conf</code></td><td><code>[source/sourcetype/eventtype]</code>, <code>tag=value</code></td><td>Tags</td></tr>
-</tbody>
-</table>
-<h3>Dashboard XML (Classic)</h3>
-<p>
-All dashboard XML files must be valid Splunk SimpleXML:
-</p>
-<pre><code class="language-xml">&lt;dashboard version=&quot;1.1&quot;&gt;
-  &lt;label&gt;Dashboard Title&lt;/label&gt;
-  &lt;description&gt;Description text&lt;/description&gt;
-  &lt;row&gt;
-    &lt;panel&gt;
-      &lt;title&gt;Panel Title&lt;/title&gt;
-      &lt;chart&gt;
-        &lt;search&gt;
-          &lt;query&gt;index=main | stats count by sourcetype&lt;/query&gt;
-          &lt;earliest&gt;-24h@h&lt;/earliest&gt;
-          &lt;latest&gt;now&lt;/latest&gt;
-        &lt;/search&gt;
-      &lt;/chart&gt;
-    &lt;/panel&gt;
-  &lt;/row&gt;
-&lt;/dashboard&gt;</code></pre>
-<h3>Dashboard Studio JSON</h3>
-<pre><code class="language-json">{
-  &quot;visualizations&quot;: {},
-  &quot;dataSources&quot;: {},
-  &quot;inputs&quot;: {},
-  &quot;layout&quot;: {},
-  &quot;title&quot;: &quot;Dashboard Title&quot;,
-  &quot;description&quot;: &quot;Description&quot;
-}</code></pre>
-<hr>
-<h2>Validation Rules</h2>
-<p>
-DMA validates exports against these rules:
-</p>
-<h3>MUST Have (Export Fails Without These)</h3>
-<ol>
+<p><strong>Cloud (.json files):</strong></p>
+<p>All REST API JSON responses follow Splunk’s standard envelope
+format:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;entry&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;name&quot;</span><span class="fu">:</span> <span class="st">&quot;stanza_name&quot;</span><span class="fu">,</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;acl&quot;</span><span class="fu">:</span> <span class="fu">{</span><span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;app_name&quot;</span><span class="fu">,</span> <span class="dt">&quot;owner&quot;</span><span class="fu">:</span> <span class="st">&quot;admin&quot;</span><span class="fu">,</span> <span class="dt">&quot;sharing&quot;</span><span class="fu">:</span> <span class="st">&quot;app&quot;</span><span class="fu">},</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;content&quot;</span><span class="fu">:</span> <span class="fu">{</span> <span class="er">...</span> <span class="fu">}</span></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<h3 id="dashboard-xml-classic---enterprise">Dashboard XML (Classic -
+Enterprise)</h3>
+<p>All dashboard XML files must be valid Splunk SimpleXML:</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode xml"><code class="sourceCode xml"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>&lt;<span class="kw">dashboard</span> <span class="ot">version=</span><span class="st">&quot;1.1&quot;</span>&gt;</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  &lt;<span class="kw">label</span>&gt;Dashboard Title&lt;/<span class="kw">label</span>&gt;</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  &lt;<span class="kw">description</span>&gt;Description text&lt;/<span class="kw">description</span>&gt;</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  &lt;<span class="kw">row</span>&gt;</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>    &lt;<span class="kw">panel</span>&gt;</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>      &lt;<span class="kw">title</span>&gt;Panel Title&lt;/<span class="kw">title</span>&gt;</span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>      &lt;<span class="kw">chart</span>&gt;</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a>        &lt;<span class="kw">search</span>&gt;</span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>          &lt;<span class="kw">query</span>&gt;index=main | stats count by sourcetype&lt;/<span class="kw">query</span>&gt;</span>
+<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a>          &lt;<span class="kw">earliest</span>&gt;-24h@h&lt;/<span class="kw">earliest</span>&gt;</span>
+<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a>          &lt;<span class="kw">latest</span>&gt;now&lt;/<span class="kw">latest</span>&gt;</span>
+<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a>        &lt;/<span class="kw">search</span>&gt;</span>
+<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a>      &lt;/<span class="kw">chart</span>&gt;</span>
+<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a>    &lt;/<span class="kw">panel</span>&gt;</span>
+<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>  &lt;/<span class="kw">row</span>&gt;</span>
+<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>&lt;/<span class="kw">dashboard</span>&gt;</span></code></pre></div>
+<h3 id="dashboard-studio-json">Dashboard Studio JSON</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;visualizations&quot;</span><span class="fu">:</span> <span class="fu">{},</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;dataSources&quot;</span><span class="fu">:</span> <span class="fu">{},</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;inputs&quot;</span><span class="fu">:</span> <span class="fu">{},</span></span>
+<span id="cb11-5"><a href="#cb11-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;layout&quot;</span><span class="fu">:</span> <span class="fu">{},</span></span>
+<span id="cb11-6"><a href="#cb11-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;title&quot;</span><span class="fu">:</span> <span class="st">&quot;Dashboard Title&quot;</span><span class="fu">,</span></span>
+<span id="cb11-7"><a href="#cb11-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;description&quot;</span><span class="fu">:</span> <span class="st">&quot;Description&quot;</span></span>
+<span id="cb11-8"><a href="#cb11-8" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="validation-rules">Validation Rules</h2>
+<p>DMA validates exports against these rules:</p>
+<h3 id="must-have-export-fails-without-these">MUST Have (Export Fails
+Without These)</h3>
+<ol type="1">
 <li><code>manifest.json</code> exists and is valid JSON</li>
-<li><code>manifest.json.schema_version</code> is "3.1" or higher</li>
-<li><code>_systeminfo/environment.json</code> exists</li>
-<li>At least one of: apps directory OR <code>_systeminfo/</code> content</li>
+<li><code>manifest.json</code> &gt; <code>schema_version</code> is
+<code>"3.1"</code> or higher</li>
+<li><code>dma_analytics/system_info/environment.json</code> exists</li>
+<li>At least one of: app directories OR <code>dma_analytics/</code>
+content</li>
 </ol>
-<h3>SHOULD Have (Warnings If Missing)</h3>
-<ol>
-<li><code>export.log</code> for troubleshooting</li>
+<h3 id="should-have-warnings-if-missing">SHOULD Have (Warnings If
+Missing)</h3>
+<ol type="1">
+<li>Export log (<code>export.log</code> or <code>_export.log</code>) for
+troubleshooting</li>
 <li><code>dma-env-summary.md</code> for human review</li>
-<li><code>manifest.json.statistics</code> section populated</li>
-<li><code>manifest.json.usage_intelligence</code> section (for migration prioritization)</li>
+<li><code>manifest.json</code> &gt; <code>statistics</code> section
+populated</li>
+<li><code>manifest.json</code> &gt; <code>usage_intelligence</code>
+section (for migration prioritization)</li>
 </ol>
-<h3>Data Quality Checks</h3>
-<ol>
+<h3 id="data-quality-checks">Data Quality Checks</h3>
+<ol type="1">
 <li>All <code>.conf</code> files are valid INI format</li>
 <li>All <code>.json</code> files are valid JSON</li>
 <li>All <code>.xml</code> dashboard files are valid XML</li>
 <li>No binary files in unexpected locations</li>
-<li>File paths don't contain <code>..</code> (path traversal)</li>
+<li>File paths don’t contain <code>..</code> (path traversal)</li>
 </ol>
-<hr>
-<h2>Handling Missing Data</h2>
-<p>
-When data is unavailable (no REST API access, permissions, etc.):
-</p>
-<ol>
-<li><strong>Directory still created</strong> but empty or with placeholder</li>
-<li><strong>manifest.json</strong> reflects actual collection status</li>
-<li><strong>Warning logged</strong> to <code>export.log</code></li>
+<hr />
+<h2 id="handling-missing-data">Handling Missing Data</h2>
+<p>When data is unavailable (no REST API access, permissions, etc.):</p>
+<ol type="1">
+<li><strong>Directory still created</strong> but empty or with
+placeholder</li>
+<li><strong>manifest.json</strong> reflects actual collection
+status</li>
+<li><strong>Warning logged</strong> to export log</li>
 </ol>
-<p>
-Example for missing RBAC:
-</p>
-<pre><code class="language-json">{
-  &quot;collection&quot;: {
-    &quot;rbac&quot;: false,
-    &quot;rbac_skip_reason&quot;: &quot;REST API authentication failed&quot;
-  },
-  &quot;statistics&quot;: {
-    &quot;users&quot;: 0,
-    &quot;roles&quot;: 0
-  }
-}</code></pre>
-<hr>
-<h2>Versioning</h2>
+<p>Example for missing RBAC:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;collection&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;rbac&quot;</span><span class="fu">:</span> <span class="kw">false</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;statistics&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;users&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;roles&quot;</span><span class="fu">:</span> <span class="dv">0</span></span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>Example for scoped mode placeholder:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;scoped&quot;</span><span class="fu">:</span> <span class="kw">true</span><span class="fu">,</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;reason&quot;</span><span class="fu">:</span> <span class="st">&quot;App-scoped mode - only indexes used by selected apps collected&quot;</span><span class="fu">,</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;apps&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="st">&quot;security_app&quot;</span><span class="ot">,</span> <span class="st">&quot;ops_monitoring&quot;</span><span class="ot">]</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="versioning">Versioning</h2>
 <table>
+<colgroup>
+<col style="width: 34%" />
+<col style="width: 45%" />
+<col style="width: 19%" />
+</colgroup>
 <thead>
-<tr><th>Schema Version</th><th>Export Tool Version</th><th>Changes</th></tr>
+<tr>
+<th>Schema Version</th>
+<th>Export Tool Version</th>
+<th>Changes</th>
+</tr>
 </thead>
 <tbody>
-<tr><td>4.0</td><td>4.2.4</td><td>Two-archive anonymization (original + _masked), RBAC/usage OFF by default, query optimizations</td></tr>
-<tr><td>4.0</td><td>4.2.0</td><td>App-centric dashboard structure (v2): <code>{AppName}/dashboards/classic/</code> and <code>{AppName}/dashboards/studio/</code></td></tr>
-<tr><td>4.0</td><td>4.1.0</td><td>App-scoped export mode (<code>--apps</code>, <code>--scoped</code>, <code>--quick</code>), debug mode</td></tr>
-<tr><td>4.0</td><td>4.0.2</td><td>Auto-fix for CRLF line endings (Windows download compatibility)</td></tr>
-<tr><td>4.0</td><td>4.0.1</td><td>Container-friendly progress display (newlines at 5% intervals for kubectl/docker exec)</td></tr>
-<tr><td>4.0</td><td>4.0.0</td><td>Enterprise resilience: paginated APIs, checkpoints, extended timeouts, timing stats</td></tr>
-<tr><td>3.4</td><td>3.4.0</td><td>Added ownership mapping for user-centric migration (dashboard_ownership.json, alert_ownership.json)</td></tr>
-<tr><td>3.3</td><td>3.3.0</td><td>Added daily volume analysis and volume section to usage_intelligence</td></tr>
-<tr><td>3.2</td><td>3.2.0</td><td>Added usage_intelligence to manifest.json for programmatic migration prioritization</td></tr>
-<tr><td>3.1</td><td>3.1.0</td><td>Added progress tracking, histograms, timing</td></tr>
-<tr><td>3.0</td><td>3.0.0</td><td>Initial standardized schema</td></tr>
+<tr>
+<td>4.0</td>
+<td>4.6.0</td>
+<td>Global analytics (6 queries vs N x 7), provenance-based dashboard
+views, async search dispatch, view session de-duplication, simplified
+usage_analytics directory</td>
+</tr>
+<tr>
+<td>4.0</td>
+<td>4.2.4</td>
+<td>Two-archive anonymization (original + _masked), RBAC/usage OFF by
+default, query optimizations</td>
+</tr>
+<tr>
+<td>4.0</td>
+<td>4.2.0</td>
+<td>App-centric dashboard structure (v2):
+<code>{AppName}/dashboards/classic/</code> and
+<code>{AppName}/dashboards/studio/</code></td>
+</tr>
+<tr>
+<td>4.0</td>
+<td>4.1.0</td>
+<td>App-scoped export mode (<code>--apps</code>, <code>--scoped</code>,
+<code>--quick</code>), debug mode</td>
+</tr>
+<tr>
+<td>4.0</td>
+<td>4.0.2</td>
+<td>Auto-fix for CRLF line endings (Windows download compatibility)</td>
+</tr>
+<tr>
+<td>4.0</td>
+<td>4.0.1</td>
+<td>Container-friendly progress display (newlines at 5% intervals for
+kubectl/docker exec)</td>
+</tr>
+<tr>
+<td>4.0</td>
+<td>4.0.0</td>
+<td>Enterprise resilience: paginated APIs, checkpoints, extended
+timeouts, timing stats</td>
+</tr>
+<tr>
+<td>3.4</td>
+<td>3.4.0</td>
+<td>Added ownership mapping (dashboard_ownership.json,
+alert_ownership.json)</td>
+</tr>
+<tr>
+<td>3.3</td>
+<td>3.3.0</td>
+<td>Added daily volume analysis and volume section to
+usage_intelligence</td>
+</tr>
+<tr>
+<td>3.2</td>
+<td>3.2.0</td>
+<td>Added usage_intelligence to manifest.json</td>
+</tr>
+<tr>
+<td>3.1</td>
+<td>3.1.0</td>
+<td>Added progress tracking, histograms, timing</td>
+</tr>
+<tr>
+<td>3.0</td>
+<td>3.0.0</td>
+<td>Initial standardized schema</td>
+</tr>
 </tbody>
 </table>
-<hr>
-<h2>Example: Minimal Valid Export</h2>
-<p>
-The smallest valid export contains:
-</p>
-<pre><code>dma_export_splunk01_20251203_142530.tar.gz
-├── manifest.json
-├── _systeminfo/
-│   └── environment.json
-└── (empty or minimal app content)</code></pre>
-<p>
-With <code>manifest.json</code>:
-</p>
-<pre><code class="language-json">{
-  &quot;schema_version&quot;: &quot;4.0&quot;,
-  &quot;export_tool&quot;: &quot;dma-splunk-export&quot;,
-  &quot;export_tool_version&quot;: &quot;4.0.0&quot;,
-  &quot;export_timestamp&quot;: &quot;2025-12-03T14:25:30Z&quot;,
-  &quot;source&quot;: {
-    &quot;hostname&quot;: &quot;splunk01&quot;
-  },
-  &quot;splunk&quot;: {
-    &quot;flavor&quot;: &quot;uf&quot;,
-    &quot;role&quot;: &quot;universal_forwarder&quot;
-  },
-  &quot;statistics&quot;: {
-    &quot;apps_exported&quot;: 0,
-    &quot;dashboards_total&quot;: 0
-  }
-}</code></pre>
-<hr>
-<h2>DMA Parser Contract</h2>
-<p>
-DMA guarantees it can parse any export conforming to this schema:
-</p>
-<pre><code class="language-typescript">interface DMAExport {
-  manifest: ExportManifest;           // Always present
-  systemInfo: SystemInfo;             // Always present
-  apps: Map&lt;string, AppExport&gt;;       // May be empty
-  dashboardStudio: DashboardStudio[]; // May be empty
-  rbac?: RBACExport;                  // Optional
-  indexes?: IndexExport;              // Optional
-  usageAnalytics?: UsageExport;       // Optional
-}</code></pre>
-<p>
-The parser handles:
-</p>
-<ul>
-<li>Missing optional directories gracefully</li>
-<li>Partial data (some apps exported, others failed)</li>
-<li>Version differences (backward compatible)</li>
-<li>Encoding variations (UTF-8, UTF-16, etc.)</li>
-</ul>
+<hr />
+<h2 id="example-minimal-valid-export">Example: Minimal Valid Export</h2>
+<p>The smallest valid export contains:</p>
+<pre><code>dma_export_splunk01_20260315_142530.tar.gz
++-- manifest.json
++-- dma_analytics/
+    +-- system_info/
+        +-- environment.json</code></pre>
+<p>With <code>manifest.json</code>:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;schema_version&quot;</span><span class="fu">:</span> <span class="st">&quot;4.0&quot;</span><span class="fu">,</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;archive_structure_version&quot;</span><span class="fu">:</span> <span class="st">&quot;v2&quot;</span><span class="fu">,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_tool&quot;</span><span class="fu">:</span> <span class="st">&quot;dma-splunk-export&quot;</span><span class="fu">,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_tool_version&quot;</span><span class="fu">:</span> <span class="st">&quot;4.6.0&quot;</span><span class="fu">,</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;export_timestamp&quot;</span><span class="fu">:</span> <span class="st">&quot;2026-03-15T14:25:30Z&quot;</span><span class="fu">,</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;source&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;hostname&quot;</span><span class="fu">:</span> <span class="st">&quot;splunk01&quot;</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;splunk&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;flavor&quot;</span><span class="fu">:</span> <span class="st">&quot;uf&quot;</span><span class="fu">,</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;role&quot;</span><span class="fu">:</span> <span class="st">&quot;universal_forwarder&quot;</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>  <span class="fu">},</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;statistics&quot;</span><span class="fu">:</span> <span class="fu">{</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;apps_exported&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>    <span class="dt">&quot;dashboards_total&quot;</span><span class="fu">:</span> <span class="dv">0</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>  <span class="fu">}</span></span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<hr />
+<h2 id="dma-parser-contract">DMA Parser Contract</h2>
+<p>DMA guarantees it can parse any export conforming to this schema:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode typescript"><code class="sourceCode typescript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="kw">interface</span> DMAExport {</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  manifest<span class="op">:</span> ExportManifest<span class="op">;</span>           <span class="co">// Always present</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  systemInfo<span class="op">:</span> SystemInfo<span class="op">;</span>             <span class="co">// Always present</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  apps<span class="op">:</span> <span class="bu">Map</span><span class="op">&lt;</span><span class="dt">string</span><span class="op">,</span> AppExport<span class="op">&gt;;</span>       <span class="co">// May be empty</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>  dashboardStudio<span class="op">:</span> DashboardStudio[]<span class="op">;</span> <span class="co">// May be empty</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>  rbac<span class="op">?:</span> RBACExport<span class="op">;</span>                  <span class="co">// Optional</span></span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>  indexes<span class="op">?:</span> IndexExport<span class="op">;</span>              <span class="co">// Optional</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>  usageAnalytics<span class="op">?:</span> UsageExport<span class="op">;</span>       <span class="co">// Optional</span></span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>}</span></code></pre></div>
+<p>The parser handles: - Missing optional directories gracefully -
+Partial data (some apps exported, others failed) - Version differences
+(backward compatible) - Encoding variations (UTF-8, UTF-16, etc.) - Both
+Enterprise (<code>.conf</code>) and Cloud (<code>.json</code>)
+formats</p>
     </main>
 
     <footer class="footer">
