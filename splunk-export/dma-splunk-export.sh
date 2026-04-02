@@ -1777,13 +1777,12 @@ detect_shc_role() {
 
   local temp_file=$(mktemp)
 
-  # Try to get SHC member info
+  # Step 1: Check if this node is an SHC member via /services/shcluster/member/info
   if curl -k -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$API_TIMEOUT" \
       -H "$AUTH_HEADER" \
       "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/shcluster/member/info?output_mode=json" \
       -o "$temp_file" 2>/dev/null; then
 
-    # Check if this is an SHC member
     if grep -q '"is_registered"' "$temp_file" 2>/dev/null; then
       local is_registered=$($PYTHON_CMD -c "
 import json
@@ -1797,30 +1796,34 @@ except:
 " 2>/dev/null)
 
       if [ "$is_registered" = "true" ]; then
-        # Check if captain or member
-        local status=$($PYTHON_CMD -c "
-import json
-try:
-    with open('$temp_file', 'r') as f:
-        data = json.load(f)
-    entry = data.get('entry', [{}])[0].get('content', {})
-    print(entry.get('status', 'Unknown'))
-except:
-    print('Unknown')
-" 2>/dev/null)
-
-        if [ "$status" = "Captain" ]; then
-          DETECTED_SHC_ROLE="captain"
-          IS_SHC_CAPTAIN=true
-        else
-          DETECTED_SHC_ROLE="member"
-        fi
         IS_SHC_MEMBER=true
+        DETECTED_SHC_ROLE="member"
       fi
     fi
   fi
 
-  # If SHC detected, get member count
+  # Step 2: If SHC member, probe /services/shcluster/captain/info to detect captain.
+  # This endpoint only returns 200 on the current captain — the "status" field
+  # from member/info is always "Up" regardless of role (captain is elected, not
+  # a status value), so we can't use it for captain detection.
+  if [ "$IS_SHC_MEMBER" = true ]; then
+    local captain_http_code
+    captain_http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$API_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/shcluster/captain/info?output_mode=json" \
+      2>/dev/null)
+
+    if [ "$captain_http_code" = "200" ] && grep -q '"label"' "$temp_file" 2>/dev/null; then
+      DETECTED_SHC_ROLE="captain"
+      IS_SHC_CAPTAIN=true
+      SPLUNK_ROLE="shc_captain"
+      debug_log "SHC" "Captain detected via /services/shcluster/captain/info (HTTP 200)"
+    fi
+  fi
+
+  # Step 3: Get member count
   if [ "$IS_SHC_MEMBER" = true ]; then
     if curl -k -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$API_TIMEOUT" \
         -H "$AUTH_HEADER" \
@@ -1925,6 +1928,36 @@ select_export_scope() {
   if [ -n "$AUTH_HEADER" ]; then
     dashboard_count=$(splunk_api_get_count "/servicesNS/-/-/data/ui/views")
     alert_count=$(splunk_api_get_count "/servicesNS/-/-/saved/searches")
+  fi
+
+  # Fallback: if REST returned 0 for saved searches (common on large SHC
+  # environments where /saved/searches times out or paging.total is missing),
+  # count stanza headers in savedsearches.conf across all discovered apps.
+  if [ "$alert_count" -eq 0 ] && [ -n "$SPLUNK_HOME" ] && [ -d "$SPLUNK_HOME/etc/apps" ]; then
+    for app_path in "$SPLUNK_HOME/etc/apps"/*; do
+      [ -d "$app_path" ] || continue
+      for conf_dir in "default" "local"; do
+        if [ -f "$app_path/$conf_dir/savedsearches.conf" ]; then
+          local count=$(grep -c '^\[' "$app_path/$conf_dir/savedsearches.conf" 2>/dev/null)
+          [ -n "$count" ] && alert_count=$((alert_count + count))
+        fi
+      done
+    done
+    [ "$alert_count" -gt 0 ] && log "Saved searches count from filesystem fallback: $alert_count"
+  fi
+
+  # Fallback: if REST returned 0 for dashboards too, count from filesystem
+  if [ "$dashboard_count" -eq 0 ] && [ -n "$SPLUNK_HOME" ] && [ -d "$SPLUNK_HOME/etc/apps" ]; then
+    for app_path in "$SPLUNK_HOME/etc/apps"/*; do
+      [ -d "$app_path" ] || continue
+      for view_dir in "default/data/ui/views" "local/data/ui/views"; do
+        if [ -d "$app_path/$view_dir" ]; then
+          local count=$(ls -1 "$app_path/$view_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+          [ -n "$count" ] && dashboard_count=$((dashboard_count + count))
+        fi
+      done
+    done
+    [ "$dashboard_count" -gt 0 ] && log "Dashboard count from filesystem fallback: $dashboard_count"
   fi
 
   # Show scope menu for large environments
@@ -2570,17 +2603,11 @@ detect_splunk_flavor() {
     if [ -f "$server_conf" ] && grep -q "\[shclustering\]" "$server_conf" 2>/dev/null; then
       IS_SHC_MEMBER=true
       SPLUNK_ARCHITECTURE="distributed"
-
-      # Check if captain
-      local shc_mode=$(grep -A5 "\[shclustering\]" "$server_conf" | grep "mode" | cut -d= -f2 | tr -d ' ')
-      if [ "$shc_mode" = "captain" ]; then
-        IS_SHC_CAPTAIN=true
-        SPLUNK_ROLE="shc_captain"
-        info "Detected: Search Head Cluster Captain"
-      else
-        SPLUNK_ROLE="shc_member"
-        info "Detected: Search Head Cluster Member"
-      fi
+      # Captain is dynamically elected — server.conf always has mode=member
+      # on all SHC nodes. Actual captain detection deferred to REST API
+      # in detect_shc_role() after authentication.
+      SPLUNK_ROLE="shc_member"
+      info "Detected: Search Head Cluster member (captain detection deferred to REST)"
     fi
 
     # Check for Indexer Cluster
@@ -2692,7 +2719,7 @@ detect_splunk_flavor() {
     if [ "$IS_SHC_CAPTAIN" = true ]; then
       print_box_line "  ${CYAN}SHC Role:${NC} Captain ${GREEN}(optimal for export)${NC}"
     else
-      print_box_line "  ${CYAN}SHC Role:${NC} Member ${YELLOW}(consider exporting from Captain)${NC}"
+      print_box_line "  ${CYAN}SHC Role:${NC} Detected via filesystem ${DIM}(captain check after auth)${NC}"
     fi
   fi
 
@@ -3061,43 +3088,65 @@ select_data_categories() {
   echo -e "${WHITE}Select data categories to collect:${NC}"
   echo ""
 
-  echo -e "  ${GREEN}[✓]${NC} 1. ${WHITE}Configuration Files${NC} (props, transforms, indexes, inputs)"
+  # Show current state of each toggle (reflects --flags passed on CLI)
+  local chk_configs chk_dash chk_alerts chk_rbac chk_usage chk_indexes chk_lookups chk_audit chk_anon
+  [ "$COLLECT_CONFIGS" = true ]    && chk_configs="${GREEN}[✓]${NC}" || chk_configs="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_DASHBOARDS" = true ] && chk_dash="${GREEN}[✓]${NC}"    || chk_dash="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_ALERTS" = true ]     && chk_alerts="${GREEN}[✓]${NC}"  || chk_alerts="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_RBAC" = true ]       && chk_rbac="${GREEN}[✓]${NC}"   || chk_rbac="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_USAGE" = true ]      && chk_usage="${GREEN}[✓]${NC}"  || chk_usage="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_INDEXES" = true ]    && chk_indexes="${GREEN}[✓]${NC}" || chk_indexes="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_LOOKUPS" = true ]    && chk_lookups="${GREEN}[✓]${NC}" || chk_lookups="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_AUDIT" = true ]      && chk_audit="${GREEN}[✓]${NC}"  || chk_audit="${YELLOW}[ ]${NC}"
+  [ "$ANONYMIZE_DATA" = true ]     && chk_anon="${GREEN}[✓]${NC}"   || chk_anon="${YELLOW}[ ]${NC}"
+
+  echo -e "  ${chk_configs} 1. ${WHITE}Configuration Files${NC} (props, transforms, indexes, inputs)"
   echo -e "      → ${GRAY}Required for understanding data pipeline${NC}"
   echo ""
-  echo -e "  ${GREEN}[✓]${NC} 2. ${WHITE}Dashboards${NC} (Classic XML + Dashboard Studio JSON)"
+  echo -e "  ${chk_dash} 2. ${WHITE}Dashboards${NC} (Classic XML + Dashboard Studio JSON)"
   echo -e "      → ${GRAY}Visual content for conversion to Dynatrace apps${NC}"
   echo ""
-  echo -e "  ${GREEN}[✓]${NC} 3. ${WHITE}Alerts & Saved Searches${NC} (savedsearches.conf)"
+  echo -e "  ${chk_alerts} 3. ${WHITE}Alerts & Saved Searches${NC} (savedsearches.conf)"
   echo -e "      → ${GRAY}Critical for operational continuity${NC}"
   echo ""
-  echo -e "  ${YELLOW}[ ]${NC} 4. ${WHITE}Users, Roles & Groups${NC} (RBAC data - NO passwords)"
+  echo -e "  ${chk_rbac} 4. ${WHITE}Users, Roles & Groups${NC} (RBAC data - NO passwords)"
   echo -e "      → ${GRAY}Usernames and roles only - passwords are NEVER collected${NC}"
-  echo -e "      → ${YELLOW}OFF by default - enable with toggle or --rbac flag${NC}"
+  if [ "$COLLECT_RBAC" != true ]; then
+    echo -e "      → ${YELLOW}OFF by default - enable with toggle or --rbac flag${NC}"
+  fi
   echo ""
-  echo -e "  ${YELLOW}[ ]${NC} 5. ${WHITE}Usage Analytics${NC} (search frequency, dashboard views)"
+  echo -e "  ${chk_usage} 5. ${WHITE}Usage Analytics${NC} (search frequency, dashboard views)"
   echo -e "      → ${GRAY}Identifies high-value assets worth migrating${NC}"
-  echo -e "      → ${YELLOW}OFF by default - enable with toggle or --usage flag${NC}"
+  if [ "$COLLECT_USAGE" != true ]; then
+    echo -e "      → ${YELLOW}OFF by default - enable with toggle or --usage flag${NC}"
+  fi
   echo ""
-  echo -e "  ${GREEN}[✓]${NC} 6. ${WHITE}Index & Data Statistics${NC}"
+  echo -e "  ${chk_indexes} 6. ${WHITE}Index & Data Statistics${NC}"
   echo -e "      → ${GRAY}Volume metrics for capacity planning${NC}"
   echo ""
-  echo -e "  ${YELLOW}[ ]${NC} 7. ${WHITE}Lookup Tables${NC} (.csv files)"
+  echo -e "  ${chk_lookups} 7. ${WHITE}Lookup Tables${NC} (.csv files)"
   echo -e "      → ${GRAY}Reference data used in searches${NC}"
-  echo -e "      → ${YELLOW}May contain sensitive data - review before including${NC}"
+  if [ "$COLLECT_LOOKUPS" != true ]; then
+    echo -e "      → ${YELLOW}May contain sensitive data - review before including${NC}"
+  fi
   echo ""
-  echo -e "  ${YELLOW}[ ]${NC} 8. ${WHITE}Audit Log Sample${NC} (last 10,000 entries)"
+  echo -e "  ${chk_audit} 8. ${WHITE}Audit Log Sample${NC} (last 10,000 entries)"
   echo -e "      → ${GRAY}Detailed search patterns for analysis${NC}"
-  echo -e "      → ${YELLOW}May contain sensitive query content${NC}"
+  if [ "$COLLECT_AUDIT" != true ]; then
+    echo -e "      → ${YELLOW}May contain sensitive query content${NC}"
+  fi
   echo ""
-  echo -e "  ${GREEN}[✓]${NC} 9. ${WHITE}Anonymize Sensitive Data${NC} (emails, hostnames, IPs)"
+  echo -e "  ${chk_anon} 9. ${WHITE}Anonymize Sensitive Data${NC} (emails, hostnames, IPs)"
   echo -e "      → ${GRAY}Replaces real data with consistent fake values${NC}"
-  echo -e "      → ${CYAN}ON by default - recommended for security${NC}"
+  if [ "$ANONYMIZE_DATA" = true ]; then
+    echo -e "      → ${CYAN}ON by default - recommended for security${NC}"
+  fi
   echo ""
 
   echo -e "  ${DIM}🔒 Privacy: Passwords are NEVER collected. Secrets in .conf files are auto-redacted.${NC}"
   echo ""
   echo -e "${WHITE}Enter numbers to toggle (e.g., 7,8 to add lookups and audit)${NC}"
-  echo -e "${GRAY}Or press Enter to accept defaults [1-3,6,9] (RBAC/Usage OFF):${NC}"
+  echo -e "${GRAY}Or press Enter to accept current selection:${NC}"
   echo ""
 
   local toggle_input
@@ -3110,15 +3159,15 @@ select_data_categories() {
       toggle="${toggle#"${toggle%%[![:space:]]*}"}"
       toggle="${toggle%"${toggle##*[![:space:]]}"}"
       case "$toggle" in
-        1) COLLECT_CONFIGS=false; info "Configurations: OFF" ;;
-        2) COLLECT_DASHBOARDS=false; info "Dashboards: OFF" ;;
-        3) COLLECT_ALERTS=false; info "Alerts: OFF" ;;
-        4) COLLECT_RBAC=true; info "Users/RBAC: ON" ;;
-        5) COLLECT_USAGE=true; info "Usage Analytics: ON" ;;
-        6) COLLECT_INDEXES=false; info "Index Stats: OFF" ;;
-        7) COLLECT_LOOKUPS=true; info "Lookup Tables: ON" ;;
-        8) COLLECT_AUDIT=true; info "Audit Sample: ON" ;;
-        9) ANONYMIZE_DATA=false; info "Data Anonymization: OFF - Real emails, hostnames, and IPs will be preserved" ;;
+        1) [ "$COLLECT_CONFIGS" = true ] && { COLLECT_CONFIGS=false; info "Configurations: OFF"; } || { COLLECT_CONFIGS=true; info "Configurations: ON"; } ;;
+        2) [ "$COLLECT_DASHBOARDS" = true ] && { COLLECT_DASHBOARDS=false; info "Dashboards: OFF"; } || { COLLECT_DASHBOARDS=true; info "Dashboards: ON"; } ;;
+        3) [ "$COLLECT_ALERTS" = true ] && { COLLECT_ALERTS=false; info "Alerts: OFF"; } || { COLLECT_ALERTS=true; info "Alerts: ON"; } ;;
+        4) [ "$COLLECT_RBAC" = true ] && { COLLECT_RBAC=false; info "Users/RBAC: OFF"; } || { COLLECT_RBAC=true; info "Users/RBAC: ON"; } ;;
+        5) [ "$COLLECT_USAGE" = true ] && { COLLECT_USAGE=false; info "Usage Analytics: OFF"; } || { COLLECT_USAGE=true; info "Usage Analytics: ON"; } ;;
+        6) [ "$COLLECT_INDEXES" = true ] && { COLLECT_INDEXES=false; info "Index Stats: OFF"; } || { COLLECT_INDEXES=true; info "Index Stats: ON"; } ;;
+        7) [ "$COLLECT_LOOKUPS" = true ] && { COLLECT_LOOKUPS=false; info "Lookup Tables: OFF"; } || { COLLECT_LOOKUPS=true; info "Lookup Tables: ON"; } ;;
+        8) [ "$COLLECT_AUDIT" = true ] && { COLLECT_AUDIT=false; info "Audit Sample: OFF"; } || { COLLECT_AUDIT=true; info "Audit Sample: ON"; } ;;
+        9) [ "$ANONYMIZE_DATA" = true ] && { ANONYMIZE_DATA=false; info "Data Anonymization: OFF - Real emails, hostnames, and IPs will be preserved"; } || { ANONYMIZE_DATA=true; info "Data Anonymization: ON"; } ;;
       esac
     done
   fi
