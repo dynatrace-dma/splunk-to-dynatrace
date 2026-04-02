@@ -1,8 +1,8 @@
 # DMA Splunk Enterprise Export Script - Comprehensive Specification
 
-## Version 4.2.4 | Complete Data Collection Framework
+## Version 4.4.0 | Complete Data Collection Framework
 
-**Last Updated**: February 2026
+**Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise README](README-SPLUNK-ENTERPRISE.md) | [Export Schema](EXPORT-SCHEMA.md)
 
 ---
@@ -25,21 +25,72 @@ This specification defines the complete requirements for a Splunk data collectio
 
 ---
 
+## What's New in v4.4.0
+
+### New CLI Flags
+
+| Flag | Description |
+|------|-------------|
+| `--proxy URL` | Route all curl calls through an HTTP proxy |
+| `--skip-internal` | Skip `_audit`/`_internal` index searches for restricted accounts |
+| `--test-access` | Pre-flight API access check across all categories (no export written) |
+| `--remask FILE` | Re-anonymize an existing archive without connecting to Splunk |
+| `--resume-collect FILE` | Resume an interrupted export from a `.tar.gz` archive |
+
+### Expanded RBAC Collection
+Now collects 5 additional endpoints (all with graceful 404 handling):
+- `/services/authorization/capabilities` → `capabilities.json`
+- `/services/admin/SAML-groups` → `saml_groups.json`
+- `/services/authentication/providers/SAML` → `saml_config.json`
+- `/services/admin/LDAP-groups` → `ldap_groups.json`
+- `/services/authentication/providers/LDAP` → `ldap_config.json`
+
+When SAML or LDAP is not configured, the script writes `{"configured": false, "note": "..."}` instead of failing.
+
+### Progressive Checkpointing
+Each collection phase saves a checkpoint on completion. Usage analytics checkpoints are per-query, so interrupted analytics resume mid-way without re-running completed queries. Checkpoint file: `$EXPORT_DIR/.analytics_checkpoint`.
+
+### Resume Support
+`--resume-collect FILE` extracts a previous partial archive, detects which phases completed via checkpoint files, and continues from the first incomplete phase. Collection phases guarded with `has_collected_data()` checks for: system_info, rbac, usage_analytics, indexes.
+
+---
+
+## What's New in v4.3.0
+
+### Token Authentication (`--token`)
+- API token authentication via `--token TOKEN` flag (recommended for automation)
+- Session key auth replaces curl basic auth (`-u user:pass`) throughout all API calls
+- Password URL-encoding via Python stdin (safe for `$`, backticks, `"`, `\`)
+- Token-only invocation auto-enables non-interactive mode
+
+### Async Search Dispatch
+Analytics searches now use `exec_mode=normal` (non-blocking) with `dispatchState` polling:
+- Adaptive poll interval: 5s, increasing by 5s per iteration, caps at 30s
+- Job cancellation on timeout to free search quota
+- Replaces fixed 1s polling with blocking mode
+
+### Analytics Period Flag
+- `--analytics-period N` (e.g., `7d`, `30d`, `90d`) — skips interactive period prompt
+- Default changed from `30d` to `7d` (matches Cloud script default)
+
+### Enable Flags
+- `--rbac` enables RBAC/user collection (off by default since v4.2.4)
+- `--usage` enables usage analytics collection (off by default since v4.2.4)
+
+---
+
 ## What's New in v4.2.4
 
 ### Two-Archive Anonymization (Preserves Original Data)
-When anonymization is enabled, the script now creates **TWO separate archives**:
+When anonymization is enabled, the script creates **TWO separate archives**:
 - `{export_name}.tar.gz` - **Original, untouched data** (keep for your records)
 - `{export_name}_masked.tar.gz` - **Anonymized copy** (safe to share with third parties)
 
-This preserves the original data in case anonymization corrupts files. Users can re-run anonymization on the original without re-running the entire export.
-
 ### Performance Optimizations
-- **RBAC/Users collection now OFF by default** - Use `--rbac` flag to enable
-- **Usage analytics now OFF by default** - Use `--usage` flag to enable
+- **RBAC/Users collection OFF by default** - Use `--rbac` flag to enable
+- **Usage analytics OFF by default** - Use `--usage` flag to enable
 - **Faster defaults**: Batch size 250 (was 100), API delay 50ms (was 250ms)
-- **Optimized queries**: Sampling for expensive regex extractions, `max()` instead of `latest()` for faster aggregations
-- **Savedsearches ACL fix**: Now correctly filters searches by app ownership
+- **Savedsearches ACL fix**: Correctly filters searches by app ownership
 
 ---
 
@@ -474,26 +525,36 @@ GET /services/authorization/roles/{rolename}
 }
 ```
 
-#### 4.1.3 Group Collection (LDAP/SAML)
+#### 4.1.3 Capabilities Collection (v4.4.0)
 
 ```bash
-# REST API Endpoint (if LDAP configured)
-GET /services/authentication/providers/LDAP
+# System capabilities inventory
+GET /services/authorization/capabilities?output_mode=json
+```
 
-# LDAP Group Mapping
+Lists all available Splunk capabilities. Used to verify the export user has required permissions and to document the full RBAC capability model for migration.
+
+#### 4.1.4 Group Collection (LDAP/SAML)
+
+All group/config endpoints handle 404 gracefully — when LDAP or SAML is not configured, the script writes `{"configured": false, "note": "..."}` instead of failing.
+
+```bash
+# LDAP groups and configuration (v4.4.0)
+GET /services/admin/LDAP-groups?output_mode=json        → ldap_groups.json
+GET /services/authentication/providers/LDAP?output_mode=json → ldap_config.json
+
+# SAML groups and configuration (v4.4.0)
+GET /services/admin/SAML-groups?output_mode=json         → saml_groups.json
+GET /services/authentication/providers/SAML?output_mode=json → saml_config.json
+```
+
+Example LDAP group mapping:
+```json
 {
   "groupName": "splunk_admins",
   "mappedRoles": ["admin"],
   "memberCount": 5,
   "ldapBaseDN": "CN=splunk_admins,OU=Groups,DC=company,DC=com"
-}
-
-# SAML Group Mapping
-GET /services/authentication/providers/SAML
-{
-  "groupName": "SSO_Splunk_PowerUsers",
-  "mappedRoles": ["power_user"],
-  "attributeName": "groups"
 }
 ```
 
@@ -953,7 +1014,12 @@ splunk_export_[env_name]_[timestamp]/
 ├── _rbac/                              # Users, Groups, Roles
 │   ├── users.json                      # All users
 │   ├── roles.json                      # All roles with capabilities
-│   ├── groups.json                     # LDAP/SAML groups
+│   ├── capabilities.json               # System capabilities inventory (v4.4.0)
+│   ├── saml_groups.json                # SAML group mappings (v4.4.0)
+│   ├── saml_config.json                # SAML configuration (v4.4.0)
+│   ├── ldap_groups.json                # LDAP group mappings (v4.4.0)
+│   ├── ldap_config.json                # LDAP configuration (v4.4.0)
+│   ├── current_context.json            # Current user context
 │   ├── authentication.conf             # Auth configuration
 │   ├── authorize.conf                  # Authorization config
 │   └── ownership_map.json              # Object → Owner mapping
@@ -1023,7 +1089,7 @@ The script generates a standardized `manifest.json` with guaranteed schema for D
   "schemaVersion": "4.0",
   "exportType": "splunk_enterprise",
   "exportTimestamp": "2025-12-03T10:30:00Z",
-  "scriptVersion": "4.2.0",
+  "scriptVersion": "4.4.0",
   "archive_structure": {
     "version": "v2",
     "dashboard_organization": "app_scoped"
@@ -1049,7 +1115,7 @@ The script generates a standardized `manifest.json` with guaranteed schema for D
   },
 
   "usageIntelligence": {
-    "analysisPeriod": "30d",
+    "analysisPeriod": "7d",
     "totalSearches": 45678,
     "totalDashboardViews": 12345,
     "totalAlertTriggers": 4567,
@@ -1856,21 +1922,23 @@ The script should feel like a guided conversation with an expert, not a terse co
 
 ```bash
 # These require search capability and access to internal indexes
+# Default period: 7d (configurable via --analytics-period)
+# v4.3.0+: uses exec_mode=normal (async dispatch) with adaptive polling
 
 # Search activity from audit index
-index=_audit action=search earliest=-30d
-| stats count by user, savedsearch_name
+index=_audit sourcetype=audittrail action=search info=granted earliest=-7d
+| stats count by user, savedsearch_name, app
 
-# Dashboard views from web access logs
-index=_internal sourcetype=splunk_web_access uri="*/app/*" earliest=-30d
-| stats count by uri_path
+# Dashboard views (v4.5.0+ uses provenance field in Cloud scripts)
+index=_audit sourcetype=audittrail action=search info=granted earliest=-7d
+| stats count by user, app
 
 # Alert triggers
-index=_audit action=alert_fired earliest=-30d
-| stats count by savedsearch_name, app
+index=_internal sourcetype=scheduler status=* earliest=-7d
+| stats count as total_runs by app, savedsearch_name
 
 # Index usage patterns
-index=_audit action=search earliest=-30d
+index=_audit sourcetype=audittrail action=search earliest=-7d
 | rex field=search "index=(?<searched_index>\w+)"
 | stats count by searched_index
 ```
@@ -2258,4 +2326,4 @@ def calculate_priority_score(asset):
 ---
 
 *End of Specification Document*
-*Version 4.0.0 | DMA Splunk Export Framework*
+*Version 4.4.0 | DMA Splunk Export Framework*
