@@ -6686,6 +6686,17 @@ main() {
           echo "[ERROR] --resume-collect requires a path to a .tar.gz archive" >&2
           exit 1
         fi
+        if [ ! -f "$2" ]; then
+          echo "[ERROR] Resume archive not found: $2" >&2
+          echo "" >&2
+          echo "  Check the filename and path. Tip: use tab-completion to avoid typos." >&2
+          if [ -d "$(dirname "$2")" ]; then
+            echo "" >&2
+            echo "  Files in $(dirname "$2"):" >&2
+            ls -1 "$(dirname "$2")"/*.tar.gz 2>/dev/null | sed 's/^/    /' >&2 || echo "    (no .tar.gz files found)" >&2
+          fi
+          exit 1
+        fi
         RESUME_ARCHIVE="$2"
         RESUME_MODE=true
         shift 2
