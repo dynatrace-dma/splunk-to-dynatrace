@@ -2,7 +2,7 @@
 
 **Version**: 4.6.0
 **Last Updated**: April 2026
-**Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | [Export Schema](EXPORT-SCHEMA.md)
+**Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | [Manual Usage Queries](MANUAL-USAGE-QUERIES.md) | [Export Schema](EXPORT-SCHEMA.md)
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
 > *An ACE Services Division of Dynatrace*

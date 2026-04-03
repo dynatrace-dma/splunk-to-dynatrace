@@ -270,14 +270,14 @@ Queries</h2></div>
     </nav>
 
     <main class="content">
-<h1
-id="manual-usage-analytics-queries-for-distributed-splunk-environments">Manual
-Usage Analytics Queries for Distributed Splunk Environments</h1>
+<h1 id="manual-usage-analytics-queries">Manual Usage Analytics
+Queries</h1>
 <p><strong>Version</strong>: 4.6.0 <strong>Last Updated</strong>: April
 2026 <strong>Related Documents</strong>: <a
 href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated
 Analytics Reference</a> | <a
 href="README-SPLUNK-ENTERPRISE.md">Enterprise Export README</a> | <a
+href="README-SPLUNK-CLOUD.md">Cloud Export README</a> | <a
 href="EXPORT-SCHEMA.md">Export Schema</a></p>
 <blockquote>
 <p><strong>Developed for Dynatrace One by Enterprise Solutions &amp;
@@ -285,76 +285,188 @@ Architecture</strong> <em>An ACE Services Division of Dynatrace</em></p>
 </blockquote>
 <hr />
 <h2 id="when-to-use-this-guide">When to Use This Guide</h2>
-<p>The DMA export script runs 6 global analytics queries against
+<p>The DMA export scripts run 6 global analytics queries against
 <code>index=_audit</code> and <code>index=_internal</code> to collect
 dashboard usage, user activity, search patterns, index volumes, and
 alert firing statistics. These queries work correctly in most
 environments.</p>
-<p><strong>However, in large distributed Splunk deployments —
-particularly Search Head Clusters (SHCs) — the script may return
-incomplete results because:</strong></p>
-<ul>
-<li><p><strong><code>_audit</code> is a local index.</strong> Each
-Splunk component (search head, indexer) maintains its own
-<code>_audit</code>. By default, search heads do NOT forward their
-<code>_audit</code> data to the indexer tier. When the export script
-runs on one SHC member, it only sees that member’s local search audit
-data — not the other 25 members’ activity.</p></li>
-<li><p><strong><code>license_usage.log</code> only exists on the license
-master.</strong> If the license master doesn’t forward its
-<code>_internal</code> data to the indexer tier, searching from any
-other node returns zero results for index volume data.</p></li>
-</ul>
+<p><strong>However, there are common scenarios in both Splunk Cloud and
+Splunk Enterprise where the script returns incomplete or empty analytics
+results.</strong> This document provides the standalone SPL queries that
+can be run manually in Splunk Search and injected into the DMA export
+archive.</p>
+<h3 id="applies-to">Applies To</h3>
+<table>
+<colgroup>
+<col style="width: 16%" />
+<col style="width: 18%" />
+<col style="width: 64%" />
+</colgroup>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Script(s)</th>
+<th>Common Reasons for Incomplete Results</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Splunk Cloud</strong></td>
+<td><code>dma-splunk-cloud-export.sh</code>,
+<code>dma-splunk-cloud-export.ps1</code></td>
+<td>Token missing <code>index_audit</code> or
+<code>index_internal</code> capabilities; restricted <code>_audit</code>
+access in Victoria Experience stacks; Cloud-managed infrastructure hides
+<code>_internal</code> from tenants</td>
+</tr>
+<tr>
+<td><strong>Splunk Enterprise</strong></td>
+<td><code>dma-splunk-export.sh</code></td>
+<td>SHC members not forwarding <code>_audit</code> to indexers; license
+master not forwarding <code>_internal</code>; service account lacking
+<code>admin_all_objects</code> capability</td>
+</tr>
+</tbody>
+</table>
 <h3 id="symptoms-of-this-problem">Symptoms of This Problem</h3>
 <table>
 <colgroup>
-<col style="width: 30%" />
-<col style="width: 33%" />
-<col style="width: 36%" />
+<col style="width: 25%" />
+<col style="width: 28%" />
+<col style="width: 45%" />
 </colgroup>
 <thead>
 <tr>
 <th>Symptom</th>
 <th>Expected</th>
-<th>Indicates</th>
+<th>Possible Cause</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>Dashboard views count is very low</td>
 <td>Thousands of views across all dashboards</td>
-<td>Only seeing 1 SH member’s local <code>_audit</code></td>
+<td><strong>Enterprise</strong>: Only seeing 1 SHC member’s local
+<code>_audit</code>. <strong>Cloud</strong>: Token lacks
+<code>index_audit</code> capability</td>
 </tr>
 <tr>
 <td>User activity count is very low</td>
 <td>Hundreds of active users</td>
-<td>Same — only one member’s activity</td>
+<td>Same as above</td>
 </tr>
 <tr>
 <td>Index volume returns 0 results</td>
 <td>Every index with volume data</td>
-<td>License master not forwarding <code>_internal</code></td>
+<td><strong>Enterprise</strong>: License master not forwarding
+<code>_internal</code>. <strong>Cloud</strong>: <code>_internal</code>
+not accessible to tenant users</td>
 </tr>
 <tr>
 <td>Alert firing stats are low or zero</td>
 <td>Thousands of scheduled search runs</td>
-<td><code>_internal</code> scheduler logs not reachable</td>
+<td><strong>Enterprise</strong>: <code>_internal</code> scheduler logs
+not reachable. <strong>Cloud</strong>: Same <code>_internal</code>
+restriction</td>
 </tr>
 </tbody>
 </table>
-<h3 id="quick-diagnostic">Quick Diagnostic</h3>
-<p>Run this query first from the node where you plan to execute the
-export script:</p>
-<pre class="spl"><code>index=_audit sourcetype=audittrail earliest=-1d
-| stats count by splunk_server
-| sort -count</code></pre>
-<p><strong>If results only show 1-3 servers</strong> instead of all SHC
-members + indexers, you are affected by this issue. Every SHC member and
-indexer should appear in the results if you have full visibility.</p>
 <hr />
-<h2 id="root-cause-_audit-forwarding-in-distributed-splunk">Root Cause:
-<code>_audit</code> Forwarding in Distributed Splunk</h2>
-<p>In a distributed Splunk deployment with a Search Head Cluster:</p>
+<h2 id="splunk-cloud">Splunk Cloud</h2>
+<h3 id="why-analytics-may-be-incomplete">Why Analytics May Be
+Incomplete</h3>
+<p>Splunk Cloud environments are fully managed by Splunk. Unlike
+Enterprise, you cannot SSH into the infrastructure, modify
+<code>outputs.conf</code>, or access the Monitoring Console. Common
+issues:</p>
+<ol type="1">
+<li><p><strong><code>_audit</code> access is restricted.</strong> In
+some Splunk Cloud stacks (particularly Victoria Experience), tenant
+users may have limited or no access to <code>_audit</code>. The
+<code>sc_admin</code> role has access by default, but custom roles or
+tokens may not.</p></li>
+<li><p><strong><code>_internal</code> is inaccessible.</strong> Splunk
+Cloud does not expose <code>_internal</code> to tenants in most
+configurations. This means <code>license_usage.log</code> (Query 4) and
+<code>sourcetype=scheduler</code> (Query 5) may return 0 results
+regardless of permissions.</p></li>
+<li><p><strong>Token capabilities.</strong> The export script
+authenticates via Bearer or Splunk token. If the token’s role doesn’t
+include <code>index_audit</code> capability (for <code>_audit</code>) or
+<code>index_internal</code> (for <code>_internal</code>), those queries
+silently return empty results.</p></li>
+</ol>
+<h3 id="how-to-run-queries-on-splunk-cloud">How to Run Queries on Splunk
+Cloud</h3>
+<p><strong>Option A — Splunk Web (Recommended)</strong></p>
+<ol type="1">
+<li>Log into your Splunk Cloud stack’s web interface as
+<code>sc_admin</code> or a user with the <code>admin</code> role</li>
+<li>Navigate to <strong>Search &amp; Reporting</strong></li>
+<li>Run each query from the <a href="#manual-query-set">Manual Query
+Set</a> below</li>
+<li>Export results as <strong>JSON</strong> (Export &gt; JSON &gt;
+Results)</li>
+<li>Inject into the export archive (see <a
+href="#placing-files-in-the-export">Placing Files in the
+Export</a>)</li>
+</ol>
+<p><strong>Option B — Via the Export Script with Correct
+Token</strong></p>
+<p>Ensure your API token has these capabilities: - <code>search</code> —
+run searches - <code>admin_all_objects</code> — see all apps and
+knowledge objects - <code>list_settings</code> — access system
+configuration - <code>index_audit</code> — search <code>_audit</code>
+index - <code>index_internal</code> — search <code>_internal</code>
+index (if available on your stack)</p>
+<p>Re-run the export with <code>--test-access</code> first to
+verify:</p>
+<div class="sourceCode" id="cb1"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./dma-splunk-cloud-export.sh</span> <span class="at">--stack</span> <span class="op">&lt;</span>your-stack<span class="op">&gt;</span>.splunkcloud.com <span class="at">--token</span> <span class="st">&quot;YOUR_TOKEN&quot;</span> <span class="at">--test-access</span></span></code></pre></div>
+<h3 id="cloud-specific-notes-for-each-query">Cloud-Specific Notes for
+Each Query</h3>
+<ul>
+<li><p><strong>Queries 1-3</strong> (<code>_audit</code>): These work on
+Splunk Cloud if the user/token has <code>index_audit</code> capability.
+Use <code>sc_admin</code> role for best results.</p></li>
+<li><p><strong>Query 4</strong> (<code>_internal</code>
+license_usage.log): <strong>Often unavailable on Splunk Cloud.</strong>
+Use the REST API alternative below instead:</p>
+<pre class="spl"><code>| rest /services/data/indexes
+| search title!=_* disabled=0 totalEventCount&gt;0
+| table title, currentDBSizeMB, totalEventCount
+| eval total_gb=round(currentDBSizeMB/1024, 2)
+| sort -total_gb
+| rename title as index_name</code></pre>
+<p>This provides current index sizes (not historical ingestion rates)
+but is sufficient for migration planning.</p></li>
+<li><p><strong>Query 5</strong> (<code>_internal</code> scheduler):
+<strong>Often unavailable on Splunk Cloud.</strong> Use this REST
+alternative:</p>
+<pre class="spl"><code>| rest /servicesNS/-/-/saved/searches
+| search is_scheduled=1 OR alert.track=1
+| table title, eai:acl.app, cron_schedule, alert.severity, alert.track, disabled, next_scheduled_time, dispatch.earliest_time, dispatch.latest_time
+| rename eai:acl.app as app, title as savedsearch_name</code></pre>
+<p>This gives you the alert/saved search inventory (what exists and its
+schedule) but not firing history (how often it ran and whether it
+succeeded).</p></li>
+<li><p><strong>Query 6</strong> (daily event counts): Same as Query 4 —
+<code>_internal</code> may be unavailable. Skip this on Cloud if Query 4
+isn’t accessible.</p></li>
+</ul>
+<hr />
+<h2 id="splunk-enterprise">Splunk Enterprise</h2>
+<h3 id="why-analytics-may-be-incomplete-1">Why Analytics May Be
+Incomplete</h3>
+<p>In distributed Splunk Enterprise deployments — particularly those
+with Search Head Clusters (SHCs) — the script may return incomplete
+results due to how <code>_audit</code> and <code>_internal</code>
+indexes work.</p>
+<h4 id="audit-is-a-local-index"><code>_audit</code> Is a Local
+Index</h4>
+<p>Each Splunk component (search head, indexer) maintains its own
+<code>_audit</code>. By default, search heads do NOT forward their
+<code>_audit</code> data to the indexer tier.</p>
 <pre><code>┌──────────────────────────────────────────────────┐
 │              Search Head Cluster                  │
 │                                                   │
@@ -386,17 +498,33 @@ indexer should appear in the results if you have full visibility.</p>
 │  If not forwarding to indexers, searching          │
 │  from any other node returns 0 results.           │
 └──────────────────────────────────────────────────┘</code></pre>
-<p><strong>The search audit trail
-(<code>action=search info=granted</code>) is generated on the search
-head that dispatched the search</strong>, not on the indexers. So if SHC
-members don’t forward <code>_audit</code> to the indexer tier, searching
-from any single member only captures ~1/N of the total search activity
-(where N = number of SHC members).</p>
-<hr />
-<h2 id="solution-options">Solution Options</h2>
-<h3
+<p>The search audit trail (<code>action=search info=granted</code>) is
+generated <strong>on the search head that dispatched the
+search</strong>, not on the indexers. So if SHC members don’t forward
+<code>_audit</code> to the indexer tier, searching from any single
+member only captures ~1/N of the total search activity (where N = number
+of SHC members).</p>
+<h4
+id="license_usage.log-only-exists-on-the-license-master"><code>license_usage.log</code>
+Only Exists on the License Master</h4>
+<p>If the license master doesn’t forward its <code>_internal</code> data
+to the indexer tier, searching
+<code>index=_internal source=*license_usage.log</code> from any other
+node returns zero results.</p>
+<h3 id="quick-diagnostic-enterprise-only">Quick Diagnostic (Enterprise
+Only)</h3>
+<p>Run this from the node where you plan to execute the export
+script:</p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail earliest=-1d
+| stats count by splunk_server
+| sort -count</code></pre>
+<p><strong>If results only show 1-3 servers</strong> instead of all SHC
+members + indexers, you are affected by this issue. Every SHC member and
+indexer should appear in the results if you have full visibility.</p>
+<h3 id="enterprise-solution-options">Enterprise Solution Options</h3>
+<h4
 id="option-a-run-queries-from-the-monitoring-console-recommended">Option
-A: Run Queries from the Monitoring Console (Recommended)</h3>
+A: Run Queries from the Monitoring Console (Recommended)</h4>
 <p>If your environment has a Splunk Monitoring Console (MC) deployed, it
 already has all instances (SHC members, indexers, license master) as
 distributed search peers. Running the queries from the MC provides
@@ -411,21 +539,21 @@ Set</a> below</li>
 href="#placing-files-in-the-export">Placing Files in the
 Export</a>)</li>
 </ol>
-<h3 id="option-b-configure-shc-forwarding-long-term-fix">Option B:
-Configure SHC Forwarding (Long-Term Fix)</h3>
+<h4 id="option-b-configure-shc-forwarding-long-term-fix">Option B:
+Configure SHC Forwarding (Long-Term Fix)</h4>
 <p>Deploy <code>outputs.conf</code> to all SHC members via the
 <strong>SHC Deployer</strong> and to the license master:</p>
-<div class="sourceCode" id="cb3"><pre
-class="sourceCode ini"><code class="sourceCode ini"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $SPLUNK_HOME/etc/apps/dma_forwarding/local/outputs.conf</span></span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Deploy via SHC deployer for search heads</span></span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Deploy manually or via deployment server for license master</span></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">[tcpout]</span></span>
-<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="dt">defaultGroup </span><span class="ot">=</span><span class="st"> indexer_cluster</span></span>
-<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dt">forwardedindex.filter.disable </span><span class="ot">=</span><span class="st"> </span><span class="kw">true</span></span>
-<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">[tcpout:indexer_cluster]</span></span>
-<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="dt">server </span><span class="ot">=</span><span class="st"> &lt;indexer1&gt;:9997, &lt;indexer2&gt;:9997, &lt;indexer3&gt;:9997</span></span></code></pre></div>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $SPLUNK_HOME/etc/apps/dma_forwarding/local/outputs.conf</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Deploy via SHC deployer for search heads</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Deploy manually or via deployment server for license master</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="kw">[tcpout]</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a><span class="dt">defaultGroup </span><span class="ot">=</span><span class="st"> indexer_cluster</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a><span class="dt">forwardedindex.filter.disable </span><span class="ot">=</span><span class="st"> </span><span class="kw">true</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a><span class="kw">[tcpout:indexer_cluster]</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a><span class="dt">server </span><span class="ot">=</span><span class="st"> &lt;indexer1&gt;:9997, &lt;indexer2&gt;:9997, &lt;indexer3&gt;:9997</span></span></code></pre></div>
 <p>The critical setting is
 <code>forwardedindex.filter.disable = true</code> — by default, Splunk’s
 forwarding <strong>filters out internal indexes</strong> (those starting
@@ -435,36 +563,47 @@ with <code>_</code>). This setting includes <code>_audit</code> and
 <code>_audit</code> data to accumulate on the indexer tier before
 re-running the export script. Historical local <code>_audit</code> data
 will NOT be retroactively forwarded — only new events going forward.</p>
-<h3
+<h4
 id="option-c-run-queries-manually-and-inject-results-immediate">Option
-C: Run Queries Manually and Inject Results (Immediate)</h3>
+C: Run Queries Manually and Inject Results (Immediate)</h4>
 <p>If you cannot configure forwarding and don’t have an MC, run the
 queries manually from a node with access to all data, then inject the
-JSON results into the DMA export archive.</p>
-<p>This is the approach documented in detail below.</p>
+JSON results into the DMA export archive. This is the approach
+documented in the <a href="#manual-query-set">Manual Query Set</a>
+below.</p>
 <hr />
 <h2 id="manual-query-set">Manual Query Set</h2>
-<p>Run each query below in Splunk Search &amp; Reporting. Set the time
-picker to <strong>All Time</strong> (the <code>earliest=</code>
-constraint is embedded in each query). Adjust <code>earliest=-90d</code>
-to match your desired analytics period (default is 90 days; use
-<code>-30d</code> for 30 days, <code>-365d</code> for one year).</p>
+<p>These queries work on <strong>both Splunk Cloud and Splunk
+Enterprise</strong>. The SPL syntax is identical — the only difference
+is where you run them and what data is accessible.</p>
+<p>Run each query in Splunk Search &amp; Reporting. Set the time picker
+to <strong>All Time</strong> (the <code>earliest=</code> constraint is
+embedded in each query). Adjust <code>earliest=-90d</code> to match your
+desired analytics period (default is 90 days; use <code>-30d</code> for
+30 days, <code>-365d</code> for one year).</p>
 <h3 id="prerequisites">Prerequisites</h3>
-<p>Verify your search node has visibility across the deployment:</p>
+<p><strong>Enterprise only</strong> — verify your search node has
+visibility across the deployment:</p>
 <pre class="spl"><code>| rest /services/search/distributed/peers
 | table title, status, server_roles
 | sort title</code></pre>
 <p>You should see all SHC members, indexers, and the license master
 listed with <code>status=Up</code>. If any are missing, the queries
 below will be incomplete.</p>
+<p><strong>Cloud</strong> — verify your user/token can access
+<code>_audit</code>:</p>
+<pre class="spl"><code>index=_audit earliest=-1h | stats count</code></pre>
+<p>If this returns 0, your user/token does not have <code>_audit</code>
+access. Log in as <code>sc_admin</code> or contact your Splunk Cloud
+administrator.</p>
 <hr />
 <h3 id="query-1-dashboard-views">Query 1: Dashboard Views</h3>
 <p><strong>Purpose</strong>: Identifies which dashboards are actively
 used, by how many users, and how often. This is the most critical query
 for migration prioritization — it determines which dashboards to migrate
 first.</p>
-<p><strong>Save as</strong>:
-<code>dashboard_views_global.json</code></p>
+<p><strong>Requires</strong>: <code>_audit</code> access <strong>Save
+as</strong>: <code>dashboard_views_global.json</code></p>
 <pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted
   (provenance=&quot;UI:Dashboard:*&quot; OR provenance=&quot;UI:dashboard:*&quot;)
   user!=&quot;splunk-system-user&quot; earliest=-90d
@@ -486,7 +625,8 @@ visibility.</p>
 <p><strong>Purpose</strong>: Shows which users are actively searching in
 each app. Used by the DMA Server to identify key stakeholders and
 high-activity users for each app being migrated.</p>
-<p><strong>Save as</strong>: <code>user_activity_global.json</code></p>
+<p><strong>Requires</strong>: <code>_audit</code> access <strong>Save
+as</strong>: <code>user_activity_global.json</code></p>
 <pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted
   user!=&quot;splunk-system-user&quot; user!=&quot;nobody&quot; earliest=-90d
 | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user
@@ -500,8 +640,8 @@ Breakdown</h3>
 <p><strong>Purpose</strong>: Categorizes all search activity by type
 (dashboard, scheduled, interactive, acceleration, summarization). Helps
 the migration team understand what kind of workload each app drives.</p>
-<p><strong>Save as</strong>:
-<code>search_patterns_global.json</code></p>
+<p><strong>Requires</strong>: <code>_audit</code> access <strong>Save
+as</strong>: <code>search_patterns_global.json</code></p>
 <pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted
   user!=&quot;splunk-system-user&quot; earliest=-90d
 | eval search_type=case(
@@ -522,12 +662,9 @@ types should dominate in most production environments.</p>
 <p><strong>Purpose</strong>: Shows daily ingestion volume per index from
 <code>license_usage.log</code>. Critical for Dynatrace Grail storage
 planning and cost estimation.</p>
-<p><strong>Save as</strong>: <code>index_volume_summary.json</code></p>
-<p><strong>Important</strong>: This query requires access to the
-<strong>license master’s</strong> <code>_internal</code> index. If it
-returns 0 results, the license master is not forwarding data to the
-indexer tier. In that case, run this query directly on the license
-master.</p>
+<p><strong>Requires</strong>: <code>_internal</code> access (often
+unavailable on Splunk Cloud — see alternative below) <strong>Save
+as</strong>: <code>index_volume_summary.json</code></p>
 <pre class="spl"><code>index=_internal source=*license_usage.log type=Usage earliest=-90d
 | eval index_name=idx
 | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name
@@ -535,24 +672,34 @@ master.</p>
 | sort -total_gb
 | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event</code></pre>
 <p><strong>Expected results</strong>: One row per index.
-<code>total_gb</code> should match your license usage dashboard. If
-results are empty, you need to run this query from the license master
-directly.</p>
-<p><strong>Alternative — run on license master</strong>:</p>
+<code>total_gb</code> should match your license usage dashboard.</p>
+<p><strong>If this returns 0 results:</strong></p>
+<ul>
+<li><p><strong>Splunk Cloud</strong>: <code>_internal</code> is
+typically not accessible to tenants. Use the REST alternative:</p>
+<pre class="spl"><code>| rest /services/data/indexes
+| search title!=_* disabled=0 totalEventCount&gt;0
+| table title, currentDBSizeMB, totalEventCount
+| eval total_gb=round(currentDBSizeMB/1024, 2)
+| sort -total_gb
+| rename title as index_name</code></pre></li>
+<li><p><strong>Splunk Enterprise</strong>: The license master is not
+forwarding <code>_internal</code> to the indexer tier. Either run this
+query directly on the license master, or use:</p>
 <pre class="spl"><code>| rest splunk_server=&lt;license_master_hostname&gt; /services/data/indexes
 | table title, currentDBSizeMB, totalEventCount, maxTotalDataSizeMB
 | eval total_gb=round(currentDBSizeMB/1024, 2)
-| sort -total_gb</code></pre>
+| sort -total_gb
+| rename title as index_name</code></pre></li>
+</ul>
 <hr />
 <h3 id="query-5-alert-firing-stats">Query 5: Alert Firing Stats</h3>
 <p><strong>Purpose</strong>: Shows which saved searches and alerts are
 actively firing, how often, and their success/failure rates. Essential
 for understanding which alerts to prioritize in migration.</p>
-<p><strong>Save as</strong>: <code>alert_firing_global.json</code></p>
-<p><strong>Important</strong>: This query searches
-<code>index=_internal sourcetype=scheduler</code>, which lives on the
-search heads. Same <code>_audit</code>-like visibility issue applies —
-scheduler logs are local to each SH.</p>
+<p><strong>Requires</strong>: <code>_internal</code> access (often
+unavailable on Splunk Cloud — see alternative below) <strong>Save
+as</strong>: <code>alert_firing_global.json</code></p>
 <pre class="spl"><code>index=_internal sourcetype=scheduler earliest=-90d
 | fields _time, app, savedsearch_name, status
 | stats count as total_runs,
@@ -561,52 +708,66 @@ scheduler logs are local to each SH.</p>
     sum(eval(if(status!=&quot;success&quot; AND status!=&quot;skipped&quot;,1,0))) as failed,
     latest(_time) as last_run by app, savedsearch_name
 | sort -total_runs</code></pre>
-<p><strong>Expected results</strong>: One row per saved search per app.
-Active environments with many scheduled searches should show thousands
-of rows.</p>
+<p><strong>Expected results</strong>: One row per saved search per
+app.</p>
+<p><strong>If this returns 0 results</strong> (common on Splunk Cloud),
+use the REST alternative to get the alert/saved search inventory
+(without firing history):</p>
+<pre class="spl"><code>| rest /servicesNS/-/-/saved/searches
+| search is_scheduled=1 OR alert.track=1
+| table title, eai:acl.app, cron_schedule, alert.severity, alert.track, disabled, next_scheduled_time
+| rename eai:acl.app as app, title as savedsearch_name</code></pre>
+<p><strong>Enterprise note</strong>: This query searches
+<code>index=_internal sourcetype=scheduler</code>, which has the same
+local-index visibility issue as <code>_audit</code>. On SHC
+environments, scheduler logs are local to each search head. Run from the
+Monitoring Console for complete results.</p>
 <hr />
 <h3 id="query-6-index-event-counts-daily">Query 6: Index Event Counts
 (Daily)</h3>
 <p><strong>Purpose</strong>: Provides daily event count trends per index
-for capacity planning. This is a supplementary query not in the core 6
-but valuable for the DMA Explorer.</p>
-<p><strong>Save as</strong>: <code>index_event_counts_daily.json</code>
-(optional)</p>
+for capacity planning. Supplementary to Query 4.</p>
+<p><strong>Requires</strong>: <code>_internal</code> access (same
+caveats as Query 4) <strong>Save as</strong>:
+<code>index_event_counts_daily.json</code> (optional)</p>
 <pre class="spl"><code>index=_internal source=*license_usage.log type=Usage earliest=-90d
 | eval index_name=idx
 | bin _time span=1d
 | stats sum(b) as daily_bytes by index_name, _time
 | eval daily_gb=round(daily_bytes/1024/1024/1024, 2)
 | sort index_name, _time</code></pre>
+<p>If <code>_internal</code> is not accessible (Cloud), skip this query.
+The DMA Server can function without daily trend data.</p>
 <hr />
 <h2 id="placing-files-in-the-export">Placing Files in the Export</h2>
-<p>After exporting each query’s results as JSON from Splunk:</p>
+<p>After exporting each query’s results as JSON from Splunk, inject them
+into the DMA export archive.</p>
 <h3 id="step-1-extract-the-existing-export-archive">Step 1: Extract the
 existing export archive</h3>
-<div class="sourceCode" id="cb12"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Create working directory</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/dma_manual_inject</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp/dma_manual_inject</span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Extract the existing export archive</span></span>
-<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> xzf /path/to/dma_export_<span class="op">&lt;</span>hostname<span class="op">&gt;</span>_<span class="op">&lt;</span>timestamp<span class="op">&gt;</span>.tar.gz</span></code></pre></div>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Create working directory</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/dma_manual_inject</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp/dma_manual_inject</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Extract the existing export archive</span></span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> xzf /path/to/dma_export_<span class="op">&lt;</span>hostname<span class="op">&gt;</span>_<span class="op">&lt;</span>timestamp<span class="op">&gt;</span>.tar.gz</span></code></pre></div>
 <h3 id="step-2-copy-json-files-into-the-analytics-directory">Step 2:
 Copy JSON files into the analytics directory</h3>
-<div class="sourceCode" id="cb13"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Navigate to the usage analytics directory</span></span>
-<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="va">EXPORT_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">ls</span> <span class="at">-d</span> dma_export_<span class="pp">*</span><span class="va">)</span></span>
-<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics&quot;</span></span>
-<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Copy your exported JSON files</span></span>
-<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> dashboard_views_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> user_activity_global.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> search_patterns_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_volume_summary.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> alert_firing_global.json      <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_event_counts_daily.json <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb19"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Navigate to the usage analytics directory</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="va">EXPORT_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">ls</span> <span class="at">-d</span> dma_export_<span class="pp">*</span> <span class="kw">|</span> <span class="fu">head</span> <span class="at">-1</span><span class="va">)</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics&quot;</span></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Copy your exported JSON files</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> dashboard_views_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> user_activity_global.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> search_patterns_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_volume_summary.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> alert_firing_global.json      <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_event_counts_daily.json <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span></code></pre></div>
 <h3 id="step-3-re-create-the-archive">Step 3: Re-create the archive</h3>
-<div class="sourceCode" id="cb14"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> czf <span class="st">&quot;</span><span class="va">${EXPORT_DIR}</span><span class="st">.tar.gz&quot;</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">&quot;</span></span></code></pre></div>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> czf <span class="st">&quot;</span><span class="va">${EXPORT_DIR}</span><span class="st">.tar.gz&quot;</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">&quot;</span></span></code></pre></div>
 <p>The resulting <code>.tar.gz</code> can be uploaded to the DMA Server
 as a normal export. The DMA Server’s <code>stageUsageAnalytics()</code>
 picks up files from <code>dma_analytics/usage_analytics/</code>
@@ -616,48 +777,52 @@ placed.</p>
 <h2 id="json-format-requirements">JSON Format Requirements</h2>
 <p>When exporting from Splunk Search, use <strong>Export &gt; JSON &gt;
 Results</strong>. Splunk exports results in this format:</p>
-<div class="sourceCode" id="cb15"><pre
-class="sourceCode json"><code class="sourceCode json"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
-<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;preview&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
-<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;init_offset&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
-<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;messages&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
-<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;fields&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="er">...</span><span class="ot">]</span><span class="fu">,</span></span>
-<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;results&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
-<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
-<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;search&quot;</span><span class="fu">,</span></span>
-<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboard_name&quot;</span><span class="fu">:</span> <span class="st">&quot;my_dashboard&quot;</span><span class="fu">,</span></span>
-<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;view_count&quot;</span><span class="fu">:</span> <span class="st">&quot;142&quot;</span><span class="fu">,</span></span>
-<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;unique_users&quot;</span><span class="fu">:</span> <span class="st">&quot;8&quot;</span><span class="fu">,</span></span>
-<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>      <span class="er">...</span></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span><span class="ot">,</span></span>
-<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    <span class="er">...</span></span>
-<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
-<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;preview&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;init_offset&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;messages&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;fields&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="er">...</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;results&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;search&quot;</span><span class="fu">,</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboard_name&quot;</span><span class="fu">:</span> <span class="st">&quot;my_dashboard&quot;</span><span class="fu">,</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;view_count&quot;</span><span class="fu">:</span> <span class="st">&quot;142&quot;</span><span class="fu">,</span></span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;unique_users&quot;</span><span class="fu">:</span> <span class="st">&quot;8&quot;</span><span class="fu">,</span></span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>      <span class="er">...</span></span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a>    <span class="er">...</span></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb21-16"><a href="#cb21-16" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
 <p>The DMA Server reads from the <code>results</code> array. The field
 names must match exactly what the SPL queries produce (they will if you
 copy-paste the queries above without modification).</p>
 <p><strong>Important</strong>: Do NOT use “Export &gt; CSV” or “Export
 &gt; XML” — the DMA Server expects JSON format.</p>
 <hr />
-<h2 id="splunk-rest-api-alternatives">Splunk REST API Alternatives</h2>
-<p>If running SPL queries is not feasible, some data can be gathered via
-REST API calls. These don’t require <code>_audit</code> or
-<code>_internal</code> access but provide less detail:</p>
-<h3 id="index-sizes-no-license_usage.log-needed">Index sizes (no
-license_usage.log needed)</h3>
-<pre class="spl"><code>| rest /services/data/indexes splunk_server=*
-| search title!=_*
+<h2 id="rest-api-alternatives-no-_audit-_internal-needed">REST API
+Alternatives (No <code>_audit</code> / <code>_internal</code>
+Needed)</h2>
+<p>When <code>_audit</code> and <code>_internal</code> are completely
+inaccessible (common on Splunk Cloud), the following REST-based queries
+provide <strong>inventory</strong> data. These don’t show usage history
+(who viewed what, how often) but do provide complete information about
+what exists in the environment.</p>
+<h3 id="index-sizes">Index sizes</h3>
+<pre class="spl"><code>| rest /services/data/indexes
+| search title!=_* disabled=0 totalEventCount&gt;0
 | stats sum(currentDBSizeMB) as total_mb, sum(totalEventCount) as total_events by title
 | eval total_gb=round(total_mb/1024, 2)
-| sort -total_gb</code></pre>
+| sort -total_gb
+| rename title as index_name</code></pre>
 <h3 id="all-saved-searches-with-schedule-info">All saved searches with
 schedule info</h3>
-<pre class="spl"><code>| rest /servicesNS/-/-/saved/searches splunk_server=local
+<pre class="spl"><code>| rest /servicesNS/-/-/saved/searches
 | search is_scheduled=1 OR alert.track=1
 | table title, eai:acl.app, cron_schedule, alert.severity, alert.track, disabled, next_scheduled_time
 | rename eai:acl.app as app, title as savedsearch_name</code></pre>
 <h3 id="all-dashboards-with-metadata">All dashboards with metadata</h3>
-<pre class="spl"><code>| rest /servicesNS/-/-/data/ui/views splunk_server=local
+<pre class="spl"><code>| rest /servicesNS/-/-/data/ui/views
 | search isDashboard=1
 | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, updated
 | rename eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing</code></pre>
@@ -667,17 +832,38 @@ schedule info</h3>
 for migration planning.</p>
 <hr />
 <h2 id="troubleshooting">Troubleshooting</h2>
-<h3 id="results-on-all-_audit-queries">“0 results” on all _audit
-queries</h3>
-<p><strong>Cause</strong>: The search node has no distributed search
-peers, or peers are down.</p>
-<p><strong>Check</strong>:</p>
-<pre class="spl"><code>| rest /services/search/distributed/peers
-| table title, status, server_roles</code></pre>
-<p>If empty or all status=Down, the node cannot reach any other Splunk
-instances.</p>
-<h3 id="results-only-from-1-2-servers">Results only from 1-2
-servers</h3>
+<h3 id="results-on-all-_audit-queries">“0 results” on all
+<code>_audit</code> queries</h3>
+<table>
+<colgroup>
+<col style="width: 45%" />
+<col style="width: 31%" />
+<col style="width: 22%" />
+</colgroup>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cloud</strong></td>
+<td>Token/user lacks <code>index_audit</code> capability</td>
+<td>Log in as <code>sc_admin</code> or create a token from a role with
+<code>index_audit</code></td>
+</tr>
+<tr>
+<td><strong>Enterprise</strong></td>
+<td>No distributed search peers, or peers are down</td>
+<td>Check:
+<code>\| rest /services/search/distributed/peers \| table title, status</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="results-only-from-1-2-servers-enterprise">Results only from 1-2
+servers (Enterprise)</h3>
 <p><strong>Cause</strong>: SHC members not forwarding
 <code>_audit</code> to indexers. You’re only seeing the local SH’s
 data.</p>
@@ -689,26 +875,80 @@ data.</p>
 from the Monitoring Console instead.</p>
 <h3 id="dashboard-views-count-seems-too-low">Dashboard views count seems
 too low</h3>
-<p><strong>Cause</strong>: Several possible reasons beyond forwarding: -
-<code>provenance</code> field may not be populated in older Splunk
-versions (pre-7.2) - Dashboard Studio dashboards may log provenance
-differently than Classic XML - Some dashboards may use
-<code>| inputlookup</code> or <code>| rest</code> instead of standard
-search commands, which don’t generate <code>audittrail</code> events</p>
+<p><strong>Cause</strong>: Several possible reasons beyond
+forwarding/permissions: - <code>provenance</code> field may not be
+populated in older Splunk versions (pre-7.2) - Dashboard Studio
+dashboards may log provenance differently than Classic XML - Some
+dashboards may use <code>| inputlookup</code> or <code>| rest</code>
+instead of standard search commands, which don’t generate
+<code>audittrail</code> events</p>
 <p><strong>Check provenance coverage</strong>:</p>
 <pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted earliest=-1d
 | stats count by provenance
 | sort -count
 | head 20</code></pre>
 <h3
-id="license_usage.log-returns-0-from-shc-but-works-from-license-master">license_usage.log
-returns 0 from SHC but works from license master</h3>
-<p><strong>Cause</strong>: License master is not forwarding
-<code>_internal</code> to the indexer tier.</p>
-<p><strong>Workaround</strong>: SSH to the license master and run Query
-4 directly, or use:</p>
-<pre class="spl"><code>| rest splunk_server=&lt;license_master_hostname&gt; /services/licenser/usage/license_usage
-| table title, quota, slaves_usage_bytes</code></pre>
+id="license_usage.log-returns-0-results"><code>license_usage.log</code>
+returns 0 results</h3>
+<table>
+<colgroup>
+<col style="width: 45%" />
+<col style="width: 31%" />
+<col style="width: 22%" />
+</colgroup>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cloud</strong></td>
+<td><code>_internal</code> not exposed to tenants</td>
+<td>Use the REST alternative
+(<code>\| rest /services/data/indexes</code>)</td>
+</tr>
+<tr>
+<td><strong>Enterprise</strong></td>
+<td>License master not forwarding <code>_internal</code> to
+indexers</td>
+<td>Run Query 4 directly on the license master, or configure
+<code>outputs.conf</code> on the LM</td>
+</tr>
+</tbody>
+</table>
+<h3
+id="sourcetypescheduler-returns-0-results"><code>sourcetype=scheduler</code>
+returns 0 results</h3>
+<table>
+<colgroup>
+<col style="width: 45%" />
+<col style="width: 31%" />
+<col style="width: 22%" />
+</colgroup>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cloud</strong></td>
+<td><code>_internal</code> not exposed to tenants</td>
+<td>Use the REST alternative
+(<code>\| rest /servicesNS/-/-/saved/searches</code>) for inventory</td>
+</tr>
+<tr>
+<td><strong>Enterprise</strong></td>
+<td>Same SHC local-index issue as <code>_audit</code></td>
+<td>Run from Monitoring Console, or configure SH forwarding</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h2 id="version-history">Version History</h2>
 <table>
@@ -725,6 +965,12 @@ returns 0 from SHC but works from license master</h3>
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>1.1</td>
+<td>April 2026</td>
+<td>Added Splunk Cloud section, REST alternatives, platform-specific
+guidance</td>
+</tr>
 <tr>
 <td>1.0</td>
 <td>April 2026</td>
