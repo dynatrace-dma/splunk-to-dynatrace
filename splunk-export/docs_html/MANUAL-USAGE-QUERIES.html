@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual Usage Analytics
+Queries | Dynatrace Migration Assistant</title>
+    <style>
+        :root {
+            --db-header-bg: #14172b;
+            --db-nav-dark: #1a1d2e;
+            --db-accent-purple: #7c5dc7;
+            --db-accent-blue: #4da6e8;
+            --db-accent-green: #6abf4b;
+            --content-bg: #ffffff;
+            --content-card: #f8f9fa;
+            --text-dark: #1a1a2e;
+            --text-body: #3a3a4a;
+            --text-muted: #6c757d;
+            --text-light: #ffffff;
+            --accent-blue: #1456ff;
+            --success: #6abf4b;
+            --border-light: #e0e0e0;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+            line-height: 1.45;
+            color: var(--text-dark);
+            background: var(--content-bg);
+            font-size: 14px;
+        }
+
+        /* Header - Compact */
+        .header-banner {
+            background: var(--db-header-bg);
+            padding: 20px 16px;
+            text-align: center;
+        }
+        .header-content { max-width: 900px; margin: 0 auto; }
+        .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .logo-image { height: 36px; width: 36px; object-fit: contain; }
+        .logo-text { font-size: 1.5em; font-weight: 700; color: var(--text-light); }
+        .logo-text .highlight { color: var(--db-accent-purple); }
+        .header-tagline {
+            color: rgba(255,255,255,0.6);
+            font-size: 0.85em;
+            margin-bottom: 10px;
+        }
+        .version-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            color: rgba(255,255,255,0.7);
+        }
+        .version-badge .dot { width: 5px; height: 5px; background: var(--success); border-radius: 50%; }
+        .doc-title { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); }
+        .doc-title h2 { color: var(--text-light); font-size: 1.1em; font-weight: 600; margin: 0; padding: 0; border: none; }
+
+        /* Navigation - Compact */
+        .doc-nav {
+            background: var(--db-nav-dark);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .doc-nav-inner { max-width: 1100px; margin: 0 auto; display: flex; flex-wrap: wrap; justify-content: center; }
+        .doc-nav a {
+            color: rgba(255,255,255,0.55);
+            text-decoration: none;
+            font-size: 0.78em;
+            font-weight: 500;
+            padding: 10px 14px;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+        .doc-nav a:hover { color: var(--text-light); background: rgba(255,255,255,0.05); border-bottom-color: var(--db-accent-purple); }
+
+        /* Content - Tight */
+        .content { max-width: 900px; margin: 0 auto; padding: 20px 24px 30px; }
+
+        /* Typography - Compact */
+        h1 {
+            color: var(--text-dark);
+            font-size: 1.6em;
+            font-weight: 700;
+            margin-bottom: 4px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--db-accent-purple);
+        }
+        h2 {
+            color: var(--text-dark);
+            font-size: 1.25em;
+            font-weight: 600;
+            margin-top: 20px;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border-light);
+        }
+        h3 {
+            color: var(--text-dark);
+            font-size: 1.05em;
+            font-weight: 600;
+            margin-top: 14px;
+            margin-bottom: 4px;
+        }
+        h4 {
+            color: var(--text-dark);
+            font-size: 0.95em;
+            font-weight: 600;
+            margin-top: 10px;
+            margin-bottom: 3px;
+        }
+        h5, h6 {
+            color: var(--text-dark);
+            font-size: 0.9em;
+            font-weight: 600;
+            margin-top: 8px;
+            margin-bottom: 2px;
+        }
+        p { margin-bottom: 8px; color: var(--text-body); }
+        strong { color: var(--text-dark); font-weight: 600; }
+        a { color: var(--accent-blue); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* Code - Compact */
+        pre {
+            background: #1e1e2e;
+            border: 1px solid #2d2d3d;
+            border-radius: 4px;
+            padding: 10px 12px;
+            overflow-x: auto;
+            margin: 8px 0;
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 0.82em;
+            line-height: 1.4;
+            color: #e0e0e0;
+        }
+        code {
+            background: #f0f0f2;
+            color: #c7254e;
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-family: 'SF Mono', Monaco, Consolas, monospace;
+            font-size: 0.85em;
+        }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+
+        /* Tables - Compact */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 0.88em;
+            border: 1px solid var(--border-light);
+        }
+        th {
+            background: var(--db-nav-dark);
+            color: var(--text-light);
+            padding: 8px 10px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+        }
+        td {
+            padding: 7px 10px;
+            border-bottom: 1px solid var(--border-light);
+            color: var(--text-body);
+        }
+        tr:last-child td { border-bottom: none; }
+        tr:nth-child(even) td { background: #f9f9fb; }
+
+        /* Lists - Tight */
+        ul, ol { margin: 6px 0; padding-left: 20px; color: var(--text-body); }
+        li { margin-bottom: 2px; }
+        li::marker { color: var(--db-accent-purple); }
+
+        /* Blockquotes */
+        blockquote {
+            background: var(--content-card);
+            border-left: 3px solid var(--db-accent-purple);
+            border-radius: 0 4px 4px 0;
+            padding: 8px 12px;
+            margin: 10px 0;
+        }
+        blockquote p { margin-bottom: 0; }
+
+        /* HR - Minimal */
+        hr { border: none; border-top: 1px solid var(--border-light); margin: 16px 0; }
+
+        /* Footer - Compact */
+        .footer { background: var(--db-nav-dark); padding: 20px 16px; text-align: center; }
+        .footer-content { max-width: 600px; margin: 0 auto; }
+        .footer-logo { font-size: 1em; font-weight: 700; color: var(--text-light); margin-bottom: 6px; }
+        .footer-logo .highlight { color: var(--db-accent-purple); }
+        .footer p { color: rgba(255,255,255,0.5); font-size: 0.8em; margin-bottom: 4px; }
+        .footer-links { display: flex; justify-content: center; gap: 16px; margin-top: 10px; flex-wrap: wrap; }
+        .footer-links a { color: rgba(255,255,255,0.45); font-size: 0.75em; }
+        .footer-links a:hover { color: var(--db-accent-purple); text-decoration: none; }
+        .footer-copyright {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            font-size: 0.7em;
+            color: rgba(255,255,255,0.35);
+        }
+
+        /* Print */
+        @media print {
+            .doc-nav, .footer { display: none; }
+            .content { max-width: 100%; padding: 12px; }
+            .header-banner { padding: 12px; }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-banner { padding: 16px 12px; }
+            .logo-text { font-size: 1.2em; }
+            .logo-image { height: 28px; width: 28px; }
+            .content { padding: 16px 12px; }
+            h1 { font-size: 1.4em; }
+            h2 { font-size: 1.15em; }
+            table { font-size: 0.82em; }
+            th, td { padding: 6px 8px; }
+            .doc-nav a { padding: 8px 10px; font-size: 0.72em; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header-banner">
+        <div class="header-content">
+            <div class="logo-container">
+                <img class="logo-image" src="dma-symbol.png" alt="DMA" onerror="this.style.display='none'" />
+                <div class="logo-text">Dynatrace Migration Assistant</div>
+            </div>
+            <p class="header-tagline">Migration Intelligence Platform for Splunk to Dynatrace</p>
+            <span class="version-badge"><span class="dot"></span>Version 4.6.0</span>
+            <div class="doc-title"><h2>Manual Usage Analytics
+Queries</h2></div>
+        </div>
+    </header>
+
+    <nav class="doc-nav">
+        <div class="doc-nav-inner">
+            <a href="README-SPLUNK-ENTERPRISE.html">Enterprise README</a>
+            <a href="README-SPLUNK-CLOUD.html">Cloud README</a>
+            <a href="SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.html">Enterprise Spec</a>
+            <a href="SPLUNK-CLOUD-EXPORT-SPECIFICATION.html">Cloud Spec</a>
+            <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics Reference</a>
+            <a href="EXPORT-SCHEMA.html">Export Schema</a>
+            <a href="INTERACTIVE-WALKTHROUGH.html">Walkthrough</a>
+            <a href="SPLUNK-ENTERPRISE-CHANGELOG.html">Changelog</a>
+        </div>
+    </nav>
+
+    <main class="content">
+<h1
+id="manual-usage-analytics-queries-for-distributed-splunk-environments">Manual
+Usage Analytics Queries for Distributed Splunk Environments</h1>
+<p><strong>Version</strong>: 4.6.0 <strong>Last Updated</strong>: April
+2026 <strong>Related Documents</strong>: <a
+href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.md">Script-Generated
+Analytics Reference</a> | <a
+href="README-SPLUNK-ENTERPRISE.md">Enterprise Export README</a> | <a
+href="EXPORT-SCHEMA.md">Export Schema</a></p>
+<blockquote>
+<p><strong>Developed for Dynatrace One by Enterprise Solutions &amp;
+Architecture</strong> <em>An ACE Services Division of Dynatrace</em></p>
+</blockquote>
+<hr />
+<h2 id="when-to-use-this-guide">When to Use This Guide</h2>
+<p>The DMA export script runs 6 global analytics queries against
+<code>index=_audit</code> and <code>index=_internal</code> to collect
+dashboard usage, user activity, search patterns, index volumes, and
+alert firing statistics. These queries work correctly in most
+environments.</p>
+<p><strong>However, in large distributed Splunk deployments —
+particularly Search Head Clusters (SHCs) — the script may return
+incomplete results because:</strong></p>
+<ul>
+<li><p><strong><code>_audit</code> is a local index.</strong> Each
+Splunk component (search head, indexer) maintains its own
+<code>_audit</code>. By default, search heads do NOT forward their
+<code>_audit</code> data to the indexer tier. When the export script
+runs on one SHC member, it only sees that member’s local search audit
+data — not the other 25 members’ activity.</p></li>
+<li><p><strong><code>license_usage.log</code> only exists on the license
+master.</strong> If the license master doesn’t forward its
+<code>_internal</code> data to the indexer tier, searching from any
+other node returns zero results for index volume data.</p></li>
+</ul>
+<h3 id="symptoms-of-this-problem">Symptoms of This Problem</h3>
+<table>
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 33%" />
+<col style="width: 36%" />
+</colgroup>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Expected</th>
+<th>Indicates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dashboard views count is very low</td>
+<td>Thousands of views across all dashboards</td>
+<td>Only seeing 1 SH member’s local <code>_audit</code></td>
+</tr>
+<tr>
+<td>User activity count is very low</td>
+<td>Hundreds of active users</td>
+<td>Same — only one member’s activity</td>
+</tr>
+<tr>
+<td>Index volume returns 0 results</td>
+<td>Every index with volume data</td>
+<td>License master not forwarding <code>_internal</code></td>
+</tr>
+<tr>
+<td>Alert firing stats are low or zero</td>
+<td>Thousands of scheduled search runs</td>
+<td><code>_internal</code> scheduler logs not reachable</td>
+</tr>
+</tbody>
+</table>
+<h3 id="quick-diagnostic">Quick Diagnostic</h3>
+<p>Run this query first from the node where you plan to execute the
+export script:</p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail earliest=-1d
+| stats count by splunk_server
+| sort -count</code></pre>
+<p><strong>If results only show 1-3 servers</strong> instead of all SHC
+members + indexers, you are affected by this issue. Every SHC member and
+indexer should appear in the results if you have full visibility.</p>
+<hr />
+<h2 id="root-cause-_audit-forwarding-in-distributed-splunk">Root Cause:
+<code>_audit</code> Forwarding in Distributed Splunk</h2>
+<p>In a distributed Splunk deployment with a Search Head Cluster:</p>
+<pre><code>┌──────────────────────────────────────────────────┐
+│              Search Head Cluster                  │
+│                                                   │
+│  SH-1 ──┐                                        │
+│  SH-2 ──┤  Each SH has its OWN local _audit      │
+│  SH-3 ──┤  containing only searches dispatched    │
+│  ...   ──┤  from THAT specific search head.       │
+│  SH-26 ─┘                                        │
+│                                                   │
+│  By default, SHs do NOT forward _audit            │
+│  to the indexer tier.                             │
+└──────────────────────────────────────────────────┘
+            │
+            │  Distributed search reaches indexers
+            │  but NOT other SH members&#39; local _audit
+            ▼
+┌──────────────────────────────────────────────────┐
+│              Indexer Cluster                       │
+│                                                   │
+│  IDX-1 ──┐  Indexers have their own _audit        │
+│  IDX-2 ──┤  (indexer-side events only, NOT        │
+│  IDX-3 ──┘   search dispatch events)              │
+└──────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────┐
+│           License Master                          │
+│                                                   │
+│  license_usage.log lives HERE and only here.      │
+│  If not forwarding to indexers, searching          │
+│  from any other node returns 0 results.           │
+└──────────────────────────────────────────────────┘</code></pre>
+<p><strong>The search audit trail
+(<code>action=search info=granted</code>) is generated on the search
+head that dispatched the search</strong>, not on the indexers. So if SHC
+members don’t forward <code>_audit</code> to the indexer tier, searching
+from any single member only captures ~1/N of the total search activity
+(where N = number of SHC members).</p>
+<hr />
+<h2 id="solution-options">Solution Options</h2>
+<h3
+id="option-a-run-queries-from-the-monitoring-console-recommended">Option
+A: Run Queries from the Monitoring Console (Recommended)</h3>
+<p>If your environment has a Splunk Monitoring Console (MC) deployed, it
+already has all instances (SHC members, indexers, license master) as
+distributed search peers. Running the queries from the MC provides
+complete visibility.</p>
+<ol type="1">
+<li>Log into the Monitoring Console’s Splunk Web</li>
+<li>Open <strong>Search &amp; Reporting</strong></li>
+<li>Run each query from the <a href="#manual-query-set">Manual Query
+Set</a> below</li>
+<li>Export results as JSON</li>
+<li>Place files in the export archive (see <a
+href="#placing-files-in-the-export">Placing Files in the
+Export</a>)</li>
+</ol>
+<h3 id="option-b-configure-shc-forwarding-long-term-fix">Option B:
+Configure SHC Forwarding (Long-Term Fix)</h3>
+<p>Deploy <code>outputs.conf</code> to all SHC members via the
+<strong>SHC Deployer</strong> and to the license master:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode ini"><code class="sourceCode ini"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># $SPLUNK_HOME/etc/apps/dma_forwarding/local/outputs.conf</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="co"># Deploy via SHC deployer for search heads</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Deploy manually or via deployment server for license master</span></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="kw">[tcpout]</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="dt">defaultGroup </span><span class="ot">=</span><span class="st"> indexer_cluster</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="dt">forwardedindex.filter.disable </span><span class="ot">=</span><span class="st"> </span><span class="kw">true</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="kw">[tcpout:indexer_cluster]</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="dt">server </span><span class="ot">=</span><span class="st"> &lt;indexer1&gt;:9997, &lt;indexer2&gt;:9997, &lt;indexer3&gt;:9997</span></span></code></pre></div>
+<p>The critical setting is
+<code>forwardedindex.filter.disable = true</code> — by default, Splunk’s
+forwarding <strong>filters out internal indexes</strong> (those starting
+with <code>_</code>). This setting includes <code>_audit</code> and
+<code>_internal</code> in forwarding.</p>
+<p>After deploying, <strong>wait 24-48 hours</strong> for
+<code>_audit</code> data to accumulate on the indexer tier before
+re-running the export script. Historical local <code>_audit</code> data
+will NOT be retroactively forwarded — only new events going forward.</p>
+<h3
+id="option-c-run-queries-manually-and-inject-results-immediate">Option
+C: Run Queries Manually and Inject Results (Immediate)</h3>
+<p>If you cannot configure forwarding and don’t have an MC, run the
+queries manually from a node with access to all data, then inject the
+JSON results into the DMA export archive.</p>
+<p>This is the approach documented in detail below.</p>
+<hr />
+<h2 id="manual-query-set">Manual Query Set</h2>
+<p>Run each query below in Splunk Search &amp; Reporting. Set the time
+picker to <strong>All Time</strong> (the <code>earliest=</code>
+constraint is embedded in each query). Adjust <code>earliest=-90d</code>
+to match your desired analytics period (default is 90 days; use
+<code>-30d</code> for 30 days, <code>-365d</code> for one year).</p>
+<h3 id="prerequisites">Prerequisites</h3>
+<p>Verify your search node has visibility across the deployment:</p>
+<pre class="spl"><code>| rest /services/search/distributed/peers
+| table title, status, server_roles
+| sort title</code></pre>
+<p>You should see all SHC members, indexers, and the license master
+listed with <code>status=Up</code>. If any are missing, the queries
+below will be incomplete.</p>
+<hr />
+<h3 id="query-1-dashboard-views">Query 1: Dashboard Views</h3>
+<p><strong>Purpose</strong>: Identifies which dashboards are actively
+used, by how many users, and how often. This is the most critical query
+for migration prioritization — it determines which dashboards to migrate
+first.</p>
+<p><strong>Save as</strong>:
+<code>dashboard_views_global.json</code></p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted
+  (provenance=&quot;UI:Dashboard:*&quot; OR provenance=&quot;UI:dashboard:*&quot;)
+  user!=&quot;splunk-system-user&quot; earliest=-90d
+| rex field=provenance &quot;UI:[Dd]ashboard:(?&lt;dashboard_name&gt;[\w\-\.]+)&quot;
+| where isnotnull(dashboard_name)
+| eval view_session=user.&quot;_&quot;.floor(_time/30)
+| stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name
+| sort -view_count</code></pre>
+<p><strong>How it works</strong>: Identifies dashboard-triggered
+searches via the <code>provenance</code> field, deduplicates page loads
+using a 30-second session window (multiple panels on one dashboard = one
+view), and aggregates by app and dashboard name.</p>
+<p><strong>Expected results</strong>: Hundreds to thousands of rows in
+an active environment. If you see fewer than 100 rows for an environment
+with 1000+ dashboards, you likely don’t have full <code>_audit</code>
+visibility.</p>
+<hr />
+<h3 id="query-2-user-activity">Query 2: User Activity</h3>
+<p><strong>Purpose</strong>: Shows which users are actively searching in
+each app. Used by the DMA Server to identify key stakeholders and
+high-activity users for each app being migrated.</p>
+<p><strong>Save as</strong>: <code>user_activity_global.json</code></p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted
+  user!=&quot;splunk-system-user&quot; user!=&quot;nobody&quot; earliest=-90d
+| stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user
+| sort -searches</code></pre>
+<p><strong>Expected results</strong>: One row per user per app, with
+search counts. Total searches across all users should be in the
+thousands to hundreds of thousands for active environments.</p>
+<hr />
+<h3 id="query-3-search-type-breakdown">Query 3: Search Type
+Breakdown</h3>
+<p><strong>Purpose</strong>: Categorizes all search activity by type
+(dashboard, scheduled, interactive, acceleration, summarization). Helps
+the migration team understand what kind of workload each app drives.</p>
+<p><strong>Save as</strong>:
+<code>search_patterns_global.json</code></p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted
+  user!=&quot;splunk-system-user&quot; earliest=-90d
+| eval search_type=case(
+    match(provenance, &quot;^UI:[Dd]ashboard:&quot;), &quot;dashboard&quot;,
+    match(search_id, &quot;^(rt_)?scheduler__&quot;), &quot;scheduled&quot;,
+    match(savedsearch_name, &quot;^_ACCELERATE_&quot;), &quot;acceleration&quot;,
+    match(search_id, &quot;^SummaryDirector_&quot;), &quot;summarization&quot;,
+    isnotnull(provenance) AND match(provenance, &quot;^UI:&quot;), &quot;interactive&quot;,
+    1=1, &quot;other&quot;)
+| stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type
+| sort -total_searches</code></pre>
+<p><strong>Expected results</strong>: Multiple rows per app (one per
+search type). The <code>scheduled</code> and <code>dashboard</code>
+types should dominate in most production environments.</p>
+<hr />
+<h3 id="query-4-index-volume-ingestion">Query 4: Index Volume
+(Ingestion)</h3>
+<p><strong>Purpose</strong>: Shows daily ingestion volume per index from
+<code>license_usage.log</code>. Critical for Dynatrace Grail storage
+planning and cost estimation.</p>
+<p><strong>Save as</strong>: <code>index_volume_summary.json</code></p>
+<p><strong>Important</strong>: This query requires access to the
+<strong>license master’s</strong> <code>_internal</code> index. If it
+returns 0 results, the license master is not forwarding data to the
+indexer tier. In that case, run this query directly on the license
+master.</p>
+<pre class="spl"><code>index=_internal source=*license_usage.log type=Usage earliest=-90d
+| eval index_name=idx
+| stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name
+| eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/90, 2)
+| sort -total_gb
+| fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event</code></pre>
+<p><strong>Expected results</strong>: One row per index.
+<code>total_gb</code> should match your license usage dashboard. If
+results are empty, you need to run this query from the license master
+directly.</p>
+<p><strong>Alternative — run on license master</strong>:</p>
+<pre class="spl"><code>| rest splunk_server=&lt;license_master_hostname&gt; /services/data/indexes
+| table title, currentDBSizeMB, totalEventCount, maxTotalDataSizeMB
+| eval total_gb=round(currentDBSizeMB/1024, 2)
+| sort -total_gb</code></pre>
+<hr />
+<h3 id="query-5-alert-firing-stats">Query 5: Alert Firing Stats</h3>
+<p><strong>Purpose</strong>: Shows which saved searches and alerts are
+actively firing, how often, and their success/failure rates. Essential
+for understanding which alerts to prioritize in migration.</p>
+<p><strong>Save as</strong>: <code>alert_firing_global.json</code></p>
+<p><strong>Important</strong>: This query searches
+<code>index=_internal sourcetype=scheduler</code>, which lives on the
+search heads. Same <code>_audit</code>-like visibility issue applies —
+scheduler logs are local to each SH.</p>
+<pre class="spl"><code>index=_internal sourcetype=scheduler earliest=-90d
+| fields _time, app, savedsearch_name, status
+| stats count as total_runs,
+    sum(eval(if(status=&quot;success&quot;,1,0))) as successful,
+    sum(eval(if(status=&quot;skipped&quot;,1,0))) as skipped,
+    sum(eval(if(status!=&quot;success&quot; AND status!=&quot;skipped&quot;,1,0))) as failed,
+    latest(_time) as last_run by app, savedsearch_name
+| sort -total_runs</code></pre>
+<p><strong>Expected results</strong>: One row per saved search per app.
+Active environments with many scheduled searches should show thousands
+of rows.</p>
+<hr />
+<h3 id="query-6-index-event-counts-daily">Query 6: Index Event Counts
+(Daily)</h3>
+<p><strong>Purpose</strong>: Provides daily event count trends per index
+for capacity planning. This is a supplementary query not in the core 6
+but valuable for the DMA Explorer.</p>
+<p><strong>Save as</strong>: <code>index_event_counts_daily.json</code>
+(optional)</p>
+<pre class="spl"><code>index=_internal source=*license_usage.log type=Usage earliest=-90d
+| eval index_name=idx
+| bin _time span=1d
+| stats sum(b) as daily_bytes by index_name, _time
+| eval daily_gb=round(daily_bytes/1024/1024/1024, 2)
+| sort index_name, _time</code></pre>
+<hr />
+<h2 id="placing-files-in-the-export">Placing Files in the Export</h2>
+<p>After exporting each query’s results as JSON from Splunk:</p>
+<h3 id="step-1-extract-the-existing-export-archive">Step 1: Extract the
+existing export archive</h3>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Create working directory</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/dma_manual_inject</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp/dma_manual_inject</span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Extract the existing export archive</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> xzf /path/to/dma_export_<span class="op">&lt;</span>hostname<span class="op">&gt;</span>_<span class="op">&lt;</span>timestamp<span class="op">&gt;</span>.tar.gz</span></code></pre></div>
+<h3 id="step-2-copy-json-files-into-the-analytics-directory">Step 2:
+Copy JSON files into the analytics directory</h3>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Navigate to the usage analytics directory</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="va">EXPORT_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">ls</span> <span class="at">-d</span> dma_export_<span class="pp">*</span><span class="va">)</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics&quot;</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Copy your exported JSON files</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> dashboard_views_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> user_activity_global.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> search_patterns_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb13-9"><a href="#cb13-9" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_volume_summary.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb13-10"><a href="#cb13-10" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> alert_firing_global.json      <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb13-11"><a href="#cb13-11" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_event_counts_daily.json <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span></code></pre></div>
+<h3 id="step-3-re-create-the-archive">Step 3: Re-create the archive</h3>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> czf <span class="st">&quot;</span><span class="va">${EXPORT_DIR}</span><span class="st">.tar.gz&quot;</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">&quot;</span></span></code></pre></div>
+<p>The resulting <code>.tar.gz</code> can be uploaded to the DMA Server
+as a normal export. The DMA Server’s <code>stageUsageAnalytics()</code>
+picks up files from <code>dma_analytics/usage_analytics/</code>
+regardless of whether they were generated by the script or manually
+placed.</p>
+<hr />
+<h2 id="json-format-requirements">JSON Format Requirements</h2>
+<p>When exporting from Splunk Search, use <strong>Export &gt; JSON &gt;
+Results</strong>. Splunk exports results in this format:</p>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode json"><code class="sourceCode json"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;preview&quot;</span><span class="fu">:</span> <span class="kw">false</span><span class="fu">,</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;init_offset&quot;</span><span class="fu">:</span> <span class="dv">0</span><span class="fu">,</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;messages&quot;</span><span class="fu">:</span> <span class="ot">[]</span><span class="fu">,</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;fields&quot;</span><span class="fu">:</span> <span class="ot">[</span><span class="er">...</span><span class="ot">]</span><span class="fu">,</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>  <span class="dt">&quot;results&quot;</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span></span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;app&quot;</span><span class="fu">:</span> <span class="st">&quot;search&quot;</span><span class="fu">,</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;dashboard_name&quot;</span><span class="fu">:</span> <span class="st">&quot;my_dashboard&quot;</span><span class="fu">,</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;view_count&quot;</span><span class="fu">:</span> <span class="st">&quot;142&quot;</span><span class="fu">,</span></span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>      <span class="dt">&quot;unique_users&quot;</span><span class="fu">:</span> <span class="st">&quot;8&quot;</span><span class="fu">,</span></span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>      <span class="er">...</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>    <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>    <span class="er">...</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div>
+<p>The DMA Server reads from the <code>results</code> array. The field
+names must match exactly what the SPL queries produce (they will if you
+copy-paste the queries above without modification).</p>
+<p><strong>Important</strong>: Do NOT use “Export &gt; CSV” or “Export
+&gt; XML” — the DMA Server expects JSON format.</p>
+<hr />
+<h2 id="splunk-rest-api-alternatives">Splunk REST API Alternatives</h2>
+<p>If running SPL queries is not feasible, some data can be gathered via
+REST API calls. These don’t require <code>_audit</code> or
+<code>_internal</code> access but provide less detail:</p>
+<h3 id="index-sizes-no-license_usage.log-needed">Index sizes (no
+license_usage.log needed)</h3>
+<pre class="spl"><code>| rest /services/data/indexes splunk_server=*
+| search title!=_*
+| stats sum(currentDBSizeMB) as total_mb, sum(totalEventCount) as total_events by title
+| eval total_gb=round(total_mb/1024, 2)
+| sort -total_gb</code></pre>
+<h3 id="all-saved-searches-with-schedule-info">All saved searches with
+schedule info</h3>
+<pre class="spl"><code>| rest /servicesNS/-/-/saved/searches splunk_server=local
+| search is_scheduled=1 OR alert.track=1
+| table title, eai:acl.app, cron_schedule, alert.severity, alert.track, disabled, next_scheduled_time
+| rename eai:acl.app as app, title as savedsearch_name</code></pre>
+<h3 id="all-dashboards-with-metadata">All dashboards with metadata</h3>
+<pre class="spl"><code>| rest /servicesNS/-/-/data/ui/views splunk_server=local
+| search isDashboard=1
+| table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, updated
+| rename eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing</code></pre>
+<p>These REST-based queries don’t provide <strong>usage</strong> data
+(who viewed what, how often) but they do provide complete
+<strong>inventory</strong> data (what exists) which is still valuable
+for migration planning.</p>
+<hr />
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="results-on-all-_audit-queries">“0 results” on all _audit
+queries</h3>
+<p><strong>Cause</strong>: The search node has no distributed search
+peers, or peers are down.</p>
+<p><strong>Check</strong>:</p>
+<pre class="spl"><code>| rest /services/search/distributed/peers
+| table title, status, server_roles</code></pre>
+<p>If empty or all status=Down, the node cannot reach any other Splunk
+instances.</p>
+<h3 id="results-only-from-1-2-servers">Results only from 1-2
+servers</h3>
+<p><strong>Cause</strong>: SHC members not forwarding
+<code>_audit</code> to indexers. You’re only seeing the local SH’s
+data.</p>
+<p><strong>Check</strong>:</p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail earliest=-1d
+| stats count by splunk_server
+| sort -count</code></pre>
+<p>If only 1-2 <code>splunk_server</code> values appear, run the queries
+from the Monitoring Console instead.</p>
+<h3 id="dashboard-views-count-seems-too-low">Dashboard views count seems
+too low</h3>
+<p><strong>Cause</strong>: Several possible reasons beyond forwarding: -
+<code>provenance</code> field may not be populated in older Splunk
+versions (pre-7.2) - Dashboard Studio dashboards may log provenance
+differently than Classic XML - Some dashboards may use
+<code>| inputlookup</code> or <code>| rest</code> instead of standard
+search commands, which don’t generate <code>audittrail</code> events</p>
+<p><strong>Check provenance coverage</strong>:</p>
+<pre class="spl"><code>index=_audit sourcetype=audittrail action=search info=granted earliest=-1d
+| stats count by provenance
+| sort -count
+| head 20</code></pre>
+<h3
+id="license_usage.log-returns-0-from-shc-but-works-from-license-master">license_usage.log
+returns 0 from SHC but works from license master</h3>
+<p><strong>Cause</strong>: License master is not forwarding
+<code>_internal</code> to the indexer tier.</p>
+<p><strong>Workaround</strong>: SSH to the license master and run Query
+4 directly, or use:</p>
+<pre class="spl"><code>| rest splunk_server=&lt;license_master_hostname&gt; /services/licenser/usage/license_usage
+| table title, quota, slaves_usage_bytes</code></pre>
+<hr />
+<h2 id="version-history">Version History</h2>
+<table>
+<colgroup>
+<col style="width: 37%" />
+<col style="width: 25%" />
+<col style="width: 37%" />
+</colgroup>
+<thead>
+<tr>
+<th>Version</th>
+<th>Date</th>
+<th>Changes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.0</td>
+<td>April 2026</td>
+<td>Initial document — manual query alternative for distributed SHC
+environments</td>
+</tr>
+</tbody>
+</table>
+    </main>
+
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-logo">Dynatrace Migration Assistant</div>
+            <p>Migration intelligence for Splunk to Dynatrace Gen3 Grail</p>
+            <div class="footer-links">
+                <a href="README-SPLUNK-ENTERPRISE.html">Enterprise Guide</a>
+                <a href="README-SPLUNK-CLOUD.html">Cloud Guide</a>
+                <a href="SCRIPT-GENERATED-ANALYTICS-REFERENCE.html">Analytics</a>
+                <a href="EXPORT-SCHEMA.html">Schema</a>
+            </div>
+            <p class="footer-copyright">DMA Project &bull; Built for Dynatrace Gen3 Platform</p>
+        </div>
+    </footer>
+</body>
+</html>
