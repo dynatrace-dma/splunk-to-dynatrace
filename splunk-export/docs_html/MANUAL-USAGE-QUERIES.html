@@ -739,33 +739,54 @@ caveats as Query 4) <strong>Save as</strong>:
 <p>If <code>_internal</code> is not accessible (Cloud), skip this query.
 The DMA Server can function without daily trend data.</p>
 <hr />
-<h2 id="placing-files-in-the-export">Placing Files in the Export</h2>
-<p>After exporting each query’s results as JSON from Splunk, inject them
-into the DMA export archive.</p>
-<h3 id="step-1-extract-the-existing-export-archive">Step 1: Extract the
-existing export archive</h3>
+<h2 id="delivering-the-files">Delivering the Files</h2>
+<p>After exporting each query’s results as JSON from Splunk, there are
+two ways to get these files into the DMA migration project.</p>
+<h3
+id="option-1-send-to-your-dynatrace-migration-associate-recommended">Option
+1: Send to Your Dynatrace Migration Associate (Recommended)</h3>
+<p>This is the simplest approach. Your Dynatrace associate managing the
+migration project can import the files directly through the DMA Server
+UI.</p>
+<ol type="1">
+<li>Export each query result as JSON (see <a
+href="#json-format-requirements">JSON Format Requirements</a>
+below)</li>
+<li>Place all the <code>.json</code> files into a single
+<code>.zip</code> archive</li>
+<li>Send the <code>.zip</code> to your Dynatrace associate (via email,
+secure file share, or whatever channel you’re using for the migration
+engagement)</li>
+</ol>
+<p>Your Dynatrace associate will: - Open the DMA Server
+<strong>Import</strong> dialog for your project - Drag and drop the
+individual JSON files — the system automatically identifies each file
+type, maps it to the correct canonical filename, and places it in the
+appropriate location within the project - Issue a <strong>Full
+Rebuild</strong> to incorporate the new data into the Project Indexes
+and Data Views</p>
+<h3 id="option-2-inject-into-the-export-archive-advanced">Option 2:
+Inject into the Export Archive (Advanced)</h3>
+<p>If you prefer to handle it yourself, you can place the files directly
+into the export archive before uploading to the DMA Server.</p>
+<p><strong>Step 1: Extract the existing export archive</strong></p>
 <div class="sourceCode" id="cb18"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Create working directory</span></span>
-<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/dma_manual_inject</span>
-<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp/dma_manual_inject</span>
-<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Extract the existing export archive</span></span>
-<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> xzf /path/to/dma_export_<span class="op">&lt;</span>hostname<span class="op">&gt;</span>_<span class="op">&lt;</span>timestamp<span class="op">&gt;</span>.tar.gz</span></code></pre></div>
-<h3 id="step-2-copy-json-files-into-the-analytics-directory">Step 2:
-Copy JSON files into the analytics directory</h3>
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> /tmp/dma_manual_inject</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /tmp/dma_manual_inject</span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> xzf /path/to/dma_export_<span class="op">&lt;</span>hostname<span class="op">&gt;</span>_<span class="op">&lt;</span>timestamp<span class="op">&gt;</span>.tar.gz</span></code></pre></div>
+<p><strong>Step 2: Copy JSON files into the analytics
+directory</strong></p>
 <div class="sourceCode" id="cb19"><pre
-class="sourceCode bash"><code class="sourceCode bash"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Navigate to the usage analytics directory</span></span>
-<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="va">EXPORT_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">ls</span> <span class="at">-d</span> dma_export_<span class="pp">*</span> <span class="kw">|</span> <span class="fu">head</span> <span class="at">-1</span><span class="va">)</span></span>
-<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics&quot;</span></span>
-<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Copy your exported JSON files</span></span>
-<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> dashboard_views_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> user_activity_global.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> search_patterns_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_volume_summary.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb19-10"><a href="#cb19-10" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> alert_firing_global.json      <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
-<span id="cb19-11"><a href="#cb19-11" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_event_counts_daily.json <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span></code></pre></div>
-<h3 id="step-3-re-create-the-archive">Step 3: Re-create the archive</h3>
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a><span class="va">EXPORT_DIR</span><span class="op">=</span><span class="va">$(</span><span class="fu">ls</span> <span class="at">-d</span> dma_export_<span class="pp">*</span> <span class="kw">|</span> <span class="fu">head</span> <span class="at">-1</span><span class="va">)</span></span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics&quot;</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> dashboard_views_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> user_activity_global.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-6"><a href="#cb19-6" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> search_patterns_global.json   <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-7"><a href="#cb19-7" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_volume_summary.json     <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-8"><a href="#cb19-8" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> alert_firing_global.json      <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span>
+<span id="cb19-9"><a href="#cb19-9" aria-hidden="true" tabindex="-1"></a><span class="fu">cp</span> index_event_counts_daily.json <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">/dma_analytics/usage_analytics/&quot;</span></span></code></pre></div>
+<p><strong>Step 3: Re-create the archive</strong></p>
 <div class="sourceCode" id="cb20"><pre
 class="sourceCode bash"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tar</span> czf <span class="st">&quot;</span><span class="va">${EXPORT_DIR}</span><span class="st">.tar.gz&quot;</span> <span class="st">&quot;</span><span class="va">$EXPORT_DIR</span><span class="st">&quot;</span></span></code></pre></div>
 <p>The resulting <code>.tar.gz</code> can be uploaded to the DMA Server

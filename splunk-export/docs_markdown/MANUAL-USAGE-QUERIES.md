@@ -384,29 +384,41 @@ If `_internal` is not accessible (Cloud), skip this query. The DMA Server can fu
 
 ---
 
-## Placing Files in the Export
+## Delivering the Files
 
-After exporting each query's results as JSON from Splunk, inject them into the DMA export archive.
+After exporting each query's results as JSON from Splunk, there are two ways to get these files into the DMA migration project.
 
-### Step 1: Extract the existing export archive
+### Option 1: Send to Your Dynatrace Migration Associate (Recommended)
+
+This is the simplest approach. Your Dynatrace associate managing the migration project can import the files directly through the DMA Server UI.
+
+1. Export each query result as JSON (see [JSON Format Requirements](#json-format-requirements) below)
+2. Place all the `.json` files into a single `.zip` archive
+3. Send the `.zip` to your Dynatrace associate (via email, secure file share, or whatever channel you're using for the migration engagement)
+
+Your Dynatrace associate will:
+- Open the DMA Server **Import** dialog for your project
+- Drag and drop the individual JSON files — the system automatically identifies each file type, maps it to the correct canonical filename, and places it in the appropriate location within the project
+- Issue a **Full Rebuild** to incorporate the new data into the Project Indexes and Data Views
+
+### Option 2: Inject into the Export Archive (Advanced)
+
+If you prefer to handle it yourself, you can place the files directly into the export archive before uploading to the DMA Server.
+
+**Step 1: Extract the existing export archive**
 
 ```bash
-# Create working directory
 mkdir -p /tmp/dma_manual_inject
 cd /tmp/dma_manual_inject
-
-# Extract the existing export archive
 tar xzf /path/to/dma_export_<hostname>_<timestamp>.tar.gz
 ```
 
-### Step 2: Copy JSON files into the analytics directory
+**Step 2: Copy JSON files into the analytics directory**
 
 ```bash
-# Navigate to the usage analytics directory
 EXPORT_DIR=$(ls -d dma_export_* | head -1)
 mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics"
 
-# Copy your exported JSON files
 cp dashboard_views_global.json   "$EXPORT_DIR/dma_analytics/usage_analytics/"
 cp user_activity_global.json     "$EXPORT_DIR/dma_analytics/usage_analytics/"
 cp search_patterns_global.json   "$EXPORT_DIR/dma_analytics/usage_analytics/"
@@ -415,7 +427,7 @@ cp alert_firing_global.json      "$EXPORT_DIR/dma_analytics/usage_analytics/"
 cp index_event_counts_daily.json "$EXPORT_DIR/dma_analytics/usage_analytics/"
 ```
 
-### Step 3: Re-create the archive
+**Step 3: Re-create the archive**
 
 ```bash
 tar czf "${EXPORT_DIR}.tar.gz" "$EXPORT_DIR"
