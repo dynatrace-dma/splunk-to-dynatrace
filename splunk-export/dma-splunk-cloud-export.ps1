@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    DMA Splunk Cloud Export Script v4.6.0 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.6.1 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
@@ -13,7 +13,23 @@
     use dma-splunk-export.sh instead.
 
     This is a functionally equivalent PowerShell port of
-    dma-splunk-cloud-export.sh v4.6.0 for Windows environments.
+    dma-splunk-cloud-export.sh v4.6.1 for Windows environments.
+
+    v4.6.1 Changes (parity with bash v4.6.1 — resume reliability for flaky search heads):
+      - Export-Dashboards: per-app and per-dashboard resume. Cached dashboard
+        listings are reused, and individual dashboards already on disk are
+        skipped. Previous behavior re-fetched everything on every resume.
+      - Export-Alerts: per-app resume. Cached savedsearches.json files are
+        reused on resume.
+      - Export-KnowledgeObjects: per-app resume. Apps whose macros.json
+        already exists are skipped entirely (was 8 REST calls per app).
+      - Start-Collection: removed broken top-level Test-HasCollectedData
+        short-circuits for dashboards/alerts/KO. The previous logic returned
+        "already collected" if even ONE app had data — apps that failed
+        mid-phase were never re-tried by --resume-collect.
+      - (Note: PowerShell uses Invoke-WebRequest, which honours -TimeoutSec
+        reliably, so the bash 4.6.1 OS-level timeout backstop has no
+        equivalent here.)
 
     v4.6.0 Changes (parity with bash v4.6.0, 2026-04-02):
 
@@ -265,7 +281,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.6.0"
+$Script:SCRIPT_VERSION = "4.6.1"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -2626,11 +2642,28 @@ function Export-Dashboards {
         New-Item -ItemType Directory -Path $classicDir -Force | Out-Null
         New-Item -ItemType Directory -Path $studioDir -Force | Out-Null
 
-        # Get dashboards for this app - filter by eai:acl.app
-        $appDashboards = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/data/ui/views" -Data "output_mode=json&count=0&search=eai:acl.app=$app"
+        # v4.6.1: Per-app resume support. If we already have this app's
+        # dashboard listing on disk, reuse it instead of re-querying — that
+        # single REST call is what hangs for minutes per failed app on
+        # flaky search heads. The per-dashboard fetch loop below also
+        # skips dashboards already on disk (see further down).
+        $listingCache = Join-Path $Script:EXPORT_DIR "$app/dashboards/dashboard_list.json"
+        $appDashboards = $null
+        if ($Script:RESUME_MODE -and (Test-Path $listingCache) -and (Get-Item $listingCache).Length -gt 0) {
+            Write-Log "  RESUME: Reusing cached dashboard listing for $app"
+            try {
+                $appDashboards = Get-Content $listingCache -Raw | ConvertFrom-Json
+            } catch {
+                $appDashboards = $null
+            }
+        }
+        if ($null -eq $appDashboards) {
+            # Get dashboards for this app - filter by eai:acl.app
+            $appDashboards = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/data/ui/views" -Data "output_mode=json&count=0&search=eai:acl.app=$app"
+        }
         if ($null -eq $appDashboards) { continue }
 
-        Write-JsonFile -Path (Join-Path $Script:EXPORT_DIR "$app/dashboards/dashboard_list.json") -Data $appDashboards
+        Write-JsonFile -Path $listingCache -Data $appDashboards
 
         # Extract dashboard names - only from dashboards owned by this app
         $entries = @()
@@ -2648,6 +2681,17 @@ function Export-Dashboards {
         foreach ($entry in $entries) {
             $name = $entry.name
             if (-not $name) { continue }
+
+            # v4.6.1: Per-dashboard resume support. Skip the per-dashboard
+            # detail fetch if we already have it on disk in either folder.
+            if ($Script:RESUME_MODE) {
+                $existingClassic = Join-Path $classicDir "${name}.json"
+                $existingStudio = Join-Path $studioDir "${name}.json"
+                if ((Test-Path $existingClassic) -or (Test-Path $existingStudio)) {
+                    Write-DebugLog "RESUME: Skipping $app/$name (already on disk)"
+                    continue
+                }
+            }
 
             $dashDetail = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/data/ui/views/$(ConvertTo-UrlEncoded $name)" -Data "output_mode=json"
             if ($null -eq $dashDetail) { continue }
@@ -2778,6 +2822,27 @@ function Export-Alerts {
     $totalSavedSearches = 0
 
     foreach ($app in $Script:SELECTED_APPS) {
+        # v4.6.1: Per-app resume support. Skip the saved/searches REST call
+        # entirely if this app's savedsearches.json already exists from a
+        # prior run. Without this, --resume-collect re-queries every app
+        # every time and the alerts phase itself can burn the runtime
+        # budget on a flaky search head.
+        $cachedSavedPath = Join-Path $Script:EXPORT_DIR "$app/savedsearches.json"
+        if ($Script:RESUME_MODE -and (Test-Path $cachedSavedPath) -and (Get-Item $cachedSavedPath).Length -gt 0) {
+            try {
+                $cachedSaved = Get-Content $cachedSavedPath -Raw | ConvertFrom-Json
+                if ($cachedSaved -and -not $cachedSaved.error) {
+                    Write-DebugLog "RESUME: Skipping $app saved searches (already on disk)"
+                    if ($cachedSaved.entry) {
+                        $totalSavedSearches += @($cachedSaved.entry).Count
+                    }
+                    continue
+                }
+            } catch {
+                # Cache file unreadable — fall through and re-fetch.
+            }
+        }
+
         $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/saved/searches" -Data "output_mode=json&count=0"
         if ($null -eq $response) { continue }
 
@@ -2996,6 +3061,16 @@ function Export-KnowledgeObjects {
     foreach ($app in $Script:SELECTED_APPS) {
         $appDir = Join-Path $Script:EXPORT_DIR $app
         New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+
+        # v4.6.1: Per-app resume support. The KO phase makes 8 REST calls
+        # per app — for an environment with 300 apps that's 2,400 REST
+        # calls, exactly the kind of work that hangs on a flaky search
+        # head. Skip the entire app if macros.json (the first thing
+        # written) already exists.
+        if ($Script:RESUME_MODE -and (Test-Path (Join-Path $appDir "macros.json"))) {
+            Write-DebugLog "RESUME: Skipping knowledge objects for $app (already on disk)"
+            continue
+        }
 
         # CRITICAL (v4.2.2): Filter ALL knowledge objects by acl.app
         # The REST API returns ALL objects VISIBLE to the app (including globally shared ones)
@@ -5331,28 +5406,35 @@ function Start-Collection {
     }
 
     # Dashboards
+    # v4.6.1: Always call Export-Dashboards in resume mode. The collector
+    # itself now does per-app and per-dashboard resume — see Export-Dashboards.
+    # The previous Test-HasCollectedData "dashboards" check returned true
+    # if even ONE app had a single dashboard JSON, so apps that failed
+    # mid-phase were never re-tried.
     $currentStep++
-    if ($Script:RESUME_MODE -and (Test-HasCollectedData "dashboards")) {
-        Write-Host "  [$currentStep/$totalSteps] Dashboards... ${Script:GREEN}SKIP (already collected)${Script:NC}"
-        $skipped++
+    if ($Script:RESUME_MODE) {
+        Write-Host "  [$currentStep/$totalSteps] Dashboards (resume - fetching only missing items)..."
     } else {
         Write-Host "  [$currentStep/$totalSteps] Collecting dashboards..."
-        Export-Dashboards
-        $collected++
     }
+    Export-Dashboards
+    $collected++
 
     # Alerts
+    # v4.6.1: Always call Export-Alerts in resume mode - per-app resume
+    # is done inside the collector. Same broken-skip rationale as dashboards.
     $currentStep++
-    if ($Script:RESUME_MODE -and (Test-HasCollectedData "alerts")) {
-        Write-Host "  [$currentStep/$totalSteps] Alerts and saved searches... ${Script:GREEN}SKIP (already collected)${Script:NC}"
-        $skipped++
+    if ($Script:RESUME_MODE) {
+        Write-Host "  [$currentStep/$totalSteps] Alerts and saved searches (resume - fetching only missing apps)..."
     } else {
         Write-Host "  [$currentStep/$totalSteps] Collecting alerts and saved searches..."
-        Export-Alerts
-        $collected++
     }
+    Export-Alerts
+    $collected++
 
     # RBAC
+    # RBAC is one global call (not per-app) so the original phase-level
+    # skip is fine here.
     $currentStep++
     if ($Script:RESUME_MODE -and (Test-HasCollectedData "rbac")) {
         Write-Host "  [$currentStep/$totalSteps] Users and roles... ${Script:GREEN}SKIP (already collected)${Script:NC}"
@@ -5364,15 +5446,16 @@ function Start-Collection {
     }
 
     # Knowledge objects
+    # v4.6.1: Always call Export-KnowledgeObjects in resume mode - per-app
+    # resume is done inside the collector. Same broken-skip rationale as dashboards.
     $currentStep++
-    if ($Script:RESUME_MODE -and (Test-HasCollectedData "knowledge_objects")) {
-        Write-Host "  [$currentStep/$totalSteps] Knowledge objects... ${Script:GREEN}SKIP (already collected)${Script:NC}"
-        $skipped++
+    if ($Script:RESUME_MODE) {
+        Write-Host "  [$currentStep/$totalSteps] Knowledge objects (resume - fetching only missing apps)..."
     } else {
         Write-Host "  [$currentStep/$totalSteps] Collecting knowledge objects..."
-        Export-KnowledgeObjects
-        $collected++
     }
+    Export-KnowledgeObjects
+    $collected++
 
     # v4.6.0: When usage is active in resume mode, clear usage-related analytics
     # checkpoints so queries always re-run fresh (previous data may be broken/timed-out).

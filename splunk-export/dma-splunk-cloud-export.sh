@@ -9,7 +9,26 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.0
+#  DMA Splunk Cloud Export Script v4.6.1
+#
+#  v4.6.1 Changes (resume reliability for flaky search heads):
+#    - collect_dashboards: per-app and per-dashboard resume. Cached
+#      dashboard listings are reused, and individual dashboards already
+#      on disk are skipped. Previous behavior re-fetched everything.
+#    - collect_alerts: per-app resume. Cached savedsearches.json files
+#      are reused on resume.
+#    - collect_knowledge_objects: per-app resume. Apps whose macros.json
+#      already exists are skipped entirely (was 8 REST calls per app).
+#    - run_collection: removed broken top-level has_collected_data
+#      short-circuits for dashboards/alerts/KO. The previous logic
+#      returned "already collected" if even ONE app had data — apps
+#      that failed mid-phase were never re-tried by --resume-collect.
+#    - api_call: wrapped curl with `timeout` (or `gtimeout`) as an
+#      OS-level backstop. Some curl builds and TLS 1.3+SNI paths on
+#      Splunk Cloud Victoria do not honour --max-time reliably; we
+#      have observed individual requests hanging for 15-31 minutes
+#      despite --max-time 120. The OS-level timeout forcibly kills
+#      curl at API_TIMEOUT + 30s.
 #
 #  v4.6.0 Changes:
 #    - saved_searches_all.json: uses f= field selection (was 256MB+ raw REST dump on large envs)
@@ -148,7 +167,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.0"
+SCRIPT_VERSION="4.6.1"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -212,7 +231,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="30d"
-SCRIPT_VERSION="4.6.0"
+SCRIPT_VERSION="4.6.1"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -1116,6 +1135,21 @@ api_call() {
   # Add delay for rate limiting
   sleep "$RATE_LIMIT_DELAY"
 
+  # v4.6.1: OS-level timeout backstop. Some curl builds (and some
+  # network paths through TLS 1.3 + SNI on Splunk Cloud Victoria) do not
+  # honour --max-time reliably — we have observed individual requests
+  # hanging for 15-31 minutes despite --max-time 120. Wrap curl in
+  # `timeout` (or macOS `gtimeout`) so the OS forcibly kills it at
+  # API_TIMEOUT + 30s. Without this backstop a single hung request can
+  # consume the entire script's runtime budget waiting on a dead socket.
+  local timeout_cmd=""
+  local hard_deadline=$((API_TIMEOUT + 30))
+  if command -v timeout &>/dev/null; then
+    timeout_cmd="timeout --kill-after=10 ${hard_deadline}"
+  elif command -v gtimeout &>/dev/null; then
+    timeout_cmd="gtimeout --kill-after=10 ${hard_deadline}"
+  fi
+
   while [ $retries -lt $MAX_RETRIES ]; do
     local tmp_file=$(mktemp)
 
@@ -1123,14 +1157,14 @@ api_call() {
       # For GET requests, data must be in URL query params, NOT in -d body
       # Using -d with GET causes curl to send POST, resulting in HTTP 405
       if [ -n "$data" ]; then
-        http_code=$(curl -s -k -w "%{http_code}" -o "$tmp_file" \
+        http_code=$($timeout_cmd curl -s -k -w "%{http_code}" -o "$tmp_file" \
           --connect-timeout "$CONNECT_TIMEOUT" \
           --max-time "$API_TIMEOUT" \
           $CURL_PROXY_ARGS \
           -H "$auth_header" \
           "${url}?${data}")
       else
-        http_code=$(curl -s -k -w "%{http_code}" -o "$tmp_file" \
+        http_code=$($timeout_cmd curl -s -k -w "%{http_code}" -o "$tmp_file" \
           --connect-timeout "$CONNECT_TIMEOUT" \
           --max-time "$API_TIMEOUT" \
           $CURL_PROXY_ARGS \
@@ -1138,7 +1172,7 @@ api_call() {
           "$url?output_mode=json")
       fi
     else
-      http_code=$(curl -s -k -w "%{http_code}" -o "$tmp_file" \
+      http_code=$($timeout_cmd curl -s -k -w "%{http_code}" -o "$tmp_file" \
         --connect-timeout "$CONNECT_TIMEOUT" \
         --max-time "$API_TIMEOUT" \
         $CURL_PROXY_ARGS \
@@ -1147,6 +1181,13 @@ api_call() {
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "$data" \
         "$url")
+    fi
+
+    # When `timeout` kills curl before any HTTP response, the captured
+    # http_code is empty. Treat that as a 000 (timeout/connection error)
+    # so the existing retry logic engages.
+    if [ -z "$http_code" ]; then
+      http_code="000"
     fi
 
     response=$(cat "$tmp_file")
@@ -2693,11 +2734,23 @@ collect_dashboards() {
     mkdir -p "$EXPORT_DIR/$app/dashboards/classic"
     mkdir -p "$EXPORT_DIR/$app/dashboards/studio"
 
-    # Get dashboards for this app
+    # v4.6.1: Per-app resume support. If we already have this app's
+    # dashboard listing on disk from a prior run, reuse it instead of
+    # re-querying — that single REST call is what was hanging for
+    # 5-31 minutes per failed app in large-environment exports. We
+    # still walk the per-dashboard fetch loop below, which itself
+    # skips any dashboards already on disk (see further down).
     local app_dashboards
-    # Use search parameter to filter dashboards that BELONG to this app (not just visible from it)
-    # The eai:acl.app field indicates which app owns the dashboard
-    app_dashboards=$(api_call "/servicesNS/-/$app/data/ui/views" "GET" "output_mode=json&count=0&search=eai:acl.app=$app")
+    local listing_cache="$EXPORT_DIR/$app/dashboards/dashboard_list.json"
+    if [ "$RESUME_MODE" = "true" ] && [ -s "$listing_cache" ]; then
+      log "  RESUME: Reusing cached dashboard listing for $app"
+      app_dashboards=$(cat "$listing_cache")
+    else
+      # Get dashboards for this app
+      # Use search parameter to filter dashboards that BELONG to this app (not just visible from it)
+      # The eai:acl.app field indicates which app owns the dashboard
+      app_dashboards=$(api_call "/servicesNS/-/$app/data/ui/views" "GET" "output_mode=json&count=0&search=eai:acl.app=$app")
+    fi
 
     if [ $? -eq 0 ]; then
       echo "$app_dashboards" > "$EXPORT_DIR/$app/dashboards/dashboard_list.json"
@@ -2726,6 +2779,18 @@ except:
 
       while IFS= read -r name; do
         if [ -n "$name" ]; then
+          # v4.6.1: Per-dashboard resume support. Skip the per-dashboard
+          # detail fetch if we already have it on disk (from either
+          # classic/ or studio/). Without this, --resume-collect would
+          # re-fetch every dashboard in every app on every retry, even
+          # ones that already succeeded.
+          if [ "$RESUME_MODE" = "true" ] && \
+             { [ -f "$EXPORT_DIR/$app/dashboards/classic/${name}.json" ] || \
+               [ -f "$EXPORT_DIR/$app/dashboards/studio/${name}.json" ]; }; then
+            debug_log "RESUME" "  Skipping $app/$name (already on disk)"
+            continue
+          fi
+
           local dash_detail
           dash_detail=$(api_call "/servicesNS/-/$app/data/ui/views/$name" "GET" "output_mode=json")
           if [ $? -eq 0 ]; then
@@ -2844,6 +2909,24 @@ collect_alerts() {
   local total_saved_searches=0
 
   for app in "${SELECTED_APPS[@]}"; do
+    # v4.6.1: Per-app resume support. Skip the saved/searches REST call
+    # entirely if this app's savedsearches.json already exists from a
+    # prior run. Without this, --resume-collect would re-query every
+    # app every time and the alerts phase could itself burn the entire
+    # runtime budget on a flaky search head.
+    if [ "$RESUME_MODE" = "true" ] && \
+       [ -s "$EXPORT_DIR/$app/savedsearches.json" ] && \
+       ! grep -q '"error"' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null; then
+      debug_log "RESUME" "  Skipping $app saved searches (already on disk)"
+      # Still update the running totals from the cached file so the
+      # final summary numbers are accurate after resume.
+      if $HAS_JQ; then
+        local cached_saved=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+        ((total_saved_searches += cached_saved))
+      fi
+      continue
+    fi
+
     local response
     response=$(api_call "/servicesNS/-/$app/saved/searches" "GET" "output_mode=json&count=0")
 
@@ -4016,6 +4099,18 @@ collect_knowledge_objects() {
 
   for app in "${SELECTED_APPS[@]}"; do
     mkdir -p "$EXPORT_DIR/$app"
+
+    # v4.6.1: Per-app resume support. The KO phase makes 8 REST calls
+    # per app (macros, eventtypes, tags, field_extractions, inputs,
+    # props, transforms, lookups). For an environment with 300 apps
+    # that's 2,400 REST calls — and on a flaky search head, those are
+    # exactly the calls that hang. Skip the entire app if we have
+    # macros.json (the first thing the loop writes) — the existence
+    # of that file means we already finished this app in a prior run.
+    if [ "$RESUME_MODE" = "true" ] && [ -f "$EXPORT_DIR/$app/macros.json" ]; then
+      debug_log "RESUME" "  Skipping knowledge objects for $app (already on disk)"
+      continue
+    fi
 
     # CRITICAL (v4.2.2): Filter ALL knowledge objects by acl.app
     # The REST API returns ALL objects VISIBLE to the app (including globally shared ones)
@@ -5704,28 +5799,35 @@ run_collection() {
   fi
 
   # Dashboards
+  # v4.6.1: Always call collect_dashboards in resume mode. The collector
+  # itself now does per-app and per-dashboard resume — see collect_dashboards.
+  # The previous top-level skip was broken: has_collected_data "dashboards"
+  # returned true if even ONE app had a single dashboard JSON, so apps that
+  # failed mid-phase (e.g. McKinsey's 73 dropped apps) were never re-tried.
   ((current_step++))
-  if [ "$RESUME_MODE" = "true" ] && has_collected_data "dashboards"; then
-    echo -e "  [${current_step}/${total_steps}] Dashboards... ${GREEN}SKIP (already collected)${NC}"
-    ((skipped++))
+  if [ "$RESUME_MODE" = "true" ]; then
+    echo -e "  [${current_step}/${total_steps}] Dashboards (resume — fetching only missing items)..."
   else
     echo -e "  [${current_step}/${total_steps}] Collecting dashboards..."
-    collect_dashboards
-    ((collected++))
   fi
+  collect_dashboards
+  ((collected++))
 
   # Alerts
+  # v4.6.1: Always call collect_alerts in resume mode — per-app resume is
+  # done inside the collector. Same broken-skip rationale as dashboards.
   ((current_step++))
-  if [ "$RESUME_MODE" = "true" ] && has_collected_data "alerts"; then
-    echo -e "  [${current_step}/${total_steps}] Alerts and saved searches... ${GREEN}SKIP (already collected)${NC}"
-    ((skipped++))
+  if [ "$RESUME_MODE" = "true" ]; then
+    echo -e "  [${current_step}/${total_steps}] Alerts and saved searches (resume — fetching only missing apps)..."
   else
     echo -e "  [${current_step}/${total_steps}] Collecting alerts and saved searches..."
-    collect_alerts
-    ((collected++))
   fi
+  collect_alerts
+  ((collected++))
 
   # RBAC
+  # RBAC is one global call (not per-app) so the original phase-level
+  # skip is fine here.
   ((current_step++))
   if [ "$RESUME_MODE" = "true" ] && has_collected_data "rbac"; then
     echo -e "  [${current_step}/${total_steps}] Users and roles... ${GREEN}SKIP (already collected)${NC}"
@@ -5737,15 +5839,16 @@ run_collection() {
   fi
 
   # Knowledge objects
+  # v4.6.1: Always call collect_knowledge_objects in resume mode — per-app
+  # resume is done inside the collector. Same broken-skip rationale as dashboards.
   ((current_step++))
-  if [ "$RESUME_MODE" = "true" ] && has_collected_data "knowledge_objects"; then
-    echo -e "  [${current_step}/${total_steps}] Knowledge objects... ${GREEN}SKIP (already collected)${NC}"
-    ((skipped++))
+  if [ "$RESUME_MODE" = "true" ]; then
+    echo -e "  [${current_step}/${total_steps}] Knowledge objects (resume — fetching only missing apps)..."
   else
     echo -e "  [${current_step}/${total_steps}] Collecting knowledge objects..."
-    collect_knowledge_objects
-    ((collected++))
   fi
+  collect_knowledge_objects
+  ((collected++))
 
   # When COLLECT_USAGE is active and we're in resume mode, clear all usage-
   # related analytics checkpoints so queries always re-run fresh. Previous

@@ -1,6 +1,6 @@
 # DMA Splunk Export Scripts
 
-**Version**: 4.6.0
+**Version**: 4.6.1
 **Last Updated**: April 2026
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
@@ -411,6 +411,68 @@ Add `--debug` (Bash) or `-Debug_Mode` (PowerShell) for detailed diagnostics:
 - **API calls**: Logs every request with endpoint, HTTP status, response size, and duration
 - **Auth**: Logs token probe responses and final header format
 - **Search jobs**: Logs SID dispatch, poll states, completion time
+
+---
+
+## Release Notes
+
+### v4.6.1 — Resume reliability for flaky search heads
+
+A point release focused entirely on making `--resume-collect` actually
+recover from partial dashboard / alert / knowledge-object collection
+runs. No new features, no behavior changes when running fresh — only
+fixes that matter when a previous export was interrupted or had per-app
+REST timeouts against an overloaded Splunk Cloud search head.
+
+**Bash (`dma-splunk-cloud-export.sh`) and PowerShell (`dma-splunk-cloud-export.ps1`):**
+
+- **Per-app and per-dashboard resume in dashboard collection.** The
+  collector now reuses cached `dashboard_list.json` files and skips
+  individual dashboards already on disk. Previously, every resume run
+  re-fetched everything in every app — including apps and dashboards
+  that had already succeeded.
+- **Per-app resume in alert / saved-search collection.** Apps whose
+  `savedsearches.json` already exists are skipped on resume.
+- **Per-app resume in knowledge-object collection.** Apps whose
+  `macros.json` already exists are skipped entirely (the KO phase
+  makes 8 REST calls per app — for an environment with 300 apps that
+  is 2,400 REST calls saved on every resume).
+- **Removed broken phase-level skip logic.** The previous "phase
+  already complete" check returned true if even **one** app had data
+  on disk, so apps that failed mid-phase were never re-tried by
+  `--resume-collect`. The collectors above now handle skip decisions
+  themselves at per-item granularity.
+
+**Bash only:**
+
+- **OS-level `timeout` backstop on every curl call.** We have observed
+  individual REST calls hanging for 15-31 minutes against Splunk Cloud
+  Victoria search heads despite curl's `--max-time 120` setting — some
+  curl builds and TLS 1.3 + SNI network paths do not honour
+  `--max-time` reliably. The script now wraps curl in `timeout` (or
+  `gtimeout` on macOS) so the OS forcibly kills the request at
+  `API_TIMEOUT + 30s`. The PowerShell script uses
+  `Invoke-WebRequest -TimeoutSec`, which honours its timeout reliably,
+  so no equivalent change was needed there.
+
+**Recommended environment variables when running `--resume-collect` against a flaky search head:**
+
+```bash
+API_TIMEOUT=30 MAX_TOTAL_TIME=86400 ./dma-splunk-cloud-export.sh \
+  --resume-collect <archive>.tar.gz \
+  --stack <stack>.splunkcloud.com --token "$TOKEN"
+```
+
+`API_TIMEOUT=30` makes failed requests give up in 30s instead of 120s
+(combined with the new OS backstop, this caps a failed retry triplet
+at ~3 minutes instead of ~31 minutes). `MAX_TOTAL_TIME=86400` raises
+the script's overall safety ceiling from 12 hours to 24 hours, giving
+plenty of headroom for very large environments.
+
+The Enterprise script (`dma-splunk-export.sh`) was not modified in
+this release — it reads configuration files directly from the Splunk
+filesystem and does not have the per-app REST hang failure mode that
+motivated the v4.6.1 fixes.
 
 ---
 
