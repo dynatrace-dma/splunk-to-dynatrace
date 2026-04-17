@@ -167,7 +167,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.1"
+SCRIPT_VERSION="4.6.2"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -231,7 +231,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="30d"
-SCRIPT_VERSION="4.6.1"
+SCRIPT_VERSION="4.6.2"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -2379,7 +2379,7 @@ except Exception as e:
       continue
     fi
     # Skip framework/system/default apps that have no user content
-    if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|search|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
+    if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
       ((i++))
       continue
     fi
