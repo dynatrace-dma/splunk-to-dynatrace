@@ -92,6 +92,34 @@ Re-run the export with `--test-access` first to verify:
   This gives you the alert/saved search inventory (what exists and its schedule) but not firing history (how often it ran and whether it succeeded).
 - **Query 6** (daily event counts): Same as Query 4 — `_internal` may be unavailable. Skip this on Cloud if Query 4 isn't accessible.
 
+### Important: Inherent Splunk Cloud Usage Data Limitations
+
+Even with correct permissions and full `_audit` access, usage analytics data on Splunk Cloud will be **inherently less complete** than on Splunk Enterprise. These are platform limitations, not configuration issues:
+
+#### Dashboard View Counts
+
+| Limitation | Impact | Explanation |
+|-----------|--------|-------------|
+| **Low view-count coverage** | Typically only 5-15% of dashboards show any view data | Most dashboards in large environments are created but rarely or never viewed. A Splunk Cloud environment with 2,000 dashboards may show only 100-300 with any view count. This is normal and expected. |
+| **View tracking depends on `splunk_web_access`** | Views from API clients, embedded iframes, or Splunk Mobile are not counted | Only browser-based access through the Splunk Web UI generates view tracking events. Programmatic access to dashboard definitions via REST API does not register as a "view." |
+| **SHC captain elections reset counters** | Short-lived view counts after cluster events | Splunk Cloud search head clusters periodically elect new captains. Some in-memory view counters reset during this process, resulting in artificially low counts. |
+
+#### Alert and Scheduled Search Firing Stats
+
+| Limitation | Impact | Explanation |
+|-----------|--------|-------------|
+| **Active alerts with zero run counts** | Alerts marked `is_scheduled=1` in the config may show no firing history | The `triggered_alert_count` counter on the `/services/saved/searches` REST endpoint resets when an alert is modified, when the search head restarts, or during SHC captain transfers. An alert that has been running for years may show 0 runs if it was recently edited. |
+| **`_internal` scheduler logs unavailable** | No `sourcetype=scheduler` data for run success/failure/skip breakdown | Splunk Cloud does not expose `_internal` to tenant users. The scheduler action logs (`action_results`) that show whether each run succeeded, skipped, or failed are not queryable. The REST endpoint provides only `triggered_alert_count`, not the detailed breakdown. |
+| **SHC member distribution** | Firing data may be partial | In a Splunk Cloud SHC, scheduled searches are distributed across multiple members. REST queries hit the captain, which aggregates counts, but transient member issues or recent rebalances can cause undercounting. |
+| **Disabled-but-configured alerts** | Alerts show as "active" in config but never fire | An alert can have `disabled=0` in its config but be effectively disabled by Splunk Cloud administrators at the infrastructure level (e.g., suppressed by the monitoring console, skipped due to resource limits). The export captures the configuration state, not the runtime state. |
+
+#### What This Means for Migration Planning
+
+- **Dashboard view counts should be used as directional guidance, not absolute numbers.** A dashboard with 0 views may still be actively used via API, mobile, or embedded integrations.
+- **Alert firing stats represent a lower bound.** An active alert with 0 recorded runs should not be assumed to be unused — the counter may have reset.
+- **For critical migration decisions (keep vs. exclude), verify usage directly with the customer's Splunk administrators** rather than relying solely on the analytics data.
+- **The LOE estimate is not affected by usage data.** Usage data informs prioritization (which dashboards to migrate first) but does not change the total estimated effort.
+
 ---
 
 ## Splunk Enterprise
