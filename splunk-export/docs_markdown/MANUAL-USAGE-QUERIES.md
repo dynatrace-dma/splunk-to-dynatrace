@@ -22,6 +22,29 @@ The DMA export scripts run 6 global analytics queries against `index=_audit` and
 | **Splunk Cloud** | `dma-splunk-cloud-export.sh`, `dma-splunk-cloud-export.ps1` | Token missing `index_audit` or `index_internal` capabilities; restricted `_audit` access in Victoria Experience stacks; Cloud-managed infrastructure hides `_internal` from tenants |
 | **Splunk Enterprise** | `dma-splunk-export.sh` | SHC members not forwarding `_audit` to indexers; license master not forwarding `_internal`; service account lacking `admin_all_objects` capability |
 
+### CRITICAL: File Naming Requirements
+
+> **The DMA Server will NOT recognize your files if they are named incorrectly.**
+>
+> When you export query results from Splunk, Splunk names the file something like `search_results_1713456789.json` or `export.json`. **You MUST rename each file to the exact filename listed below BEFORE sending to your Dynatrace associate or injecting into the archive.**
+>
+> | Query | Required Filename (exact, case-sensitive) |
+> |-------|------------------------------------------|
+> | Query 1 — Dashboard Views | **`dashboard_views_global.json`** |
+> | Query 2 — User Activity | **`user_activity_global.json`** |
+> | Query 3 — Search Patterns | **`search_patterns_global.json`** |
+> | Query 4 — Index Volume | **`index_volume_summary.json`** |
+> | Query 5 — Alert Firing | **`alert_firing_global.json`** |
+> | Query 6 — Daily Event Counts | **`index_event_counts_daily.json`** |
+>
+> **Wrong**: `export.json`, `search_results.json`, `Query1.json`, `dashboard_views.json`, `Dashboard_Views_Global.json`
+>
+> **Right**: `dashboard_views_global.json` (lowercase, exact match, no spaces)
+>
+> If any file is named incorrectly, the DMA Server will silently ignore it and the corresponding usage data will not appear in the Explorer.
+
+---
+
 ### Symptoms of This Problem
 
 | Symptom | Expected | Possible Cause |
@@ -256,7 +279,7 @@ If this returns 0, your user/token does not have `_audit` access. Log in as `sc_
 **Purpose**: Identifies which dashboards are actively used, by how many users, and how often. This is the most critical query for migration prioritization — it determines which dashboards to migrate first.
 
 **Requires**: `_audit` access
-**Save as**: `dashboard_views_global.json`
+⚠️ **Save as (exact filename required)**: `dashboard_views_global.json`
 
 ```spl
 index=_audit sourcetype=audittrail action=search info=granted
@@ -280,7 +303,7 @@ index=_audit sourcetype=audittrail action=search info=granted
 **Purpose**: Shows which users are actively searching in each app. Used by the DMA Server to identify key stakeholders and high-activity users for each app being migrated.
 
 **Requires**: `_audit` access
-**Save as**: `user_activity_global.json`
+⚠️ **Save as (exact filename required)**: `user_activity_global.json`
 
 ```spl
 index=_audit sourcetype=audittrail action=search info=granted
@@ -298,7 +321,7 @@ index=_audit sourcetype=audittrail action=search info=granted
 **Purpose**: Categorizes all search activity by type (dashboard, scheduled, interactive, acceleration, summarization). Helps the migration team understand what kind of workload each app drives.
 
 **Requires**: `_audit` access
-**Save as**: `search_patterns_global.json`
+⚠️ **Save as (exact filename required)**: `search_patterns_global.json`
 
 ```spl
 index=_audit sourcetype=audittrail action=search info=granted
@@ -323,7 +346,7 @@ index=_audit sourcetype=audittrail action=search info=granted
 **Purpose**: Shows daily ingestion volume per index from `license_usage.log`. Critical for Dynatrace Grail storage planning and cost estimation.
 
 **Requires**: `_internal` access (often unavailable on Splunk Cloud — see alternative below)
-**Save as**: `index_volume_summary.json`
+⚠️ **Save as (exact filename required)**: `index_volume_summary.json`
 
 ```spl
 index=_internal source=*license_usage.log type=Usage earliest=-90d
@@ -364,7 +387,7 @@ index=_internal source=*license_usage.log type=Usage earliest=-90d
 **Purpose**: Shows which saved searches and alerts are actively firing, how often, and their success/failure rates. Essential for understanding which alerts to prioritize in migration.
 
 **Requires**: `_internal` access (often unavailable on Splunk Cloud — see alternative below)
-**Save as**: `alert_firing_global.json`
+⚠️ **Save as (exact filename required)**: `alert_firing_global.json`
 
 ```spl
 index=_internal sourcetype=scheduler earliest=-90d
@@ -397,7 +420,7 @@ index=_internal sourcetype=scheduler earliest=-90d
 **Purpose**: Provides daily event count trends per index for capacity planning. Supplementary to Query 4.
 
 **Requires**: `_internal` access (same caveats as Query 4)
-**Save as**: `index_event_counts_daily.json` (optional)
+⚠️ **Save as (exact filename required)**: `index_event_counts_daily.json` (optional)
 
 ```spl
 index=_internal source=*license_usage.log type=Usage earliest=-90d
@@ -415,6 +438,8 @@ If `_internal` is not accessible (Cloud), skip this query. The DMA Server can fu
 ## Delivering the Files
 
 After exporting each query's results as JSON from Splunk, there are two ways to get these files into the DMA migration project.
+
+> **REMINDER: Rename every file before sending.** Splunk exports files with generic names like `export.json`. Each file MUST be renamed to the exact canonical filename listed in the [File Naming Requirements](#critical-file-naming-requirements) table above. The DMA Server matches files by exact filename — incorrect names are silently ignored.
 
 ### Option 1: Send to Your Dynatrace Migration Associate (Recommended)
 
