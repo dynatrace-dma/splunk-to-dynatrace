@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    DMA Splunk Cloud Export Script v4.6.1 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.6.2 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
@@ -13,7 +13,11 @@
     use dma-splunk-export.sh instead.
 
     This is a functionally equivalent PowerShell port of
-    dma-splunk-cloud-export.sh v4.6.1 for Windows environments.
+    dma-splunk-cloud-export.sh v4.6.2 for Windows environments.
+
+    v4.6.2 Changes (parity with bash v4.6.2):
+      - 'search' app is now exported. Previously excluded as a system app, but
+        customers create dashboards and saved searches in it.
 
     v4.6.1 Changes (parity with bash v4.6.1 — resume reliability for flaky search heads):
       - Export-Dashboards: per-app and per-dashboard resume. Cached dashboard
@@ -281,7 +285,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.6.1"
+$Script:SCRIPT_VERSION = "4.6.2"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -2256,7 +2260,7 @@ function Select-Applications {
         # Skip Splunk Support Add-ons
         if ($appName -match '^SA-') { continue }
         # Skip framework/system/default apps
-        if ($appName -match '^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|search|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$') { continue }
+        if ($appName -match '^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$') { continue }
         $filteredApps += $appName
     }
 
