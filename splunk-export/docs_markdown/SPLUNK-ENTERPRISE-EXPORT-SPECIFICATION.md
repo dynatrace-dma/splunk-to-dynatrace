@@ -1,6 +1,6 @@
 # DMA Splunk Enterprise Export Script -- Technical Specification
 
-## Version 4.6.0
+## Version 4.6.2
 
 **Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise README](README-SPLUNK-ENTERPRISE.md) | [Export Schema](EXPORT-SCHEMA.md)

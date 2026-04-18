@@ -1,11 +1,23 @@
 # DMA Splunk Enterprise Export Script
 
-**Version**: 4.6.0
+**Version**: 4.6.2
 **Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise Export Specification](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | [Manual Usage Queries (SHC/Distributed)](MANUAL-USAGE-QUERIES.md) | For Splunk Cloud exports, see [Cloud Export README](README-SPLUNK-CLOUD.md)
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
 > *An ACE Services Division of Dynatrace*
+
+---
+
+## Recent Changes
+
+### v4.6.2 (April 2026)
+- **`search` app is now exported.** Previously excluded as a "system app," but customers create dashboards and saved searches in it.
+
+### v4.6.1 (April 2026)
+- **Per-app and per-dashboard resume** for `--resume-collect` — only incomplete items are re-collected, not the entire phase.
+- **OS-level timeout backstop** for API calls — wraps curl with `timeout`/`gtimeout` to handle TLS hangs.
+- **`--resume-collect` with `--usage`** forces analytics re-collection to prevent stale data.
 
 ---
 

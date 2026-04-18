@@ -1,6 +1,6 @@
 # DMA Splunk Cloud Export — Detailed Guide
 
-**Version**: 4.6.0
+**Version**: 4.6.2
 **Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | [Manual Usage Queries](MANUAL-USAGE-QUERIES.md) | [Export Schema](EXPORT-SCHEMA.md)
 
@@ -36,7 +36,20 @@
 
 ---
 
-## What's New in v4.6.0
+## What's New
+
+### v4.6.2 (April 2026)
+
+- **`search` app is now exported.** Previously excluded as a "system app," but customers frequently create dashboards and saved searches in it. One customer had 674 dashboards (30% of total) silently dropped because the `search` app was in the skip list.
+
+### v4.6.1 (April 2026)
+
+- **Per-app and per-dashboard resume for `--resume-collect`.** Previously, if the script was interrupted mid-phase, resume would skip the entire phase if even one app had data. Now each app and dashboard is checked individually — only truly incomplete items are re-collected.
+- **Per-app resume for alerts and knowledge objects.** Apps with cached `savedsearches.json` or `macros.json` are skipped individually on resume rather than re-querying everything.
+- **OS-level timeout backstop for API calls.** Some Splunk Cloud Victoria stacks with TLS 1.3+SNI don't honor curl's `--max-time`. The script now wraps curl with `timeout`/`gtimeout` as a hard kill at `API_TIMEOUT + 30s`.
+- **`--resume-collect` with `--usage` now forces analytics re-collection.** Clears usage checkpoints to prevent stale data from a prior interrupted run.
+
+### v4.6.0
 
 ### Stripped Usage Queries — Global Aggregates Only
 

@@ -4,7 +4,7 @@
 
 This document defines the **guaranteed output schema** for all DMA Splunk exports. Regardless of Splunk environment size, version, or deployment type, exports MUST conform to this schema so DMA can reliably parse them.
 
-> **Applies to all export scripts (v4.6.0):**
+> **Applies to all export scripts (v4.6.2):**
 > - `dma-splunk-export.sh` (Enterprise, Bash)
 > - `dma-splunk-cloud-export.sh` (Cloud, Bash)
 > - `dma-splunk-cloud-export.ps1` (Cloud, PowerShell)

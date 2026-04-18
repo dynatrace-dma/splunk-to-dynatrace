@@ -1,6 +1,6 @@
 # Interactive Mode Walkthrough
 
-**Applies to**: All DMA Export Scripts v4.6.0
+**Applies to**: All DMA Export Scripts v4.6.2
 
 This document shows exactly what you will see when running each script in interactive mode. When all required parameters are provided on the command line, the scripts run in **non-interactive mode** and skip all prompts.
 
@@ -76,7 +76,7 @@ Script: `dma-splunk-cloud-export.sh`
 ║                   SPLUNK CLOUD EXPORT SCRIPT                               ║
 ║                                                                            ║
 ║          Complete REST API-Based Data Collection for Migration              ║
-║                        Version 4.6.0                                       ║
+║                        Version 4.6.2                                       ║
 ║                                                                            ║
 ║   Developed for Dynatrace One by Enterprise Solutions & Architecture       ║
 ║                  An ACE Services Division of Dynatrace                     ║
@@ -487,7 +487,7 @@ The Enterprise script follows a similar flow but includes additional steps for d
 ║                SPLUNK ENTERPRISE EXPORT SCRIPT                             ║
 ║                                                                            ║
 ║          Complete Data Collection for Migration to Dynatrace Gen3          ║
-║                        Version 4.6.0                                       ║
+║                        Version 4.6.2                                       ║
 ║                                                                            ║
 ║   Developed for Dynatrace One by Enterprise Solutions & Architecture       ║
 ║                  An ACE Services Division of Dynatrace                     ║
@@ -886,7 +886,7 @@ Script: `dma-splunk-cloud-export.ps1`
 
 The PowerShell script follows the same interactive flow as the Bash Cloud script with identical steps:
 
-1. **Banner** -- same ASCII art and version display (shows "Version 4.6.0 (PowerShell)")
+1. **Banner** -- same ASCII art and version display (shows "Version 4.6.2 (PowerShell)")
 2. **Pre-Flight Checklist** -- same checklist with system checks
 3. **Stack URL** -- same prompt for Splunk Cloud URL
 4. **Proxy** -- same optional proxy prompt
