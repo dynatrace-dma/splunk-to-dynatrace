@@ -58,11 +58,22 @@ The DMA export scripts run 6 global analytics queries against `index=_audit` and
 
 ## Splunk Cloud
 
-### Recommended Approach for Cloud
+### What You Need: `_audit` Access
 
-On Splunk Cloud, the `_audit` and `_internal` indexes are frequently restricted or unavailable to tenant users. **Do not start with the `_audit`/`_internal` queries below** — they will likely return incomplete or empty results.
+On Splunk Cloud, **dashboard views and alert firing history require `_audit` index access**. There is no reliable alternative — the REST API endpoints do not provide historical usage data, and other internal indexes (`_internal`, `_telemetry`, `_introspection`) are either restricted or do not contain the data needed.
 
-Instead, use the **Splunk Cloud Recommended Queries** in this section. These use the Monitoring Console, `_telemetry`, REST API endpoints, and `_introspection` — data sources that are reliably accessible on Splunk Cloud without special index permissions.
+**Before running any queries, confirm your user/token has `_audit` access:**
+
+```spl
+index=_audit earliest=-1h | stats count
+```
+
+If this returns 0, you need to either:
+- Log in as `sc_admin` (which has `_audit` access by default)
+- Ask your Splunk Cloud administrator to grant the `index_audit` capability to your role/token
+- File a support case with Splunk to enable `_audit` access for your admin role
+
+> **If `_audit` access cannot be obtained**: Dashboard view counts and alert firing history will be unavailable. The remaining queries (search patterns, index volume) use REST endpoints that work without special permissions. See [Queries That Work Without `_audit`](#queries-that-work-without-_audit-cloud) below.
 
 ### How to Run
 
@@ -75,24 +86,24 @@ Instead, use the **Splunk Cloud Recommended Queries** in this section. These use
 
 ---
 
-### Cloud Query 1: Dashboard Views
+### Cloud Query 1: Dashboard Views (requires `_audit`)
 
-Uses `_telemetry` (UI activity tracking) which is available on most Splunk Cloud stacks and does not require `_audit` access. Falls back to `_audit` if `_telemetry` is unavailable.
+This is the same query as the Enterprise version. It uses the `_audit` index with the `provenance` field to track dashboard-triggered searches. **There is no REST-based alternative that provides view counts.**
 
 ⚠️ **Save as (exact filename required)**: `dashboard_views_global.json`
 
 ```spl
-| tstats count WHERE index=_telemetry sourcetype=splunk_telemetry component=UiActivity data.action=pageview earliest=-90d BY data.to, data.user
-| rename data.to as page, data.user as user
-| rex field=page "/app/(?<app>[^/]+)/(?<dashboard_name>[^?]+)"
-| where isnotnull(dashboard_name) AND isnotnull(app)
-| stats sum(count) as view_count, dc(user) as unique_users, values(user) as viewers by app, dashboard_name
+index=_audit sourcetype=audittrail action=search info=granted
+  (provenance="UI:Dashboard:*" OR provenance="UI:dashboard:*")
+  user!="splunk-system-user" earliest=-90d
+| rex field=provenance "UI:[Dd]ashboard:(?<dashboard_name>[\w\-\.]+)"
+| where isnotnull(dashboard_name)
+| eval view_session=user."_".floor(_time/30)
+| stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name
 | sort -view_count
 ```
 
-**If `_telemetry` returns 0 results**, try the `_audit` version instead (Query 1 in the [Manual Query Set](#manual-query-set) below). Some Cloud stacks have `_audit` but not `_telemetry`.
-
-**If neither works**, use this REST-based alternative that shows dashboard metadata (no view counts, but confirms which dashboards exist and who owns them):
+**If `_audit` is unavailable**, this data cannot be collected. Use this REST fallback to at least capture dashboard inventory and ownership (no view counts):
 
 ```spl
 | rest /servicesNS/-/-/data/ui/views
@@ -105,22 +116,24 @@ Uses `_telemetry` (UI activity tracking) which is available on most Splunk Cloud
 
 ---
 
-### Cloud Query 2: User Activity
+### Cloud Query 2: User Activity (requires `_audit`)
 
 ⚠️ **Save as (exact filename required)**: `user_activity_global.json`
 
 ```spl
-| tstats count WHERE index=_telemetry sourcetype=splunk_telemetry component=UiActivity earliest=-90d BY data.user, data.to
-| rename data.user as user, data.to as page
-| rex field=page "/app/(?<app>[^/]+)/"
-| where isnotnull(app) AND user!="splunk-system-user"
-| stats sum(count) as search_count, dc(app) as app_count, values(app) as apps by user
+index=_audit sourcetype=audittrail action=search info=granted
+  user!="splunk-system-user" earliest=-90d
+| stats count as search_count, dc(app) as app_count, values(app) as apps by user
 | sort -search_count
 ```
 
-**If `_telemetry` is unavailable**, use the `_audit` version (Query 2 in the [Manual Query Set](#manual-query-set) below).
+**If `_audit` is unavailable**, this data cannot be collected. Skip this file.
 
 ---
+
+### Queries That Work Without `_audit` (Cloud)
+
+The following queries use REST endpoints and work on all Splunk Cloud stacks without special index permissions.
 
 ### Cloud Query 3: Search Patterns
 
@@ -129,16 +142,16 @@ Uses `_telemetry` (UI activity tracking) which is available on most Splunk Cloud
 ```spl
 | rest /servicesNS/-/-/saved/searches
 | eval search_type=case(
-    alert.track=="1" OR actions!="", "alert",
-    is_scheduled=="1", "report",
-    1==1, "ad_hoc"
+    alert.track=="1" OR alert.track=="true" OR (isnotnull(actions) AND actions!="" AND alert.track!="0"), "alert",
+    is_scheduled=="1" OR is_scheduled=="true", "report",
+    1==1, "saved_search"
   )
 | stats count by eai:acl.app, search_type
 | rename eai:acl.app as app
 | sort app, search_type
 ```
 
-This REST-based query works on all Cloud stacks and gives an accurate breakdown of alert vs report vs ad-hoc searches per app.
+> **Note**: This query returns saved/scheduled searches only — true ad-hoc searches (run once from the search bar) are not captured by the REST endpoint.
 
 ---
 
@@ -148,59 +161,49 @@ This REST-based query works on all Cloud stacks and gives an accurate breakdown 
 
 ```spl
 | rest /services/data/indexes
-| search title!=_* disabled=0 totalEventCount>0
+| search NOT title=_* disabled=0 totalEventCount>0
+| stats sum(currentDBSizeMB) as currentDBSizeMB, sum(totalEventCount) as totalEventCount, min(minTime) as minTime, max(maxTime) as maxTime, values(frozenTimePeriodInSecs) as frozenTimePeriodInSecs by title
 | eval total_gb=round(currentDBSizeMB/1024, 2)
-| table title, currentDBSizeMB, totalEventCount, total_gb, minTime, maxTime, frozenTimePeriodInSecs
 | sort -total_gb
 | rename title as index_name
 ```
 
-This provides current index sizes. For daily ingestion rates (if `_introspection` is available):
-
-```spl
-| rest /services/data/indexes
-| search title!=_* disabled=0 totalEventCount>0
-| eval daily_gb=round(currentDBSizeMB/1024/30, 2)
-| table title, currentDBSizeMB, totalEventCount, daily_gb
-| sort -daily_gb
-| rename title as index_name
-```
+> **Note**: The `stats` aggregation is required because Splunk Cloud returns one row per index per indexer. Without it, index sizes appear duplicated.
 
 ---
 
-### Cloud Query 5: Alert Firing Stats
+### Cloud Query 5: Alert Firing Stats (requires `_audit`)
+
+For actual alert firing history, `_audit` is required. The REST endpoint's `triggered_alert_count` field is **not reliable** — it only counts non-expired fired alert instances (default 24-hour TTL) and resets when alerts are modified or during SHC captain elections.
 
 ⚠️ **Save as (exact filename required)**: `alert_firing_global.json`
 
-This is the most critical query for understanding which alerts are actually running. Use the REST endpoint which reports scheduler execution stats directly:
+**With `_audit` access (recommended):**
+
+```spl
+index=_audit sourcetype=audittrail action=alert_fired earliest=-90d
+| stats count as total_runs, latest(_time) as last_run by app, ss_name
+| rename ss_name as savedsearch_name
+| eval successful=total_runs, skipped=0, failed=0
+| sort -total_runs
+```
+
+> **Note**: `_audit` records alert fires (condition met), not total scheduled runs. The `successful`/`skipped`/`failed` breakdown requires `_internal` (sourcetype=scheduler) which is unavailable on Cloud. The values above represent fires only.
+
+**Without `_audit` access (limited fallback):**
 
 ```spl
 | rest /servicesNS/-/-/saved/searches
-| search is_scheduled=1 OR alert.track=1
-| eval total_runs=triggered_alert_count, successful=triggered_alert_count, skipped=0, failed=0
-| eval last_run=if(isnotnull(next_scheduled_time), next_scheduled_time, updated)
-| table eai:acl.app, title, total_runs, successful, skipped, failed, last_run, cron_schedule, disabled, alert.severity, alert.track, actions
+| search is_scheduled=1 OR alert.track=1 OR alert.track=true OR alert.track=auto
+| table eai:acl.app, title, triggered_alert_count, cron_schedule, disabled, alert.severity, alert.track, actions, next_scheduled_time, updated
+| eval total_runs=triggered_alert_count
+| eval successful=triggered_alert_count, skipped=0, failed=0
+| eval last_run=updated
 | rename eai:acl.app as app, title as savedsearch_name
 | sort -total_runs
 ```
 
-> **Note**: The `triggered_alert_count` from REST resets when an alert is modified or during SHC captain elections. Treat it as a lower bound. An alert showing 0 runs may still be actively firing — the counter may have reset recently.
-
-For more detailed firing history (if `_introspection` is available on your stack):
-
-```spl
-| rest /servicesNS/-/-/saved/searches
-| search is_scheduled=1 OR alert.track=1
-| join type=left title [
-    | search index=_introspection sourcetype=splunk_telemetry data.search_type=scheduled earliest=-90d
-    | stats count as introspection_runs by data.label
-    | rename data.label as title
-  ]
-| eval total_runs=coalesce(introspection_runs, triggered_alert_count)
-| table eai:acl.app, title, total_runs, triggered_alert_count, cron_schedule, disabled
-| rename eai:acl.app as app, title as savedsearch_name
-| sort -total_runs
-```
+> **WARNING**: `triggered_alert_count` from REST is the count of **currently non-expired alert instances** (default 24-hour TTL), NOT total historical runs. An alert that has fired thousands of times may show single-digit counts. Treat these numbers as a **lower bound only**. The `skipped` and `failed` values are set to 0 because the REST endpoint does not provide this data — this does not mean no searches were skipped or failed.
 
 ---
 
@@ -210,26 +213,19 @@ For more detailed firing history (if `_introspection` is available on your stack
 
 ```spl
 | rest /services/data/indexes
-| search title!=_* disabled=0 totalEventCount>0
-| eval events_per_day=round(totalEventCount/30, 0)
-| table title, totalEventCount, events_per_day, currentDBSizeMB
+| search NOT title=_* disabled=0 totalEventCount>0
+| stats sum(currentDBSizeMB) as currentDBSizeMB, sum(totalEventCount) as totalEventCount, min(minTime) as minTime, max(maxTime) as maxTime by title
+| eval days_span=round((now() - strptime(minTime, "%Y-%m-%dT%H:%M:%S%z")) / 86400, 0)
+| eval events_per_day=if(days_span>0, round(totalEventCount/days_span, 0), totalEventCount)
 | sort -totalEventCount
 | rename title as index_name
 ```
 
+> **Note**: The `events_per_day` calculation uses the actual time span of data in the index (from `minTime` to now), not an arbitrary divisor.
+
 ---
 
-### Why Not `_audit` / `_internal` on Cloud?
-
-Splunk Cloud environments are fully managed by Splunk. The `_audit` and `_internal` indexes that the standard queries (in the [Manual Query Set](#manual-query-set) below) rely on are frequently restricted:
-
-1. **`_audit` access is restricted.** In Victoria Experience stacks, tenant users may have limited or no access. The `sc_admin` role has access by default, but custom roles or tokens may not.
-
-2. **`_internal` is inaccessible.** Splunk Cloud does not expose `_internal` to tenants in most configurations. Scheduler logs, license usage data, and firing stats from `_internal` will return 0 results.
-
-3. **Token capabilities.** If the token's role doesn't include `index_audit` or `index_internal` capability, those queries silently return empty results.
-
-If you have confirmed `_audit` access (test with `index=_audit earliest=-1h | stats count`), you can use the `_audit`-based queries from the [Manual Query Set](#manual-query-set) below for potentially richer dashboard view data. But start with the Cloud queries above — they work without special permissions.
+### Important: Inherent Splunk Cloud Usage Data Limitations
 
 ### Important: Inherent Splunk Cloud Usage Data Limitations
 
