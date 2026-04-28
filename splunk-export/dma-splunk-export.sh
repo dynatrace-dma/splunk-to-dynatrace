@@ -126,7 +126,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.0"
+SCRIPT_VERSION="4.6.3"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -3746,9 +3746,27 @@ collect_dashboard_studio() {
     apps_to_query=("-")  # "-" means all apps in Splunk REST API
   fi
 
-  # First pass: count total dashboards across selected apps for progress bar
+  # First pass: count total dashboards across selected apps for progress bar.
+  #
+  # IMPORTANT: Splunk's /servicesNS/-/-/data/ui/views endpoint returns ONE
+  # entry per (user-namespace × dashboard) combination. With ~24 active users
+  # and most dashboards globally shared, a 5,000-dashboard environment came
+  # back as ~124,000 entries — each global dashboard duplicated once per
+  # user namespace.
+  #
+  # The previous regex extraction (`grep -o '"name":"[^"]*"'`) had no dedup,
+  # so total_dashboards inflated by ~24× and the per-dashboard fetch loop
+  # below tried to GET each dashboard ~24× — turning a few-minute export
+  # into a 17-hour ETA.
+  #
+  # Fix: parse the JSON properly with Python and dedupe by (acl.app, name).
+  # That gives us EXACTLY ONE entry per real dashboard, and we capture the
+  # dashboard's true owning app instead of the query wildcard "-".
   local total_dashboards=0
-  local dashboard_data=()  # Array of "app|name" pairs
+  local dashboard_data=()  # Array of "owning_app|name" pairs (deduped)
+
+  local dedupe_tmpfile="$EXPORT_DIR/dma_analytics/system_info/.dashboards_deduped.list"
+  : > "$dedupe_tmpfile"
 
   for app in "${apps_to_query[@]}"; do
     local api_path
@@ -3766,21 +3784,50 @@ collect_dashboard_studio() {
       > "$temp_list" 2>/dev/null
 
     if [ -s "$temp_list" ]; then
-      # Extract dashboard names and their owning apps
-      while IFS= read -r line; do
-        if [ -n "$line" ]; then
-          dashboard_data+=("${app}|${line}")
-          ((total_dashboards++))
-        fi
-      done < <(grep -o '"name":"[^"]*"' "$temp_list" | cut -d'"' -f4)
+      # Pull (acl.app, name) per entry — Splunk's namespace listing surfaces
+      # the same dashboard once per user, but acl.app + name uniquely
+      # identify each REAL dashboard. Dedupe by appending to a list and
+      # we'll sort -u once after the per-app loop completes.
+      "$PYTHON_CMD" -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+seen = set()
+for entry in data.get('entry', []) or []:
+    name = entry.get('name')
+    acl = entry.get('acl') or {}
+    owning_app = acl.get('app') or '$app'
+    if not name or not owning_app:
+        continue
+    key = (owning_app, name)
+    if key in seen:
+        continue
+    seen.add(key)
+    print(f'{owning_app}|{name}')
+" "$temp_list" >> "$dedupe_tmpfile" 2>/dev/null
     fi
     rm -f "$temp_list" 2>/dev/null
   done
+
+  # Final cross-app dedupe — same (owning_app, name) might surface from
+  # multiple per-app iterations if SELECTED_APPS overlaps with another app's
+  # cross-namespace visibility. sort -u handles it cheaply.
+  if [ -s "$dedupe_tmpfile" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && dashboard_data+=("$line")
+    done < <(sort -u "$dedupe_tmpfile")
+    total_dashboards=${#dashboard_data[@]}
+  fi
+  rm -f "$dedupe_tmpfile" 2>/dev/null
 
   if [ $total_dashboards -eq 0 ]; then
     warning "No dashboards found in selected apps"
     return 0
   fi
+
+  log "Dashboards: deduped to $total_dashboards unique (acl.app, name) pairs across ${#apps_to_query[@]} app namespace(s)"
 
   # Show scale warning for large environments
   show_scale_warning "dashboards" "$total_dashboards" 200
