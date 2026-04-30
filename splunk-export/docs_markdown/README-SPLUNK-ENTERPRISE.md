@@ -1,6 +1,6 @@
 # DMA Splunk Enterprise Export Script
 
-**Version**: 4.6.2
+**Version**: 4.6.4
 **Last Updated**: April 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise Export Specification](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | [Manual Usage Queries (SHC/Distributed)](MANUAL-USAGE-QUERIES.md) | For Splunk Cloud exports, see [Cloud Export README](README-SPLUNK-CLOUD.md)
 
@@ -11,13 +11,20 @@
 
 ## Recent Changes
 
-### v4.6.2 (April 2026)
-- **`search` app is now exported.** Previously excluded as a "system app," but customers create dashboards and saved searches in it.
+> **Note on version history.** The Enterprise script (`dma-splunk-export.sh`) and the Cloud scripts (`dma-splunk-cloud-export.sh` / `dma-splunk-cloud-export.ps1`) are versioned independently. Enterprise jumped from **v4.6.0 → v4.6.3 → v4.6.4**. Versions **v4.6.1 and v4.6.2 do not exist for Enterprise** — those tags were used only by the Cloud scripts (resume-reliability and `search`-app-inclusion fixes that didn't apply to Enterprise's filesystem-based collection path; the Enterprise script always exported the `search` app). If you read the Cloud changelog, you can ignore the v4.6.1 and v4.6.2 entries when running Enterprise.
 
-### v4.6.1 (April 2026)
-- **Per-app and per-dashboard resume** for `--resume-collect` — only incomplete items are re-collected, not the entire phase.
-- **OS-level timeout backstop** for API calls — wraps curl with `timeout`/`gtimeout` to handle TLS hangs.
-- **`--resume-collect` with `--usage`** forces analytics re-collection to prevent stale data.
+### v4.6.4 (April 2026)
+- **FIX: `--apps` runs no longer flood the log with three "SEARCH FAILED" errors per pass.** Splunk's `where` parser rejects unquoted field names that contain `:` or `.` (e.g. `eai:acl.app`). The three ownership-collection searches — `Dashboard ownership mapping`, `Alert/saved search ownership mapping`, `Ownership summary by user` — were emitting `| where eai:acl.app IN ("appname")` and getting back the parser error `"The operator at ':acl.app IN (...)' is invalid."` for every single run. The helper that builds the `IN (...)` clause now wraps fields containing special characters in single quotes (`| where 'eai:acl.app' IN ("appname")`), which Splunk accepts. Plain field names (e.g. `app` used in audit-log searches) are unchanged. **Customer impact: re-running the script after upgrading is enough — the failed searches don't write checkpoints, so resume picks up cleanly and the previously-failing queries now succeed. No `--reset-collect` needed.**
+
+### v4.6.3 (April 2026)
+- **FIX: dashboard collection no longer hangs at a 17-hour ETA on environments with user-namespaced dashboards.** The same dashboard ID could appear under multiple owner namespaces (`servicesNS/<user>/<app>/...`) and was being fetched once per namespace, ballooning the per-app count and the overall ETA. Collection now de-duplicates by dashboard ID across the full owner-namespace cross-product per app, restoring linear scaling.
+- **`--resume-collect` archive-path validation** moved to argument-parse time so a typo or missing file fails immediately, not after the script has authenticated and started enumerating apps.
+- **Live progress indicators** for REST counts and the global analytics queries — long phases now show a heartbeat instead of looking frozen.
+- **SHC captain detection, saved-searches count, and toggle-display fixes** — minor display-only improvements when running against a Search Head Cluster.
+
+### v4.6.0 (March 2026)
+- **Stripped usage analytics** to global aggregate queries only — see [Default Behavior (v4.6.0)](#default-behavior-v460) and [What Usage Analytics Produces (v4.6.0)](#what-usage-analytics-produces-v460) below for full detail.
+- **Documentation rewrite** aligning the Enterprise + both Cloud scripts.
 
 ---
 

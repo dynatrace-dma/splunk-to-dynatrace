@@ -9,7 +9,14 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.1
+#  DMA Splunk Cloud Export Script v4.6.2
+#
+#  v4.6.2 Changes:
+#    - `search` app is now exported. Previously excluded as a "system app,"
+#      but customers create dashboards and saved searches in it. One
+#      customer had 674 dashboards (30% of total) silently dropped because
+#      `search` was in the skip list. Mirrors a long-standing Enterprise
+#      script default — the Cloud lists drifted out of parity until now.
 #
 #  v4.6.1 Changes (resume reliability for flaky search heads):
 #    - collect_dashboards: per-app and per-dashboard resume. Cached

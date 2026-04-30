@@ -1,6 +1,6 @@
 # DMA Splunk Export Scripts
 
-**Version**: 4.6.1
+**Versions**: Enterprise (`dma-splunk-export.sh`) **4.6.4** · Cloud Bash (`dma-splunk-cloud-export.sh`) **4.6.2** · Cloud PowerShell (`dma-splunk-cloud-export.ps1`) **4.6.2**
 **Last Updated**: April 2026
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
@@ -416,7 +416,83 @@ Add `--debug` (Bash) or `-Debug_Mode` (PowerShell) for detailed diagnostics:
 
 ## Release Notes
 
-### v4.6.1 — Resume reliability for flaky search heads
+> **Important:** the Enterprise script (`dma-splunk-export.sh`) and the Cloud scripts (`dma-splunk-cloud-export.sh` / `dma-splunk-cloud-export.ps1`) are versioned **independently**. Each release note below calls out which script(s) it applies to. Quick map:
+>
+> | Version | Enterprise (`dma-splunk-export.sh`) | Cloud Bash (`dma-splunk-cloud-export.sh`) | Cloud PowerShell (`dma-splunk-cloud-export.ps1`) |
+> |---|:---:|:---:|:---:|
+> | **v4.6.4** | ✅ (eai:acl `where`-clause quoting) | — | — |
+> | **v4.6.3** | ✅ (user-namespace dashboard de-dup) | — | — |
+> | **v4.6.2** | — *(skipped — Enterprise jumped 4.6.0 → 4.6.3)* | ✅ (`search`-app inclusion) | ✅ (`search`-app + parity) |
+> | **v4.6.1** | — *(skipped — same reason)* | ✅ (resume reliability) | ✅ (resume reliability) |
+> | **v4.6.0** | ✅ | ✅ | ✅ |
+>
+> Customers running ONLY Enterprise can ignore the v4.6.1 + v4.6.2 entries (Cloud-only fixes; the Enterprise script always exported the `search` app and uses filesystem-based collection that doesn't have the per-app REST hang failure mode v4.6.1 addresses). Customers running ONLY Cloud can ignore the v4.6.3 + v4.6.4 entries (Enterprise-only).
+
+### v4.6.4 (Enterprise only) — `eai:acl` field quoting in `where` clauses
+
+**Applies to:** `dma-splunk-export.sh`. Cloud scripts unaffected (their helper has the same shape but isn't called with `eai:acl.*` field names today).
+
+Customer hit three repeated `SEARCH FAILED` errors per pass when running with `--apps`:
+
+```
+SEARCH FAILED for 'Dashboard ownership mapping': "messages":[{"type":"FATAL",
+  "text":"Error in 'where' command: The operator at ':acl.app IN (\"zy\") '
+   is invalid."}...
+SEARCH FAILED for 'Alert/saved search ownership mapping': ... ':acl.app IN (\"zy\") ...
+SEARCH FAILED for 'Ownership summary by user':           ... ':acl.app IN (\"zy\") ...
+```
+
+Splunk's `where` parser rejects unquoted field names that contain `:`
+or `.` (e.g. `eai:acl.app`) — the colon at position 3 is read as an
+operator, then `.app` becomes a stray token, then `IN` makes no sense.
+Splunk accepts the same field name when wrapped in single quotes:
+
+```
+| where 'eai:acl.app' IN ("zy")
+```
+
+The `get_app_in_clause` helper now wraps fields containing any
+non-alphanumeric/underscore character in single quotes. Plain field
+names (`app`, used in audit-log searches) stay unquoted so existing
+behavior is unchanged. **Re-running the script after upgrading is
+enough — no `--reset-collect` needed; the failed searches don't write
+checkpoints, so resume picks up cleanly and the previously-failing
+queries now succeed.**
+
+### v4.6.3 (Enterprise only) — Dashboard de-dup across user namespaces (fixes 17h-ETA bug)
+
+**Applies to:** `dma-splunk-export.sh`. Cloud scripts unaffected (Cloud's REST collection path doesn't have this failure mode).
+
+Customer reported the Enterprise script's dashboard collection phase
+showing a 17-hour ETA on an environment with hundreds of apps. Root
+cause: the same dashboard ID appeared under multiple owner namespaces
+(`servicesNS/<user>/<app>/...`) because Splunk exposes a separate
+namespace per user who created or modified the dashboard. The collector
+was fetching the same dashboard once per namespace, exploding both the
+per-app dashboard count and the total ETA.
+
+Fix: collection now de-duplicates by dashboard ID across the full
+owner-namespace cross-product per app, restoring linear scaling. ETA
+on the affected customer dropped from 17 hours to roughly 25 minutes.
+
+This release also bundled three quality-of-life improvements:
+
+- **`--resume-collect` archive-path validation** moved to argument-parse time so a typo or missing file fails immediately, not after authentication and app enumeration.
+- **Live progress indicators** for REST counts and the global analytics queries — long phases now show a heartbeat instead of looking frozen.
+- **SHC captain detection, saved-searches count, and toggle-display fixes** for SHC environments.
+
+### v4.6.2 (Cloud only) — `search` app is now exported
+
+**Applies to:** `dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`. Enterprise script always exported the `search` app — this fix brings the Cloud scripts back to parity.
+
+Cloud's app-allowlist had `search` in the skip list as a "system app".
+One customer had **674 dashboards (30% of total)** silently dropped
+because users created their dashboards in the `search` app. The Cloud
+scripts now include `search` by default.
+
+### v4.6.1 (Cloud only) — Resume reliability for flaky search heads
+
+**Applies to:** `dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`. Enterprise script unaffected — it reads configuration files directly from the Splunk filesystem and doesn't have the per-app REST hang failure mode that motivated these fixes.
 
 A point release focused entirely on making `--resume-collect` actually
 recover from partial dashboard / alert / knowledge-object collection
@@ -468,11 +544,6 @@ API_TIMEOUT=30 MAX_TOTAL_TIME=86400 ./dma-splunk-cloud-export.sh \
 at ~3 minutes instead of ~31 minutes). `MAX_TOTAL_TIME=86400` raises
 the script's overall safety ceiling from 12 hours to 24 hours, giving
 plenty of headroom for very large environments.
-
-The Enterprise script (`dma-splunk-export.sh`) was not modified in
-this release — it reads configuration files directly from the Splunk
-filesystem and does not have the per-app REST hang failure mode that
-motivated the v4.6.1 fixes.
 
 ---
 

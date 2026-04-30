@@ -38,6 +38,8 @@
 
 ## What's New
 
+> **Note on version history.** The Cloud scripts (`dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`) and the Enterprise script (`dma-splunk-export.sh`) are versioned independently. Cloud is currently at **v4.6.2** (last bump: `search`-app inclusion). Enterprise is at **v4.6.4** with its own Enterprise-specific fixes — see [README-SPLUNK-ENTERPRISE.md](README-SPLUNK-ENTERPRISE.md). Customers running the Cloud scripts can ignore Enterprise changelog references to v4.6.3 (user-namespace dashboard de-dup — Cloud's REST collection doesn't have that failure mode) and v4.6.4 (`eai:acl.*` `where`-clause quoting — Cloud's current call sites use plain `app` field names so they don't trip the parser, though the helper has been hardened defensively).
+
 ### v4.6.2 (April 2026)
 
 - **`search` app is now exported.** Previously excluded as a "system app," but customers frequently create dashboards and saved searches in it. One customer had 674 dashboards (30% of total) silently dropped because the `search` app was in the skip list.
