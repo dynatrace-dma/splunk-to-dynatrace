@@ -9,7 +9,16 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script v4.6.0
+#  DMA Splunk Export Script v4.6.4
+#
+#  v4.6.4 Changes:
+#    - FIX: ownership / dashboard / alert REST searches no longer fail with
+#      "Error in 'where' command: The operator at ':acl.app IN (...)'
+#      is invalid." when --apps is used. Splunk's `where` parser rejects
+#      unquoted field names containing `:` or `.` (e.g. eai:acl.app);
+#      `get_app_in_clause` now wraps such fields in single quotes,
+#      producing `'eai:acl.app' IN ("app1", ...)` which Splunk accepts.
+#      Plain field names (`app`) stay unquoted to keep diffs minimal.
 #
 #  v4.6.0 Changes:
 #    - CRITICAL: Dashboard views now use provenance field (search_type=dashboard was unreliable)
@@ -126,7 +135,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.3"
+SCRIPT_VERSION="4.6.4"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -4329,7 +4338,21 @@ get_app_in_clause() {
     return
   fi
 
-  # Build IN clause: app IN ("app1", "app2", ...)
+  # Splunk's `where` parser rejects unquoted field names that contain
+  # `:` or `.` (e.g. `eai:acl.app`) because the colon / dot are
+  # interpreted as operator characters mid-token, producing
+  #   "Error in 'where' command: The operator at ':acl.app IN (\"...\") '
+  #    is invalid."
+  # Splunk accepts the same field name when wrapped in SINGLE quotes:
+  #   | where 'eai:acl.app' IN (...)
+  # Wrap defensively whenever the field has any non-alphanumeric_
+  # character; plain names like `app` stay unquoted to keep diffs minimal.
+  local quoted_field="$field"
+  case "$field" in
+    *[!a-zA-Z0-9_]*) quoted_field="'${field}'" ;;
+  esac
+
+  # Build IN clause: 'eai:acl.app' IN ("app1", "app2", ...)
   local apps_quoted=""
   local first=true
   for app in "${SELECTED_APPS[@]}"; do
@@ -4341,7 +4364,7 @@ get_app_in_clause() {
     fi
   done
 
-  echo "${field} IN (${apps_quoted})"
+  echo "${quoted_field} IN (${apps_quoted})"
 }
 
 # Build where clause for pipe filtering
