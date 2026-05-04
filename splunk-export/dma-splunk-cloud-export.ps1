@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    DMA Splunk Cloud Export Script v4.6.2 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.6.3 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
@@ -13,7 +13,15 @@
     use dma-splunk-export.sh instead.
 
     This is a functionally equivalent PowerShell port of
-    dma-splunk-cloud-export.sh v4.6.2 for Windows environments.
+    dma-splunk-cloud-export.sh v4.6.3 for Windows environments.
+
+    v4.6.3 Changes (parity with bash v4.6.3):
+      - Datamodel collection added: per-app GET on
+        /servicesNS/-/<app>/datamodel/model writes a filtered
+        datamodels.json alongside the existing knowledge objects
+        (macros, eventtypes, tags, etc.). Curator's CIM expansion path
+        consumes these to translate `| datamodel X Y` references
+        against custom customer-defined models.
 
     v4.6.2 Changes (parity with bash v4.6.2):
       - 'search' app is now exported. Previously excluded as a system app, but
@@ -285,7 +293,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.6.2"
+$Script:SCRIPT_VERSION = "4.6.3"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -3119,6 +3127,19 @@ function Export-KnowledgeObjects {
         $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/configs/conf-transforms" -Data "output_mode=json&count=0"
         if ($null -ne $response) {
             Save-FilteredByAcl -Response $response -TargetApp $app -OutputFile (Join-Path $appDir "transforms.json") -ObjectType "transforms"
+        }
+
+        # Datamodels (structural definitions — constraints, parent_dataset,
+        # fields, calculations). The /datamodel/model endpoint returns full
+        # JSON for every model visible to the app; we filter by acl.app so
+        # each app only owns its own. Curator's CIM expansion path needs
+        # these to translate `| datamodel X Y` references against custom
+        # customer-defined models. If REST API access is gated on the
+        # customer's stack (403/404), Invoke-SplunkApi returns $null and
+        # we skip silently — no impact on the rest of the export.
+        $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/datamodel/model" -Data "output_mode=json&count=0"
+        if ($null -ne $response) {
+            Save-FilteredByAcl -Response $response -TargetApp $app -OutputFile (Join-Path $appDir "datamodels.json") -ObjectType "datamodels"
         }
 
         # Lookups

@@ -9,7 +9,18 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script v4.6.4
+#  DMA Splunk Export Script v4.6.5
+#
+#  v4.6.5 Changes:
+#    - Datamodel collection added: per-app `default/data/models/*.json` and
+#      `local/data/models/*.json` files are now copied alongside the
+#      existing .conf assets. Splunk stores datamodel structural
+#      definitions (constraints, parent_dataset, fields, calculations) as
+#      JSON in these directories, NOT in datamodels.conf (which only
+#      carries acceleration settings). Curator's CIM expansion path
+#      consumes these to translate `| datamodel X Y` references —
+#      without them, customer-defined datamodels fall through to a
+#      generic UNSUPPORTED comment.
 #
 #  v4.6.4 Changes:
 #    - FIX: ownership / dashboard / alert REST searches no longer fail with
@@ -135,7 +146,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.4"
+SCRIPT_VERSION="4.6.5"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -3705,6 +3716,25 @@ collect_app_configs() {
     cp "$app_path/lookups/"*.csv "$EXPORT_DIR/$app/lookups/" 2>/dev/null
     log "Copied lookup tables from $app"
   fi
+
+  # Export datamodels (per-model JSON definitions). Splunk stores datamodel
+  # structural definitions — constraints, parent_dataset, fields, calculations
+  # — at <app>/default/data/models/<ModelName>.json (and local/ for overrides),
+  # NOT in datamodels.conf (which only carries acceleration settings).
+  # Curator's CIM expansion path consumes these to translate `| datamodel X Y`
+  # references; without them, custom customer datamodels fall through to a
+  # generic UNSUPPORTED comment.
+  for models_dir in "default/data/models" "local/data/models"; do
+    if [ -d "$app_path/$models_dir" ]; then
+      mkdir -p "$EXPORT_DIR/$app/$models_dir"
+      cp "$app_path/$models_dir/"*.json "$EXPORT_DIR/$app/$models_dir/" 2>/dev/null
+      local model_count
+      model_count=$(ls -1 "$EXPORT_DIR/$app/$models_dir/"*.json 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$model_count" -gt 0 ]; then
+        log "Copied $model_count datamodels from $app/$models_dir"
+      fi
+    fi
+  done
 
   # Export metadata files (essential for determining macro export scope)
   # The local.meta file contains [macros/<name>] export = system for globally shared macros

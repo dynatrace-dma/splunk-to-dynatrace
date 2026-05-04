@@ -9,7 +9,20 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.2
+#  DMA Splunk Cloud Export Script v4.6.3
+#
+#  v4.6.3 Changes:
+#    - Datamodel collection added: per-app GET on /servicesNS/-/<app>/datamodel/model
+#      writes a filtered datamodels.json alongside the existing knowledge
+#      objects (macros, eventtypes, tags, etc.). Each entry's content
+#      contains the model's structural definition (constraints,
+#      parent_dataset, fields, calculations) so Curator's CIM expansion
+#      path can translate `| datamodel X Y` references against custom
+#      customer-defined models. Filter_and_save_json applies the standard
+#      acl.app ownership filter. If REST API access for the datamodel
+#      endpoint is gated on the customer's stack (403/404), the call
+#      fails silently — no impact on the rest of the export. Mirrors
+#      the bash Enterprise script v4.6.5 datamodel collection.
 #
 #  v4.6.2 Changes:
 #    - `search` app is now exported. Previously excluded as a "system app,"
@@ -174,7 +187,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.2"
+SCRIPT_VERSION="4.6.3"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -238,7 +251,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="30d"
-SCRIPT_VERSION="4.6.2"
+SCRIPT_VERSION="4.6.3"
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -4201,6 +4214,17 @@ collect_knowledge_objects() {
     response=$(api_call "/servicesNS/-/$app/configs/conf-transforms" "GET" "output_mode=json&count=0")
     if [ $? -eq 0 ]; then
       filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/transforms.json" "transforms"
+    fi
+
+    # Datamodels (structural definitions — constraints, parent_dataset,
+    # fields, calculations). The /datamodel/model endpoint returns full
+    # JSON for every model visible to the app; we filter by acl.app so
+    # each app only owns its own. Curator's CIM expansion path needs
+    # these to translate `| datamodel X Y` references against custom
+    # customer-defined models.
+    response=$(api_call "/servicesNS/-/$app/datamodel/model" "GET" "output_mode=json&count=0")
+    if [ $? -eq 0 ]; then
+      filter_and_save_json "$response" "$app" "$EXPORT_DIR/$app/datamodels.json" "datamodels"
     fi
 
     # Lookups
