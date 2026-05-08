@@ -1,8 +1,8 @@
 # DMA Splunk Cloud Export -- Technical Specification
 
-## Version 4.6.2 | REST API-Only Data Collection for Splunk Cloud
+## Version 4.6.6 | REST API-Only Data Collection for Splunk Cloud
 
-**Last Updated**: April 2026
+**Last Updated**: May 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud README](README-SPLUNK-CLOUD.md) | [Export Schema](EXPORT-SCHEMA.md)
 
 ---

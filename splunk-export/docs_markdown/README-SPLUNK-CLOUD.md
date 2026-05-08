@@ -1,7 +1,7 @@
 # DMA Splunk Cloud Export — Detailed Guide
 
-**Version**: 4.6.2
-**Last Updated**: April 2026
+**Version**: 4.6.6
+**Last Updated**: May 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Cloud Export Specification](SPLUNK-CLOUD-EXPORT-SPECIFICATION.md) | [Manual Usage Queries](MANUAL-USAGE-QUERIES.md) | [Export Schema](EXPORT-SCHEMA.md)
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
@@ -11,7 +11,7 @@
 
 ## Table of Contents
 
-- [What's New in v4.6.0](#whats-new-in-v460)
+- [What's New](#whats-new)
 - [Previous Version Changes](#previous-version-changes)
 - [Scripts Overview](#scripts-overview)
 - [Prerequisites](#prerequisites)
@@ -38,7 +38,19 @@
 
 ## What's New
 
-> **Note on version history.** The Cloud scripts (`dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`) and the Enterprise script (`dma-splunk-export.sh`) are versioned independently. Cloud is currently at **v4.6.2** (last bump: `search`-app inclusion). Enterprise is at **v4.6.4** with its own Enterprise-specific fixes — see [README-SPLUNK-ENTERPRISE.md](README-SPLUNK-ENTERPRISE.md). Customers running the Cloud scripts can ignore Enterprise changelog references to v4.6.3 (user-namespace dashboard de-dup — Cloud's REST collection doesn't have that failure mode) and v4.6.4 (`eai:acl.*` `where`-clause quoting — Cloud's current call sites use plain `app` field names so they don't trip the parser, though the helper has been hardened defensively).
+> **Note on version history.** The Cloud scripts (`dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`) and the Enterprise script (`dma-splunk-export.sh`) are versioned independently. Cloud is currently at **v4.6.6** (last bump: large-environment hardening + resume self-heal). Enterprise is at **v4.6.5** with its own Enterprise-specific fixes — see [README-SPLUNK-ENTERPRISE.md](README-SPLUNK-ENTERPRISE.md). Customers running the Cloud scripts can ignore Enterprise changelog references to v4.6.3 (user-namespace dashboard de-dup — Cloud's REST collection doesn't have that failure mode), v4.6.4 (`eai:acl.*` `where`-clause quoting — Cloud's current call sites use plain `app` field names), and v4.6.5 (`BASH_SOURCE` guard — test-harness no-op).
+
+### v4.6.6 (May 2026)
+
+Closes a structural failure mode where Splunk Cloud environments with many apps could exceed the 12-hour runtime cap and silently produce "complete-looking" archives that contained zero alerts. v4.6.6 closes the structural gap and adds resume validation that detects the failure mode automatically.
+
+- **Single-call `collect_alerts`.** Replaces the per-app `/saved/searches` REST loop with one stack-wide call partitioned by `acl.app` locally. Per-app `savedsearches.json` file shape is unchanged. Eliminates the redundant per-app transfer that caused the original timeout cascade.
+- **OS-level timeout backstop now fail-fast (Bash).** The script exits at startup with install instructions if neither `timeout` (Linux) nor `gtimeout` (macOS via `brew install coreutils`) is on `PATH`. Previously this was a silent fallback that disabled the curl hung-request kill-switch. PowerShell uses `Invoke-WebRequest -TimeoutSec` and is unaffected.
+- **Runtime cap is now fatal.** `exit 124` with resume instructions instead of `return 1`. Prevents the "looks complete but isn't" archive outcome.
+- **Resume self-heal.** On `--resume-collect`, the script now validates per-app `savedsearches.json` (rejects corrupt JSON, missing `.entry`, or foreign `acl.app` entries) and the `alerts_inventory` checkpoint (rejects runtime-exceeded error shells). Detected defects are auto-repaired by re-running the affected phase.
+- **New flag `--validate-archive FILE`.** Pre-flight integrity check. Extracts read-only, runs the resume validations, prints a verdict, exits. No Splunk connection required — useful for dry-running an archive before committing to a long resume.
+- **New flag `--clean-resume PHASES`.** Explicit phase invalidation on resume. Comma-separated. Phases: `alerts`, `alerts_inventory`, `analytics`. Escape hatch when auto-detection isn't sufficient.
+- **Banner now logs script version + auth mode + apps + resume mode.** Makes post-mortem investigation possible from `_export.log` alone.
 
 ### v4.6.2 (April 2026)
 

@@ -7520,5 +7520,9 @@ has_collected_data() {
 # MAIN FUNCTION
 # =============================================================================
 
-# Run main
-main "$@"
+# Run main only when the script is executed directly, not when sourced as a
+# library (e.g. by the regression test harness under tests/). This is the
+# canonical bash idiom from Google's Bash Style Guide.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

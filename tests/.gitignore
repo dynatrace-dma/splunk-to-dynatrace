@@ -1,0 +1,19 @@
+# Local artifacts produced by test runs
+/tmp/
+replay/output_old/
+replay/output_new/
+perf/results/*.csv
+*.actual
+*.diff
+
+# Raw (un-anonymized) customer data must never be committed
+fixtures/_raw/
+*.raw.json
+
+# Local sandbox state
+.env
+.env.local
+
+# Large regeneratable fixtures (re-create via fixtures/generate.sh)
+fixtures/saved_searches_realistic.json
+fixtures/saved_searches_large.json

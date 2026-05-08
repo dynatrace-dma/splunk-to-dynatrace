@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    DMA Splunk Cloud Export Script v4.6.3 (PowerShell Edition)
+    DMA Splunk Cloud Export Script v4.6.6 (PowerShell Edition)
 
 .DESCRIPTION
     REST API-Only Data Collection for Splunk Cloud Migration to Dynatrace.
@@ -13,7 +13,31 @@
     use dma-splunk-export.sh instead.
 
     This is a functionally equivalent PowerShell port of
-    dma-splunk-cloud-export.sh v4.6.3 for Windows environments.
+    dma-splunk-cloud-export.sh v4.6.6 for Windows environments.
+
+    v4.6.6 Changes (parity with bash v4.6.6 — large-environment hardening + resume self-heal):
+      - Single-call collect_alerts replaces the per-app /saved/searches REST
+        loop with one stack-wide call partitioned by acl.app locally. Per-app
+        savedsearches.json file shape is unchanged. Eliminates the redundant
+        per-app transfer that caused the original timeout cascade.
+      - Runtime cap is now fatal (terminating error with resume instructions
+        instead of a soft return). Prevents the "looks complete but isn't"
+        archive outcome.
+      - Resume validation R1: rejects per-app savedsearches.json that's
+        corrupt JSON, missing .entry, or has foreign acl.app entries on
+        --resume-collect; drops the resume sentinel and re-fetches.
+      - Resume validation R2: rejects the alerts_inventory checkpoint when
+        its sentinel files are runtime-exceeded error shells; the stale
+        checkpoint is invalidated and Q6 re-runs.
+      - New flag -ValidateArchive FILE: pre-flight integrity check. Extracts
+        read-only, runs R1/R2, prints verdict, exits. No Splunk connection.
+      - New flag -CleanResume PHASES: explicit phase invalidation on resume.
+        Comma-separated. Phases: alerts, alerts_inventory, analytics.
+      - Banner now logs script version + auth + apps + resume mode for
+        post-mortem investigation from the export log alone.
+      - (PowerShell uses Invoke-WebRequest -TimeoutSec, which is reliable,
+        so the bash 4.6.6 fail-fast on missing OS-level timeout has no
+        equivalent here.)
 
     v4.6.3 Changes (parity with bash v4.6.3):
       - Datamodel collection added: per-app GET on
@@ -282,6 +306,12 @@ param(
     [Parameter(HelpMessage = "Re-anonymize an existing unmasked archive (no Splunk connection needed)")]
     [string]$Remask = "",
 
+    [Parameter(HelpMessage = "Pre-flight integrity check on a previous archive (no Splunk connection)")]
+    [string]$ValidateArchive = "",
+
+    [Parameter(HelpMessage = "Force re-collection of named phases on resume (e.g. 'alerts,alerts_inventory')")]
+    [string]$CleanResume = "",
+
     [Parameter(HelpMessage = "Display version and exit")]
     [switch]$Version,
 
@@ -293,7 +323,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.6.3"
+$Script:SCRIPT_VERSION = "4.6.6"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -415,6 +445,10 @@ $Script:TEST_ACCESS_MODE = $false
 # Remask mode
 $Script:REMASK_MODE = $false
 $Script:REMASK_ARCHIVE = ""
+
+# v4.6.6: Pre-flight validation + selective resume reset
+$Script:VALIDATE_ARCHIVE = ""
+$Script:CLEAN_RESUME_PHASES = ""
 
 # Non-interactive mode flag
 $Script:NON_INTERACTIVE = $false
@@ -573,6 +607,12 @@ if ($TestAccess) {
 if ($Remask) {
     $Script:REMASK_MODE = $true
     $Script:REMASK_ARCHIVE = $Remask
+}
+if ($ValidateArchive) {
+    $Script:VALIDATE_ARCHIVE = $ValidateArchive
+}
+if ($CleanResume) {
+    $Script:CLEAN_RESUME_PHASES = $CleanResume
 }
 
 # Auto-detect non-interactive mode when all required params are provided
@@ -1182,11 +1222,18 @@ function Invoke-SplunkApi {
     $Script:STATS_API_CALLS++
     Write-DebugLog "API" "-> $Method $Endpoint"
 
-    # Check total runtime limit
+    # Check total runtime limit.
+    # v4.6.6: this is now FATAL (was `return $null`). See cloud-bash for the
+    # rationale — letting api_call return silently after the cap blew could
+    # produce many useless error log lines and a 'complete-looking' archive
+    # with zero alerts. Hard exit leaves whatever was successfully collected
+    # on disk for --resume-collect to pick up.
     $elapsed = ((Get-Date) - $Script:SCRIPT_START_TIME).TotalSeconds
     if ($elapsed -gt $Script:MAX_TOTAL_TIME) {
-        Write-Error2 "Maximum runtime ($Script:MAX_TOTAL_TIME seconds) exceeded. Export incomplete."
-        return $null
+        Write-Error2 "Maximum runtime ($Script:MAX_TOTAL_TIME seconds) exceeded after ${elapsed}s. Export incomplete."
+        Write-Error2 "Partial collection state is preserved in: $Script:EXPORT_DIR"
+        Write-Error2 "Resume the export with: .\dma-splunk-cloud-export.ps1 -ResumeCollect <archive> ..."
+        exit 124
     }
 
     # Build URL
@@ -2511,6 +2558,12 @@ function Initialize-ExportDirectory {
 
     [System.IO.File]::WriteAllText($Script:LOG_FILE, "", $Script:UTF8NoBOM)
     Write-Log "Export started: $Script:EXPORT_NAME"
+    # v4.6.6: log script version + auth + key flags first thing so post-mortems
+    # don't have to reverse-engineer which build produced an archive.
+    Write-Log "DMA Cloud Export script: v$Script:SCRIPT_VERSION"
+    Write-Log "Auth method: $Script:AUTH_METHOD"
+    Write-Log "Selected apps: $($Script:SELECTED_APPS.Count) apps (scoped=$Script:SCOPE_TO_APPS)"
+    Write-Log "Resume mode: $Script:RESUME_MODE"
     Write-Log "Stack: $Script:SPLUNK_STACK"
     Write-Log "Version: $Script:SPLUNK_VERSION"
 
@@ -2826,70 +2879,110 @@ function Test-IsAlert {
 }
 
 function Export-Alerts {
+    # v4.6.6 — STRUCTURAL REFACTOR. See dma-splunk-cloud-export.sh
+    # collect_alerts() for the full rationale. Replaces the previous per-app
+    # REST loop with a single /servicesNS/-/-/saved/searches call partitioned
+    # by acl.app. Same per-app savedsearches.json shape, same alert detection
+    # logic, far fewer HTTP round trips at large scale.
+
     if (-not $Script:COLLECT_ALERTS) { return }
 
-    Write-Progress2 "Collecting alerts and saved searches..."
+    $analyticsDir = Join-Path $Script:EXPORT_DIR "dma_analytics"
+    $sentinel = Join-Path $analyticsDir ".savedsearches_collected"
+
+    # R1 (v4.6.6): in resume mode, validate every cached per-app savedsearches.json
+    # before honoring the sentinel. Drop the sentinel + force re-collect on any
+    # invalid file.
+    if ($Script:RESUME_MODE -and (Test-Path $sentinel)) {
+        $firstInvalid = $null
+        foreach ($_checkApp in $Script:SELECTED_APPS) {
+            if (-not (Test-AppSavedSearchesValid -App $_checkApp)) {
+                $firstInvalid = $_checkApp
+                break
+            }
+        }
+        if ($firstInvalid) {
+            Write-Warning2 "Resume: cached savedsearches.json for app '$firstInvalid' failed validation - dropping sentinel and re-collecting"
+            Remove-Item $sentinel -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Resume short-circuit on valid sentinel.
+    if ($Script:RESUME_MODE -and (Test-Path $sentinel)) {
+        Write-DebugLog "RESUME: savedsearches collection complete (sentinel present); recomputing stats only"
+        $total = 0; $alerts = 0
+        foreach ($app in $Script:SELECTED_APPS) {
+            $f = Join-Path $Script:EXPORT_DIR "$app/savedsearches.json"
+            if ((Test-Path $f) -and (Get-Item $f).Length -gt 0) {
+                try {
+                    $cached = Get-Content $f -Raw | ConvertFrom-Json -ErrorAction Stop
+                    if ($cached.entry) {
+                        $cachedEntries = @($cached.entry)
+                        $total += $cachedEntries.Count
+                        foreach ($e in $cachedEntries) {
+                            if ($e.content -and (Test-IsAlert -Content $e.content)) { $alerts++ }
+                        }
+                    }
+                } catch {}
+            }
+        }
+        $Script:STATS_SAVED_SEARCHES = $total
+        $Script:STATS_ALERTS = $alerts
+        Write-Success "Saved searches already collected: $total ($alerts alerts) - resume short-circuit via sentinel"
+        return
+    }
+
+    Write-Progress2 "Collecting alerts and saved searches (single stack-wide call)..."
+
+    # ONE call. No `f=` field selection — converter has no allowlist.
+    $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/-/saved/searches" -Data "output_mode=json&count=0"
+    if ($null -eq $response) {
+        Write-Error2 "Failed to fetch saved searches stack-wide; collect_alerts cannot proceed"
+        return
+    }
+    if ($null -eq $response.entry) {
+        Write-Error2 "Saved searches response missing .entry array; collect_alerts aborting"
+        return
+    }
+
+    $allEntries = @($response.entry)
+
+    # Group entries by acl.app for fast partitioning.
+    $byApp = @{}
+    foreach ($entry in $allEntries) {
+        $aclApp = $null
+        if ($entry.acl) { $aclApp = $entry.acl.app }
+        if (-not $aclApp) { continue }
+        if (-not $byApp.ContainsKey($aclApp)) { $byApp[$aclApp] = @() }
+        $byApp[$aclApp] += $entry
+    }
 
     $alertCount = 0
     $totalSavedSearches = 0
 
     foreach ($app in $Script:SELECTED_APPS) {
-        # v4.6.1: Per-app resume support. Skip the saved/searches REST call
-        # entirely if this app's savedsearches.json already exists from a
-        # prior run. Without this, --resume-collect re-queries every app
-        # every time and the alerts phase itself can burn the runtime
-        # budget on a flaky search head.
-        $cachedSavedPath = Join-Path $Script:EXPORT_DIR "$app/savedsearches.json"
-        if ($Script:RESUME_MODE -and (Test-Path $cachedSavedPath) -and (Get-Item $cachedSavedPath).Length -gt 0) {
-            try {
-                $cachedSaved = Get-Content $cachedSavedPath -Raw | ConvertFrom-Json
-                if ($cachedSaved -and -not $cachedSaved.error) {
-                    Write-DebugLog "RESUME: Skipping $app saved searches (already on disk)"
-                    if ($cachedSaved.entry) {
-                        $totalSavedSearches += @($cachedSaved.entry).Count
-                    }
-                    continue
-                }
-            } catch {
-                # Cache file unreadable — fall through and re-fetch.
-            }
-        }
+        $appEntries = @()
+        if ($byApp.ContainsKey($app)) { $appEntries = $byApp[$app] }
 
-        $response = Invoke-SplunkApi -Endpoint "/servicesNS/-/$app/saved/searches" -Data "output_mode=json&count=0"
-        if ($null -eq $response) { continue }
+        $appDir = Join-Path $Script:EXPORT_DIR $app
+        New-Item -ItemType Directory -Path $appDir -Force | Out-Null
 
-        # CRITICAL FIX (v4.2.1): Filter by ACL app to get ONLY searches owned by this app
-        $filteredEntries = @()
-        $allEntries = @()
-        if ($response.entry) {
-            $allEntries = @($response.entry)
-            foreach ($entry in $allEntries) {
-                if ($entry.acl -and $entry.acl.app -eq $app) {
-                    $filteredEntries += $entry
-                }
-            }
-        }
-
-        # Build filtered response object
-        $filteredResponse = [PSCustomObject]@{
+        $perAppPayload = [PSCustomObject]@{
             links = $response.links
             origin = $response.origin
             updated = $response.updated
             generator = $response.generator
-            entry = $filteredEntries
+            entry = $appEntries
             paging = $response.paging
+            messages = @()
         }
+        Write-JsonFile -Path (Join-Path $appDir "savedsearches.json") -Data $perAppPayload
 
-        $appDir = Join-Path $Script:EXPORT_DIR $app
-        New-Item -ItemType Directory -Path $appDir -Force | Out-Null
-        Write-JsonFile -Path (Join-Path $appDir "savedsearches.json") -Data $filteredResponse
-
-        $appSaved = $filteredEntries.Count
+        $appSaved = $appEntries.Count
         $totalSavedSearches += $appSaved
 
-        # Count alerts using SAME LOGIC as TypeScript parser
         $appAlerts = 0
-        foreach ($entry in $filteredEntries) {
+        foreach ($entry in $appEntries) {
             if ($entry.content -and (Test-IsAlert -Content $entry.content)) {
                 $appAlerts++
             }
@@ -2899,9 +2992,13 @@ function Export-Alerts {
         Write-DebugLog "  ${app}: $appSaved saved searches ($appAlerts alerts)"
     }
 
+    # Drop sentinel for resume short-circuit.
+    New-Item -ItemType Directory -Path $analyticsDir -Force | Out-Null
+    (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") | Set-Content -Path $sentinel -Encoding UTF8
+
     $Script:STATS_ALERTS = $alertCount
     $Script:STATS_SAVED_SEARCHES = $totalSavedSearches
-    Write-Success "Collected $totalSavedSearches saved searches ($alertCount alerts found)"
+    Write-Success "Collected $totalSavedSearches saved searches ($alertCount alerts found) [single-call]"
 }
 
 # =============================================================================
@@ -3486,6 +3583,206 @@ function Test-AnalyticsCheckpoint {
 }
 
 # =============================================================================
+# RESUME-MODE VALIDATION HELPERS (v4.6.6 — R1/R2)
+# =============================================================================
+# Mirrors the cloud-bash R1/R2 helpers. See dma-splunk-cloud-export.sh
+# for the full rationale.
+
+# R1: validates EXPORT_DIR/<app>/savedsearches.json. Returns $true if usable
+# (parses, has .entry array, all entries' acl.app match the dir name).
+function Test-AppSavedSearchesValid {
+    param([string]$App)
+    $file = Join-Path $Script:EXPORT_DIR "$App/savedsearches.json"
+    if (-not (Test-Path $file) -or (Get-Item $file).Length -le 0) { return $false }
+
+    try {
+        $json = Get-Content $file -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return $false
+    }
+
+    if ($null -eq $json.entry) { return $false }
+    $entries = @($json.entry)
+    if ($entries.Count -eq 0) { return $true }   # empty array is acceptable
+
+    foreach ($e in $entries) {
+        $aclApp = $null
+        if ($e.acl) { $aclApp = $e.acl.app }
+        if ($aclApp -ne $App) { return $false }
+    }
+    return $true
+}
+
+# R2: validates per-app alerts_inventory.json files. Returns $true if at
+# least one file contains real results; $false if all are missing or match
+# the runtime-exceeded error-shell shape.
+function Test-AlertsInventoryOutputs {
+    foreach ($app in $Script:SELECTED_APPS) {
+        $file = Join-Path $Script:EXPORT_DIR "$app/splunk-analysis/alerts_inventory.json"
+        if (-not (Test-Path $file) -or (Get-Item $file).Length -le 0) { continue }
+
+        try {
+            $json = Get-Content $file -Raw | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            continue
+        }
+
+        # Reject error-shell: messages[].text contains "Maximum runtime" OR
+        # _meta._export_runtime_exceeded == true.
+        $isErrorShell = $false
+        if ($json.messages) {
+            foreach ($m in @($json.messages)) {
+                if ($m.text -and $m.text -match 'Maximum runtime|exceeded') { $isErrorShell = $true; break }
+            }
+        }
+        if ($json._meta -and $json._meta._export_runtime_exceeded) { $isErrorShell = $true }
+        if ($isErrorShell) { continue }
+
+        # Accept on results array OR skipped marker.
+        if ($json.results -is [Array] -or $json.skipped -eq $true) { return $true }
+    }
+    return $false
+}
+
+function Remove-AnalyticsCheckpoint {
+    param([string]$Phase)
+    $file = Join-Path $Script:EXPORT_DIR ".analytics_checkpoint"
+    if (-not (Test-Path $file)) { return }
+    $kept = Get-Content $file -ErrorAction SilentlyContinue | Where-Object { $_ -ne $Phase }
+    if ($kept) {
+        Set-Content -Path $file -Value $kept -Encoding UTF8
+    } else {
+        Set-Content -Path $file -Value "" -Encoding UTF8
+    }
+}
+
+# --validate-archive (v4.6.6): pre-flight integrity check. Mirrors the
+# cloud-bash validate_archive_integrity. Extracts to a scratch dir, runs
+# R1 against per-app savedsearches.json, R2 against alerts_inventory.json,
+# prints a report, exits.
+function Invoke-ValidateArchive {
+    param([string]$Archive)
+
+    if (-not (Test-Path $Archive)) {
+        Write-Host "[ERROR] Archive not found: $Archive" -ForegroundColor Red
+        return 1
+    }
+
+    $scratch = Join-Path $env:TEMP "dma-validate-$([System.IO.Path]::GetRandomFileName())"
+    New-Item -ItemType Directory -Path $scratch -Force | Out-Null
+    try {
+        Write-Host "Validating archive: $Archive"
+        Write-Host "Scratch dir: $scratch"
+        Write-Host ""
+
+        try {
+            tar -xzf $Archive -C $scratch 2>$null
+        } catch {
+            Write-Host "  FAIL: archive failed to extract"
+            return 1
+        }
+
+        $firstEntry = (tar -tzf $Archive 2>$null | Select-Object -First 1)
+        $wrapper = $firstEntry -replace '/.*$',''
+        $Script:EXPORT_DIR = Join-Path $scratch $wrapper
+
+        if (-not (Test-Path $Script:EXPORT_DIR)) {
+            Write-Host "  FAIL: extracted dir not found: $Script:EXPORT_DIR"
+            return 1
+        }
+
+        # Discover apps.
+        $Script:SELECTED_APPS = @()
+        Get-ChildItem $Script:EXPORT_DIR -Directory | Where-Object {
+            $_.Name -notmatch '^[_.]' -and $_.Name -notmatch '^dma_'
+        } | ForEach-Object { $Script:SELECTED_APPS += $_.Name }
+
+        Write-Host "Apps in archive:           $($Script:SELECTED_APPS.Count)"
+        $sentinel = Join-Path $Script:EXPORT_DIR "dma_analytics/.savedsearches_collected"
+        if (Test-Path $sentinel) {
+            Write-Host "Saved-searches sentinel:   present ($(Get-Content $sentinel))"
+        } else {
+            Write-Host "Saved-searches sentinel:   MISSING (full collect_alerts will run on resume)"
+        }
+        $checkpointFile = Join-Path $Script:EXPORT_DIR ".analytics_checkpoint"
+        if (Test-Path $checkpointFile) {
+            $checkpoints = (Get-Content $checkpointFile) -join ','
+            Write-Host "Analytics checkpoints:     [$checkpoints]"
+        } else {
+            Write-Host "Analytics checkpoints:     none"
+        }
+        Write-Host ""
+
+        # R1.
+        $r1Total = 0; $r1Invalid = 0; $r1Present = 0
+        foreach ($app in $Script:SELECTED_APPS) {
+            $r1Total++
+            $f = Join-Path $Script:EXPORT_DIR "$app/savedsearches.json"
+            if (Test-Path $f) {
+                $r1Present++
+                if (-not (Test-AppSavedSearchesValid -App $app)) {
+                    $r1Invalid++
+                    Write-Host "  R1 reject: $app (corrupt / foreign acl.app / unparseable)"
+                }
+            }
+        }
+        Write-Host "R1 (savedsearches.json): $r1Present/$r1Total apps have a file; $r1Invalid invalid"
+
+        # R2.
+        $r2Status = "OK"
+        if (-not (Test-AlertsInventoryOutputs)) {
+            $r2Status = "REJECT (will re-run Q6 on resume)"
+        }
+        Write-Host "R2 (alerts_inventory):   $r2Status"
+        Write-Host ""
+
+        if ($r1Invalid -gt 0 -or $r2Status -ne "OK") {
+            Write-Host "Verdict: archive has resume-time defects that v4.6.6 will self-heal."
+            Write-Host "         Run -ResumeCollect to repair."
+            return 1
+        }
+        Write-Host "Verdict: archive integrity OK. Safe to -ResumeCollect."
+        return 0
+    } finally {
+        Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# --clean-resume (v4.6.6): explicitly invalidate phase caches before
+# resuming. Mirrors cloud-bash apply_clean_resume.
+function Invoke-CleanResume {
+    param([string]$Phases)
+    Write-Host "[clean-resume] applying phase invalidations: $Phases"
+
+    foreach ($phase in ($Phases -split ',')) {
+        $phase = $phase.Trim()
+        switch ($phase) {
+            'alerts' {
+                $sentinel = Join-Path $Script:EXPORT_DIR "dma_analytics/.savedsearches_collected"
+                Remove-Item $sentinel -ErrorAction SilentlyContinue
+                $files = @(Get-ChildItem -Path $Script:EXPORT_DIR -Filter 'savedsearches.json' -Recurse -ErrorAction SilentlyContinue)
+                $files | Remove-Item -Force -ErrorAction SilentlyContinue
+                Write-Host "[clean-resume]   alerts: dropped sentinel + $($files.Count) per-app savedsearches.json"
+            }
+            'alerts_inventory' {
+                Remove-AnalyticsCheckpoint "alerts_inventory"
+                $files = @(Get-ChildItem -Path $Script:EXPORT_DIR -Filter 'alerts_inventory.json' -Recurse -ErrorAction SilentlyContinue)
+                $files | Remove-Item -Force -ErrorAction SilentlyContinue
+                Write-Host "[clean-resume]   alerts_inventory: dropped checkpoint + $($files.Count) alerts_inventory.json"
+            }
+            'analytics' {
+                $f = Join-Path $Script:EXPORT_DIR ".analytics_checkpoint"
+                Remove-Item $f -ErrorAction SilentlyContinue
+                Write-Host "[clean-resume]   analytics: dropped entire .analytics_checkpoint"
+            }
+            default {
+                if ($phase) { Write-Host "[clean-resume]   WARN: unknown phase '$phase' (ignored)" }
+            }
+        }
+    }
+}
+
+# =============================================================================
 # GLOBAL AGGREGATE ANALYTICS (v4.5.0)
 # =============================================================================
 # Replaces per-app analytics loops with 6 global queries. For N apps, this
@@ -3607,9 +3904,23 @@ function Export-GlobalAnalytics {
     # =========================================================================
     # QUERY 6: ALERTS INVENTORY via REST (per-app, uses blocking since | rest is fast)
     # =========================================================================
+    # R2 (v4.6.6): the existing checkpoint is honored only if per-app
+    # alerts_inventory.json files actually contain real results. Runtime-cap
+    # exhaustion can produce many error-shell files under a checkpoint that
+    # claims success — without this validation, resume would skip Q6 and
+    # ship another bad archive.
+    $runQ6 = $true
     if (Test-AnalyticsCheckpoint "alerts_inventory") {
-        Write-Log "  [6/6] Alerts inventory - SKIP (checkpoint exists)"
-    } else {
+        if (Test-AlertsInventoryOutputs) {
+            Write-Log "  [6/6] Alerts inventory - SKIP (checkpoint valid)"
+            $runQ6 = $false
+        } else {
+            Write-Warning2 "  [6/6] Alerts inventory checkpoint stale (error-shell or missing JSON detected) - re-running"
+            Remove-AnalyticsCheckpoint "alerts_inventory"
+        }
+    }
+
+    if ($runQ6) {
         $q6Count = 0
         foreach ($app in $Script:SELECTED_APPS) {
             $appAnalysisDir = Join-Path $Script:EXPORT_DIR "$app/splunk-analysis"
@@ -5589,9 +5900,19 @@ function Invoke-Main {
         return
     }
 
+    # v4.6.6: Handle -ValidateArchive (pre-flight integrity check, no Splunk)
+    if ($Script:VALIDATE_ARCHIVE) {
+        $rc = Invoke-ValidateArchive -Archive $Script:VALIDATE_ARCHIVE
+        exit $rc
+    }
+
     # Handle resume mode - extract previous archive early
     if ($Script:RESUME_MODE) {
         Resume-FromArchive -ArchivePath $Script:RESUME_ARCHIVE
+        # v4.6.6: -CleanResume <phases> applied AFTER extraction, BEFORE phase logic.
+        if ($Script:CLEAN_RESUME_PHASES) {
+            Invoke-CleanResume -Phases $Script:CLEAN_RESUME_PHASES
+        }
     }
 
     # Determine interactive vs non-interactive mode

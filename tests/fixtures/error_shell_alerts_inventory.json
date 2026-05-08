@@ -1,0 +1,18 @@
+{
+  "preview": false,
+  "init_offset": 0,
+  "messages": [
+    {
+      "type": "ERROR",
+      "text": "Maximum runtime (43200 seconds) exceeded. Export incomplete."
+    }
+  ],
+  "fields": [],
+  "results": [],
+  "highlighted": {},
+  "_meta": {
+    "_export_runtime_exceeded": true,
+    "_query_attempted": "Alerts inventory",
+    "_export_log_ref": "_export.log"
+  }
+}

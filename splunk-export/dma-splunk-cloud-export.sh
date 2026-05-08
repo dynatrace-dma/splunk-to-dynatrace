@@ -187,7 +187,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.3"
+SCRIPT_VERSION="4.6.6"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -251,7 +251,8 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 USAGE_PERIOD="30d"
-SCRIPT_VERSION="4.6.3"
+# v4.6.6: removed accidental duplicate `SCRIPT_VERSION="4.6.3"` declaration
+# that previously lived here. Canonical declaration is at line 190.
 # Skip _internal index searches (required for Splunk Cloud where _internal is restricted)
 SKIP_INTERNAL=false
 
@@ -322,6 +323,8 @@ CURL_PROXY_ARGS=""                         # Built at runtime from PROXY_URL
 
 # Resume settings
 RESUME_ARCHIVE=""                          # Path to previous archive for --resume-collect
+VALIDATE_ARCHIVE=""                        # Path to archive for --validate-archive (v4.6.6)
+CLEAN_RESUME_PHASES=""                     # Comma-separated phases for --clean-resume (v4.6.6)
 RESUME_MODE=false                          # Set to true when resuming from previous export
 
 # Retry settings
@@ -1130,12 +1133,20 @@ api_call() {
   ((STATS_API_CALLS++))
   debug_log "API" "→ $method $endpoint"
 
-  # Check total runtime limit
+  # Check total runtime limit.
+  # v4.6.6: this is now FATAL (was `return 1`). Letting api_call return
+  # silently after the cap blew let the script grind on for hours past
+  # the cap on a large-environment export, producing many useless error
+  # log lines and a "complete-looking" archive with zero alerts. Hard exit
+  # leaves whatever was successfully collected on disk for --resume-collect
+  # to pick up.
   local current_time=$(date +%s)
   local elapsed=$((current_time - SCRIPT_START_TIME))
   if [ $elapsed -gt $MAX_TOTAL_TIME ]; then
-    error "Maximum runtime ($MAX_TOTAL_TIME seconds) exceeded. Export incomplete."
-    return 1
+    error "Maximum runtime ($MAX_TOTAL_TIME seconds) exceeded after ${elapsed}s. Export incomplete."
+    error "Partial collection state is preserved in: $EXPORT_DIR"
+    error "Resume the export with: ./dma-splunk-cloud-export.sh --resume-collect <archive> ..."
+    exit 124
   fi
 
   # Build URL
@@ -1162,13 +1173,12 @@ api_call() {
   # `timeout` (or macOS `gtimeout`) so the OS forcibly kills it at
   # API_TIMEOUT + 30s. Without this backstop a single hung request can
   # consume the entire script's runtime budget waiting on a dead socket.
-  local timeout_cmd=""
+  #
+  # v4.6.6: OS_TIMEOUT_CMD is resolved at startup by detect_os_timeout()
+  # in main(); script bails out before reaching here if neither timeout
+  # nor gtimeout is on PATH. No more silent fallback to "no backstop".
   local hard_deadline=$((API_TIMEOUT + 30))
-  if command -v timeout &>/dev/null; then
-    timeout_cmd="timeout --kill-after=10 ${hard_deadline}"
-  elif command -v gtimeout &>/dev/null; then
-    timeout_cmd="gtimeout --kill-after=10 ${hard_deadline}"
-  fi
+  local timeout_cmd="${OS_TIMEOUT_CMD} --kill-after=10 ${hard_deadline}"
 
   while [ $retries -lt $MAX_RETRIES ]; do
     local tmp_file=$(mktemp)
@@ -2658,6 +2668,14 @@ setup_export_directory() {
 
   touch "$LOG_FILE"
   log "Export started: $EXPORT_NAME"
+  # v4.6.6: log script version + auth + key flags first thing so post-mortems
+  # don't have to reverse-engineer which build produced an archive. Splunk
+  # version (logged below) was the only version line in pre-v4.6.6 archives.
+  log "DMA Cloud Export script: v$SCRIPT_VERSION"
+  log "OS timeout backstop: ${OS_TIMEOUT_CMD:-MISSING}"
+  log "Auth method: ${AUTH_METHOD:-(unset)}"
+  log "Selected apps: ${#SELECTED_APPS[@]} apps (scoped=${SCOPE_TO_APPS:-false})"
+  log "Resume mode: ${RESUME_MODE:-false}"
   log "Stack: $SPLUNK_STACK"
   log "Version: $SPLUNK_VERSION"
 
@@ -2919,106 +2937,168 @@ except Exception as e:
 }
 
 collect_alerts() {
+  # v4.6.6 — STRUCTURAL REFACTOR. Replaces the previous per-app loop with a
+  # single stack-wide call.
+  #
+  # Why the change: at large scale (large stack-wide saved-search counts
+  # across many apps), the previous per-app path called
+  # `/servicesNS/-/$app/saved/searches` once per app, but each call returned
+  # the FULL stack-wide payload (Splunk REST does not scope by the `$app`
+  # segment in this endpoint — `acl.app` filtering only happens client
+  # side). Each call ran tens to hundreds of MB through TLS; one bad
+  # connection in many per-app iterations would hang for tens of minutes.
+  # Across many apps the script could blow its 12-hour runtime cap before
+  # alerts were collected.
+  #
+  # The fix: ONE call, partition `entry[]` by `acl.app` locally with jq,
+  # write one savedsearches.json per app. Same per-app file shape, same
+  # alert-detection logic, far fewer HTTP round trips.
+  #
+  # No `f=` field selection — the converter (archiveParser.convertParsedJsonToConf)
+  # iterates ALL `entry.content` keys with no allowlist, so any field omitted
+  # via `f=` would be silently dropped from the archive. We accept the
+  # transfer cost and rely on the OS-level timeout backstop in api_call.
+
   if [ "$COLLECT_ALERTS" != "true" ]; then
     return
   fi
 
-  progress "Collecting alerts and saved searches..."
+  local sentinel="$EXPORT_DIR/dma_analytics/.savedsearches_collected"
+
+  # R1 (v4.6.6): in resume mode, validate every cached per-app savedsearches.json
+  # before honoring the sentinel. If any are invalid (missing, corrupt JSON,
+  # foreign acl.app entries — including the v4.6.3 "unfiltered fallback" junk),
+  # drop the sentinel and force a full re-collect.
+  if [ "$RESUME_MODE" = "true" ] && [ -f "$sentinel" ]; then
+    local first_invalid=""
+    for _check_app in "${SELECTED_APPS[@]}"; do
+      if ! is_valid_app_savedsearches "$_check_app"; then
+        first_invalid="$_check_app"
+        break
+      fi
+    done
+    if [ -n "$first_invalid" ]; then
+      warning "Resume: cached savedsearches.json for app '$first_invalid' failed validation — dropping sentinel and re-collecting"
+      rm -f "$sentinel"
+    fi
+  fi
+
+  # Resume short-circuit: if a prior run already finished collect_alerts
+  # cleanly (sentinel present and R1 above didn't drop it), skip the call
+  # and recompute stats from cached files.
+  if [ "$RESUME_MODE" = "true" ] && [ -f "$sentinel" ]; then
+    debug_log "RESUME" "savedsearches collection already completed (sentinel: $sentinel) — recomputing stats only"
+    local total=0 alerts=0
+    for app in "${SELECTED_APPS[@]}"; do
+      if [ -s "$EXPORT_DIR/$app/savedsearches.json" ] && $HAS_JQ; then
+        local n a
+        n=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+        a=$(jq '[.entry[] | select(
+          ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
+          ((.content["alert_condition"] // "") | length > 0) or
+          ((.content["alert_comparator"] // "") | length > 0) or
+          ((.content["alert_threshold"] // "") | length > 0) or
+          ((.content["counttype"] // "") | test("number of"; "i")) or
+          ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
+          ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
+          ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
+        )] | length' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+        total=$((total + n))
+        alerts=$((alerts + a))
+      fi
+    done
+    STATS_SAVED_SEARCHES=$total
+    STATS_ALERTS=$alerts
+    success "Saved searches already collected: $total ($alerts alerts) — resume short-circuit via sentinel"
+    return 0
+  fi
+
+  if ! $HAS_JQ; then
+    error "jq is required for collect_alerts (v4.6.6 single-call partitioning depends on it)"
+    return 1
+  fi
+
+  progress "Collecting alerts and saved searches (single stack-wide call)..."
+
+  local response_file
+  response_file=$(mktemp -t saved_searches_response.XXXXXX)
+
+  # ONE call. acl.app filtering happens locally below.
+  if ! api_call "/servicesNS/-/-/saved/searches" "GET" "output_mode=json&count=0" > "$response_file"; then
+    error "Failed to fetch saved searches stack-wide; collect_alerts cannot proceed"
+    rm -f "$response_file"
+    return 1
+  fi
+
+  # Sanity check: response is parseable JSON with an entry array. If not,
+  # something's wrong upstream (timeout, auth issue, partial response).
+  if ! jq -e '.entry' "$response_file" >/dev/null 2>&1; then
+    error "Saved searches response is not valid JSON or missing .entry — collect_alerts aborting"
+    rm -f "$response_file"
+    return 1
+  fi
 
   local alert_count=0
   local total_saved_searches=0
 
   for app in "${SELECTED_APPS[@]}"; do
-    # v4.6.1: Per-app resume support. Skip the saved/searches REST call
-    # entirely if this app's savedsearches.json already exists from a
-    # prior run. Without this, --resume-collect would re-query every
-    # app every time and the alerts phase could itself burn the entire
-    # runtime budget on a flaky search head.
-    if [ "$RESUME_MODE" = "true" ] && \
-       [ -s "$EXPORT_DIR/$app/savedsearches.json" ] && \
-       ! grep -q '"error"' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null; then
-      debug_log "RESUME" "  Skipping $app saved searches (already on disk)"
-      # Still update the running totals from the cached file so the
-      # final summary numbers are accurate after resume.
-      if $HAS_JQ; then
-        local cached_saved=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
-        ((total_saved_searches += cached_saved))
-      fi
-      continue
-    fi
+    mkdir -p "$EXPORT_DIR/$app"
 
-    local response
-    response=$(api_call "/servicesNS/-/$app/saved/searches" "GET" "output_mode=json&count=0")
+    # Per-app envelope: same shape every consumer expects, just with
+    # entry[] partitioned to this app.
+    jq --arg app "$app" '{
+      links: .links,
+      origin: .origin,
+      updated: .updated,
+      generator: .generator,
+      entry: [.entry[]? | select(.acl.app == $app)],
+      paging: .paging,
+      messages: (.messages // [])
+    }' "$response_file" > "$EXPORT_DIR/$app/savedsearches.json"
 
-    if [ $? -eq 0 ]; then
-      # CRITICAL FIX (v4.2.1): Filter by ACL app to get ONLY searches owned by this app
-      # The REST API returns ALL searches VISIBLE to the app (including globally shared ones)
-      # We must filter by acl.app to get only searches that actually BELONG to this app
-      # Without this filter, every app's savedsearches.json would contain ALL 188K+ searches!
-      if $HAS_JQ; then
-        local filtered_response
-        filtered_response=$(echo "$response" | jq --arg app "$app" '{
-          links: .links,
-          origin: .origin,
-          updated: .updated,
-          generator: .generator,
-          entry: [.entry[] | select(.acl.app == $app)],
-          paging: .paging
-        }' 2>/dev/null)
+    local app_saved
+    app_saved=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+    total_saved_searches=$((total_saved_searches + app_saved))
 
-        if [ -n "$filtered_response" ] && [ "$filtered_response" != "null" ]; then
-          echo "$filtered_response" > "$EXPORT_DIR/$app/savedsearches.json"
+    # Alert detection — same predicate as v4.6.3 (SINGLE SOURCE OF TRUTH:
+    # mirrors dma-splunk-converter's alertConverter heuristic).
+    local app_alerts
+    app_alerts=$(jq '[.entry[] | select(
+      ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
+      ((.content["alert_condition"] // "") | length > 0) or
+      ((.content["alert_comparator"] // "") | length > 0) or
+      ((.content["alert_threshold"] // "") | length > 0) or
+      ((.content["counttype"] // "") | test("number of"; "i")) or
+      ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
+      ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
+      ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
+    )] | length' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+    alert_count=$((alert_count + app_alerts))
 
-          # Count entries after filtering
-          local app_saved=$(echo "$filtered_response" | jq '.entry | length // 0' 2>/dev/null || echo 0)
-          ((total_saved_searches += app_saved))
-
-          # Count alerts using SAME LOGIC as TypeScript parser (SINGLE SOURCE OF TRUTH)
-          # An entry is an alert if ANY of these are true:
-          # - alert.track = "1" or "true" or 1 or true (NOT "0" or "false")
-          # - alert_type is one of: "always", "custom", "number of events", "number of hosts", "number of sources"
-          # - alert_condition has a value
-          # - alert_comparator or alert_threshold has a value
-          # - counttype contains "number of"
-          # - actions has a non-empty value (comma-separated list of enabled actions)
-          # - action.email/webhook/script/etc = "1" or true (NOT "0" or false or "false")
-          local app_alerts=$(echo "$filtered_response" | jq '[.entry[] | select(
-            ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
-            ((.content["alert_condition"] // "") | length > 0) or
-            ((.content["alert_comparator"] // "") | length > 0) or
-            ((.content["alert_threshold"] // "") | length > 0) or
-            ((.content["counttype"] // "") | test("number of"; "i")) or
-            ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
-            ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
-            ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
-          )] | length' 2>/dev/null || echo 0)
-          ((alert_count += app_alerts))
-
-          debug_log "ALERTS" "  $app: $app_saved saved searches ($app_alerts alerts)"
-        else
-          # Fallback: save unfiltered if jq filtering fails
-          echo "$response" > "$EXPORT_DIR/$app/savedsearches.json"
-          warning "Could not filter savedsearches for $app by ACL - saved unfiltered response"
-        fi
-      else
-        # Fallback without jq - save unfiltered response
-        echo "$response" > "$EXPORT_DIR/$app/savedsearches.json"
-        # Count alerts using grep (less accurate)
-        local app_alerts=$(echo "$response" | grep -cE '"alert\.track"\s*:\s*(true|"1")' || echo 0)
-        ((alert_count += app_alerts))
-      fi
-    fi
+    debug_log "ALERTS" "  $app: $app_saved saved searches ($app_alerts alerts)"
   done
 
-  STATS_ALERTS=$alert_count
+  rm -f "$response_file"
+
+  # Drop the sentinel so resume can short-circuit on the next run.
+  mkdir -p "$EXPORT_DIR/dma_analytics"
+  date -u +"%Y-%m-%dT%H:%M:%SZ" > "$sentinel"
+
   STATS_SAVED_SEARCHES=$total_saved_searches
-  success "Collected $total_saved_searches saved searches ($alert_count alerts found)"
+  STATS_ALERTS=$alert_count
+  success "Collected $total_saved_searches saved searches ($alert_count alerts found) [single-call]"
 }
 
 # =============================================================================
@@ -3069,6 +3149,226 @@ save_analytics_checkpoint() {
 has_analytics_checkpoint() {
   local phase="$1"
   grep -q "^${phase}$" "$EXPORT_DIR/.analytics_checkpoint" 2>/dev/null
+}
+
+# =============================================================================
+# RESUME-MODE VALIDATION HELPERS (v4.6.6 — R1/R2)
+# =============================================================================
+# These helpers let `--resume-collect` heal damaged archives without manual
+# surgery. The motivating case: a prior failed run left a corrupt
+# savedsearches.json (jq-truncated mid-stream) and many error-shell
+# alerts_inventory.json files alongside an `alerts_inventory` checkpoint
+# that *claims* the phase completed. Without validation, resume would
+# trust the checkpoint and the damaged file, producing another bad archive.
+
+# R1: validates that EXPORT_DIR/<app>/savedsearches.json is a usable cache
+# entry. Returns 0 if the file exists, parses as JSON with an .entry array,
+# and every entry's acl.app matches the dir name. Returns non-zero (caller
+# should re-fetch / drop sentinel) for any other state.
+is_valid_app_savedsearches() {
+  local app="$1"
+  local file="$EXPORT_DIR/$app/savedsearches.json"
+
+  [ -s "$file" ] || return 1
+  $HAS_JQ || return 1
+
+  jq -e '.entry | type == "array"' "$file" >/dev/null 2>&1 || return 1
+
+  # Empty entry array is acceptable — legitimate "no saved searches in this app".
+  local entry_count
+  entry_count=$(jq '.entry | length' "$file" 2>/dev/null || echo 0)
+  if [ "$entry_count" = "0" ]; then
+    return 0
+  fi
+
+  # All entries' acl.app must match the directory. A foreign acl.app means
+  # this is unfiltered junk (the v4.6.3 "saved unfiltered response" fallback).
+  local foreign_count
+  foreign_count=$(jq --arg app "$app" '[.entry[] | select(.acl.app != $app)] | length' "$file" 2>/dev/null || echo 999)
+  [ "$foreign_count" = "0" ]
+}
+
+# R2: validates the alerts_inventory analytics checkpoint sentinel files.
+# Returns 0 if at least one app's <app>/splunk-analysis/alerts_inventory.json
+# contains real results. Returns non-zero if EVERY file is either missing
+# or matches the runtime-exceeded error-shell shape (caller should drop the
+# checkpoint and re-run Query 6).
+validate_alerts_inventory_outputs() {
+  $HAS_JQ || return 1
+
+  local found_valid=1   # 1 = false in shell exit semantics
+  for app in "${SELECTED_APPS[@]}"; do
+    local file="$EXPORT_DIR/$app/splunk-analysis/alerts_inventory.json"
+    [ -s "$file" ] || continue
+
+    # Reject the runtime-exceeded error shell: messages[].text matches
+    # "Maximum runtime" OR ._meta._export_runtime_exceeded == true.
+    if jq -e '
+      (.messages // [] | any(.text // "" | test("Maximum runtime|exceeded"; "i"))) or
+      (._meta._export_runtime_exceeded == true)
+    ' "$file" >/dev/null 2>&1; then
+      continue
+    fi
+
+    # Accept if the file has either a results array or a skipped marker.
+    if jq -e '(.results | type == "array") or (.skipped == true)' "$file" >/dev/null 2>&1; then
+      found_valid=0
+      break
+    fi
+  done
+
+  return "$found_valid"
+}
+
+# --validate-archive (v4.6.6): pre-flight integrity check. Extracts the
+# archive to a scratch dir, runs R1 against every per-app savedsearches.json
+# and R2 against every alerts_inventory.json, prints a report, exits.
+#
+# Returns 0 if the archive is healthy enough to resume cleanly, 1 if any
+# defects would force collect_alerts / Q6 to re-run. (Either way, --resume-collect
+# v4.6.6 is built to self-heal those defects, but operators may want the heads-up.)
+validate_archive_integrity() {
+  local archive="$1"
+  if [ ! -f "$archive" ]; then
+    echo "[ERROR] Archive not found: $archive" >&2
+    return 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[ERROR] jq is required for --validate-archive" >&2
+    return 1
+  fi
+
+  local scratch
+  scratch=$(mktemp -d -t dma-validate.XXXXXX)
+  trap 'rm -rf "$scratch"' RETURN
+
+  echo "Validating archive: $archive"
+  echo "Scratch dir: $scratch"
+  echo ""
+
+  # Extract.
+  if ! tar -xzf "$archive" -C "$scratch" 2>/dev/null; then
+    echo "  FAIL: archive failed to extract"
+    return 1
+  fi
+
+  # Wrapper dir = first entry's path component.
+  local wrapper
+  wrapper=$(tar -tzf "$archive" 2>/dev/null | head -1 | sed 's|/.*||')
+  EXPORT_DIR="$scratch/$wrapper"
+
+  if [ ! -d "$EXPORT_DIR" ]; then
+    echo "  FAIL: extracted dir not found: $EXPORT_DIR"
+    return 1
+  fi
+
+  # Discover apps from the extracted dir.
+  SELECTED_APPS=()
+  while IFS= read -r app; do SELECTED_APPS+=("$app"); done < <(find "$EXPORT_DIR" -mindepth 1 -maxdepth 1 -type d -not -name '_*' -not -name 'dma_*' -not -name '.*' -printf '%f\n' 2>/dev/null | sort)
+  HAS_JQ=true
+
+  echo "Apps in archive:           ${#SELECTED_APPS[@]}"
+  local sentinel="$EXPORT_DIR/dma_analytics/.savedsearches_collected"
+  if [ -f "$sentinel" ]; then
+    echo "Saved-searches sentinel:   present ($(cat "$sentinel"))"
+  else
+    echo "Saved-searches sentinel:   MISSING (full collect_alerts will run on resume)"
+  fi
+  if [ -f "$EXPORT_DIR/.analytics_checkpoint" ]; then
+    echo "Analytics checkpoints:     [$(tr '\n' ',' < "$EXPORT_DIR/.analytics_checkpoint" | sed 's/,$//')]"
+  else
+    echo "Analytics checkpoints:     none"
+  fi
+  echo ""
+
+  # R1: validate every per-app savedsearches.json that exists.
+  local r1_total=0 r1_invalid=0 r1_present=0
+  for app in "${SELECTED_APPS[@]}"; do
+    r1_total=$((r1_total + 1))
+    local f="$EXPORT_DIR/$app/savedsearches.json"
+    if [ -e "$f" ]; then
+      r1_present=$((r1_present + 1))
+      if ! is_valid_app_savedsearches "$app"; then
+        r1_invalid=$((r1_invalid + 1))
+        echo "  R1 reject: $app (corrupt / foreign acl.app / unparseable)"
+      fi
+    fi
+  done
+  echo "R1 (savedsearches.json): $r1_present/$r1_total apps have a file; $r1_invalid invalid"
+
+  # R2: validate alerts_inventory outputs.
+  local r2_status="OK"
+  if ! validate_alerts_inventory_outputs; then
+    r2_status="REJECT (will re-run Q6 on resume)"
+  fi
+  echo "R2 (alerts_inventory):   $r2_status"
+  echo ""
+
+  if [ "$r1_invalid" -gt 0 ] || [ "$r2_status" != "OK" ]; then
+    echo "Verdict: archive has resume-time defects that v4.6.6 will self-heal."
+    echo "         Run --resume-collect to repair. R1 will drop the sentinel for"
+    echo "         the bad app(s) and R2 will invalidate the alerts_inventory checkpoint."
+    return 1
+  fi
+
+  echo "Verdict: archive integrity OK. Safe to --resume-collect."
+  return 0
+}
+
+# --clean-resume (v4.6.6): explicitly invalidate phase caches in the
+# extracted archive before normal resume continues. Allows operators to
+# force re-collection of specific phases without relying on R1/R2 auto-
+# detection. Phases:
+#   alerts            — drops sentinel + per-app savedsearches.json
+#   alerts_inventory  — drops the analytics checkpoint key + per-app alerts_inventory.json
+#   analytics         — drops the entire .analytics_checkpoint file
+apply_clean_resume() {
+  local phases="$1"
+  echo "[clean-resume] applying phase invalidations: $phases" >&2
+
+  local IFS_ORIG="$IFS"
+  IFS=','
+  for phase in $phases; do
+    case "$phase" in
+      alerts)
+        rm -f "$EXPORT_DIR/dma_analytics/.savedsearches_collected"
+        local n
+        n=$(find "$EXPORT_DIR" -mindepth 2 -maxdepth 2 -name 'savedsearches.json' 2>/dev/null | wc -l)
+        find "$EXPORT_DIR" -mindepth 2 -maxdepth 2 -name 'savedsearches.json' -delete 2>/dev/null
+        echo "[clean-resume]   alerts: dropped sentinel + $n per-app savedsearches.json" >&2
+        ;;
+      alerts_inventory)
+        drop_analytics_checkpoint "alerts_inventory"
+        local n
+        n=$(find "$EXPORT_DIR" -name 'alerts_inventory.json' 2>/dev/null | wc -l)
+        find "$EXPORT_DIR" -name 'alerts_inventory.json' -delete 2>/dev/null
+        echo "[clean-resume]   alerts_inventory: dropped checkpoint + $n alerts_inventory.json" >&2
+        ;;
+      analytics)
+        rm -f "$EXPORT_DIR/.analytics_checkpoint"
+        echo "[clean-resume]   analytics: dropped entire .analytics_checkpoint" >&2
+        ;;
+      *)
+        echo "[clean-resume]   WARN: unknown phase '$phase' (ignored)" >&2
+        ;;
+    esac
+  done
+  IFS="$IFS_ORIG"
+}
+
+# Removes a single key (line) from $EXPORT_DIR/.analytics_checkpoint.
+# Idempotent: no-op if file or key doesn't exist.
+drop_analytics_checkpoint() {
+  local key="$1"
+  local file="$EXPORT_DIR/.analytics_checkpoint"
+  [ -f "$file" ] || return 0
+
+  local tmp
+  tmp=$(mktemp -t analytics_checkpoint.XXXXXX)
+  grep -v "^${key}$" "$file" > "$tmp" 2>/dev/null || true
+  mv "$tmp" "$file"
+  return 0
 }
 
 collect_rbac() {
@@ -3476,9 +3776,23 @@ collect_app_analytics() {
   # QUERY 6: ALERTS INVENTORY via REST (per-app, uses blocking since | rest is fast)
   # This is the only per-app query remaining — it uses | rest which is quick.
   # =========================================================================
+  # R2 (v4.6.6): the existing checkpoint is honored only if the per-app
+  # alerts_inventory.json files actually contain real results. Runtime-cap
+  # exhaustion can produce many error-shell files under a checkpoint that
+  # claims success — without this validation, resume would skip Q6 and
+  # ship another bad archive.
+  local _run_q6=true
   if has_analytics_checkpoint "alerts_inventory"; then
-    log "  [6/6] Alerts inventory — SKIP (checkpoint exists)"
-  else
+    if validate_alerts_inventory_outputs; then
+      log "  [6/6] Alerts inventory — SKIP (checkpoint valid)"
+      _run_q6=false
+    else
+      warning "  [6/6] Alerts inventory checkpoint stale (error-shell or missing JSON detected) — re-running"
+      drop_analytics_checkpoint "alerts_inventory"
+    fi
+  fi
+
+  if [ "$_run_q6" = "true" ]; then
     local q6_count=0
     for app in "${SELECTED_APPS[@]}"; do
       local app_analysis_dir="$EXPORT_DIR/$app/splunk-analysis"
@@ -5698,6 +6012,13 @@ resume_from_archive() {
   log "Resumed from archive: $archive"
   log "Export directory: $EXPORT_DIR"
 
+  # v4.6.6 --clean-resume: explicit phase invalidation requested by operator.
+  # Applied AFTER extraction, BEFORE any phase logic, so cleared state is
+  # visible to the rest of the pipeline.
+  if [ -n "$CLEAN_RESUME_PHASES" ]; then
+    apply_clean_resume "$CLEAN_RESUME_PHASES"
+  fi
+
   success "Extracted previous export: $dir_name"
 }
 
@@ -6513,6 +6834,33 @@ main() {
     HAS_JQ=true
   fi
 
+  # v4.6.6: detect OS-level `timeout` / `gtimeout` for the api_call hung-curl
+  # backstop (see api_call). Previously the absence of both was a silent
+  # fallback to "no backstop", which on Splunk Cloud Victoria + a slow TLS
+  # path let individual curl calls hang for tens of minutes — observed to
+  # blow the 12-hour runtime cap on large-environment exports. Fail fast so
+  # operators know to install GNU coreutils before kicking off a long run.
+  detect_os_timeout() {
+    if command -v timeout &>/dev/null; then
+      OS_TIMEOUT_CMD="timeout"
+    elif command -v gtimeout &>/dev/null; then
+      OS_TIMEOUT_CMD="gtimeout"
+    else
+      echo "" >&2
+      echo "Error: required dependency missing: 'timeout' (Linux) or 'gtimeout' (macOS via 'brew install coreutils')." >&2
+      echo "" >&2
+      echo "Without it, hung HTTP requests can stall this script for hours and" >&2
+      echo "silently exhaust the runtime cap, producing a 'complete-looking'" >&2
+      echo "archive that may be missing alerts. Install instructions:" >&2
+      echo "  • Linux:  GNU coreutils ships 'timeout' on every modern distro." >&2
+      echo "  • macOS:  brew install coreutils    (provides 'gtimeout')" >&2
+      echo "  • Alpine: apk add coreutils" >&2
+      echo "" >&2
+      exit 1
+    fi
+  }
+  detect_os_timeout
+
   # Parse command-line arguments for non-interactive mode
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -6612,6 +6960,33 @@ main() {
         RESUME_MODE=true
         shift 2
         ;;
+      --validate-archive)
+        # v4.6.6: pre-flight integrity check. Extracts the archive read-only
+        # to /tmp, runs R1 against every per-app savedsearches.json, runs R2
+        # against every alerts_inventory.json, prints a report, exits without
+        # touching Splunk. Useful before kicking off a long resume run.
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --validate-archive requires a path to a .tar.gz archive" >&2
+          exit 1
+        fi
+        VALIDATE_ARCHIVE="$2"
+        shift 2
+        ;;
+      --clean-resume)
+        # v4.6.6: explicitly invalidate phase caches before resuming. Useful
+        # when an operator wants to force re-collection of specific phases
+        # without trusting R1/R2 auto-detection. Phases:
+        #   alerts             — drops savedsearches sentinel + per-app savedsearches.json
+        #   alerts_inventory   — drops analytics checkpoint + per-app alerts_inventory.json
+        #   analytics          — drops the entire .analytics_checkpoint file
+        # Comma-separated. Example: --clean-resume alerts,alerts_inventory
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --clean-resume requires phase names (e.g. 'alerts,alerts_inventory')" >&2
+          exit 1
+        fi
+        CLEAN_RESUME_PHASES="$2"
+        shift 2
+        ;;
       --test-access)
         # Pre-flight check: test API access for all collection categories (no export)
         TEST_ACCESS_MODE=true
@@ -6683,6 +7058,15 @@ main() {
   # =========================================================================
   if [ "$REMASK_MODE" = "true" ]; then
     remask_archive "$REMASK_ARCHIVE"
+    exit $?
+  fi
+
+  # =========================================================================
+  # HANDLE VALIDATE-ARCHIVE MODE (v4.6.6)
+  # Pre-flight integrity check; exits without touching Splunk.
+  # =========================================================================
+  if [ -n "$VALIDATE_ARCHIVE" ]; then
+    validate_archive_integrity "$VALIDATE_ARCHIVE"
     exit $?
   fi
 
@@ -6964,5 +7348,9 @@ except:
   SESSION_KEY=""
 }
 
-# Run main
-main "$@"
+# Run main only when the script is executed directly, not when sourced as a
+# library (e.g. by the regression test harness under tests/). This is the
+# canonical bash idiom from Google's Bash Style Guide.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi

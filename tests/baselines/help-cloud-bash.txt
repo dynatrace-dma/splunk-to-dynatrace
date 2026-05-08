@@ -1,0 +1,27 @@
+Usage: splunk-export/dma-splunk-cloud-export.sh [OPTIONS]
+
+Options:
+  --stack URL       Splunk Cloud stack URL
+  --token TOKEN     API token for authentication
+  --user USER       Username (if not using token)
+  --password PASS   Password (if not using token)
+  --all-apps        Export all applications
+  --apps LIST       Comma-separated list of apps
+  --output DIR      Output directory
+  --rbac            Collect RBAC/users data (OFF by default - global user/role data)
+  --usage           Collect usage analytics (OFF by default - requires _audit/_internal)
+  --analytics-period N  Analytics time window (default: 7d, e.g., 30d, 90d)
+  --skip-internal   Skip searches requiring _internal index (use if restricted)
+  --scoped          Scope all collections to selected apps only
+  --proxy URL       Route all connections through a proxy server (e.g., http://proxy:8080)
+  --resume-collect FILE  Resume a previous interrupted export from a .tar.gz archive
+  --test-access     Pre-flight check: test API access for all categories (no export)
+  --remask FILE     Re-anonymize an existing unmasked archive (no Splunk connection needed)
+  -d, --debug       Enable verbose debug logging (writes to export_debug.log)
+  --help            Show this help
+
+Performance Tips:
+  For large environments, use --scoped with --apps:
+    splunk-export/dma-splunk-cloud-export.sh --stack acme.splunkcloud.com --token XXX --apps myapp --scoped
+
+  This exports app configs + app-specific users/usage for migration analysis.

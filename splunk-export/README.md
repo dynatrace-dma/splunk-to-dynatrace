@@ -1,7 +1,7 @@
 # DMA Splunk Export Scripts
 
-**Versions**: Enterprise (`dma-splunk-export.sh`) **4.6.4** · Cloud Bash (`dma-splunk-cloud-export.sh`) **4.6.2** · Cloud PowerShell (`dma-splunk-cloud-export.ps1`) **4.6.2**
-**Last Updated**: April 2026
+**Versions**: Enterprise (`dma-splunk-export.sh`) **4.6.5** · Cloud Bash (`dma-splunk-cloud-export.sh`) **4.6.6** · Cloud PowerShell (`dma-splunk-cloud-export.ps1`) **4.6.6**
+**Last Updated**: May 2026
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
 > *An ACE Services Division of Dynatrace*
@@ -420,13 +420,35 @@ Add `--debug` (Bash) or `-Debug_Mode` (PowerShell) for detailed diagnostics:
 >
 > | Version | Enterprise (`dma-splunk-export.sh`) | Cloud Bash (`dma-splunk-cloud-export.sh`) | Cloud PowerShell (`dma-splunk-cloud-export.ps1`) |
 > |---|:---:|:---:|:---:|
+> | **v4.6.6** | — | ✅ (large-environment hardening + resume self-heal) | ✅ (parity with bash 4.6.6) |
+> | **v4.6.5** | ✅ (`BASH_SOURCE` guard for test sourcing — no behavior change) | ✅ (intermediate — superseded by 4.6.6) | — |
 > | **v4.6.4** | ✅ (eai:acl `where`-clause quoting) | — | — |
 > | **v4.6.3** | ✅ (user-namespace dashboard de-dup) | — | — |
 > | **v4.6.2** | — *(skipped — Enterprise jumped 4.6.0 → 4.6.3)* | ✅ (`search`-app inclusion) | ✅ (`search`-app + parity) |
 > | **v4.6.1** | — *(skipped — same reason)* | ✅ (resume reliability) | ✅ (resume reliability) |
 > | **v4.6.0** | ✅ | ✅ | ✅ |
 >
-> Customers running ONLY Enterprise can ignore the v4.6.1 + v4.6.2 entries (Cloud-only fixes; the Enterprise script always exported the `search` app and uses filesystem-based collection that doesn't have the per-app REST hang failure mode v4.6.1 addresses). Customers running ONLY Cloud can ignore the v4.6.3 + v4.6.4 entries (Enterprise-only).
+> Customers running ONLY Enterprise can ignore the v4.6.1 + v4.6.2 + v4.6.6 entries (Cloud-only fixes; the Enterprise script always exported the `search` app and uses filesystem-based collection that doesn't have the per-app REST timeout-cascade failure mode v4.6.6 addresses). Customers running ONLY Cloud can ignore the v4.6.3 + v4.6.4 + v4.6.5 entries (Enterprise-only or no-op).
+
+### v4.6.6 (Cloud only) — Large-environment hardening + resume self-heal
+
+**Applies to:** `dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`. Enterprise unaffected — the Enterprise collection path doesn't have the per-app REST timeout-cascade failure mode v4.6.6 addresses.
+
+Closes a structural failure mode where Splunk Cloud environments with many apps could exceed the 12-hour runtime cap and silently produce "complete-looking" archives that contained zero alerts. v4.6.6 closes the structural gap and adds resume validation that detects the failure mode automatically.
+
+- **Single-call `collect_alerts`** — replaces the per-app `/saved/searches` REST loop with one stack-wide call partitioned by `acl.app` locally. Per-app `savedsearches.json` file shape is unchanged. Eliminates the redundant per-app transfer that caused the original timeout cascade.
+- **OS-level timeout backstop is now fail-fast** — script exits at startup with install instructions if neither `timeout` (Linux) nor `gtimeout` (macOS via `brew install coreutils`) is on `PATH`. Previously this was a silent fallback that disabled the curl hung-request kill-switch. PowerShell's `Invoke-WebRequest` honors `-TimeoutSec` reliably, so this only applies to the Bash script.
+- **Runtime cap is now fatal** — `exit 124` with resume instructions instead of `return 1`. Prevents the "looks complete but isn't" archive outcome.
+- **Resume validation R1 (`is_valid_app_savedsearches`)** — on resume, rejects per-app `savedsearches.json` that is corrupt JSON, missing `.entry`, or contains foreign `acl.app` entries. Drops the resume sentinel and re-fetches.
+- **Resume validation R2 (`validate_alerts_inventory_outputs` + `drop_analytics_checkpoint`)** — on resume, rejects the `alerts_inventory` checkpoint when its sentinel files are runtime-exceeded error shells. The stale checkpoint is invalidated and Q6 re-runs.
+- **New flag `--validate-archive FILE`** — pre-flight integrity check. Extracts read-only, runs R1/R2, prints a verdict, exits. No Splunk connection required.
+- **New flag `--clean-resume PHASES`** — explicit phase invalidation on resume. Comma-separated. Phases: `alerts`, `alerts_inventory`, `analytics`. Escape hatch when R1/R2 auto-detection isn't sufficient.
+- **Banner now logs script version + auth + apps + resume mode** — makes post-mortem investigation possible from `_export.log` alone.
+- Test infrastructure: `tests/` tree with bats-core 1.10.0 vendored, fixture generator, Splunk API mock library, baseline snapshots, and 27 unit tests. Both `*.sh` scripts now have a `BASH_SOURCE` guard so the harness can source them as libraries without invoking `main`.
+
+### v4.6.5 (Enterprise only) — `BASH_SOURCE` guard for test sourcing
+
+**Applies to:** `dma-splunk-export.sh`. No behavioral change when the script is run directly — the guard only affects what happens when the file is `source`d by the new test harness. Enterprise failure-mode hardening (timeout backstop + fatal runtime cap) is scheduled for a follow-up release.
 
 ### v4.6.4 (Enterprise only) — `eai:acl` field quoting in `where` clauses
 
