@@ -1,0 +1,733 @@
+
+In splunk-export/dma-splunk-cloud-export.sh line 191:
+SCRIPT_NAME="DMA Splunk Cloud Export"
+^---------^ SC2034 (warning): SCRIPT_NAME appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 251:
+COLLECT_AUDIT=false
+^-----------^ SC2034 (warning): COLLECT_AUDIT appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 277:
+declare -A EMAIL_MAP 2>/dev/null || EMAIL_MAP=()
+                                    ^-------^ SC2034 (warning): EMAIL_MAP appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 278:
+declare -A HOST_MAP 2>/dev/null || HOST_MAP=()
+                                   ^------^ SC2034 (warning): HOST_MAP appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 341:
+MAX_CONCURRENT_SEARCHES=1  # Don't run multiple searches in parallel
+^---------------------^ SC2034 (warning): MAX_CONCURRENT_SEARCHES appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 342:
+SEARCH_POLL_INTERVAL=1     # How often to check if search is done (seconds)
+^------------------^ SC2034 (warning): SEARCH_POLL_INTERVAL appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 343:
+CURRENT_DELAY=$API_DELAY_SECONDS
+^-----------^ SC2034 (warning): CURRENT_DELAY appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 361:
+EXPORT_END_TIME=0
+^-------------^ SC2034 (warning): EXPORT_END_TIME appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 425:
+  local stripped=$(echo -e "$content" | sed 's/\x1b\[[0-9;]*m//g')
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 457:
+    local stripped=$(echo -e "$line" | sed 's/\x1b\[[0-9;]*m//g')
+          ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 517:
+  printf "\r${CYAN}[${NC}"
+         ^---------------^ SC2059 (info): Don't use variables in the printf format string. Use printf '..%s..' "$foo".
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 539:
+    echo "DMA Cloud Export Debug Log" >> "$DEBUG_LOG_FILE"
+    ^-- SC2129 (style): Consider using { cmd1; cmd2; } >> file instead of individual redirects.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 567:
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 599:
+  local safe_url=$(echo "$url" | sed 's/password=[^&]*/password=REDACTED/g' | sed 's/token=[^&]*/token=REDACTED/g')
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 655:
+    echo "" >> "$DEBUG_LOG_FILE"
+    ^--------------------------^ SC2129 (style): Consider using { cmd1; cmd2; } >> file instead of individual redirects.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 858:
+    local bar=$(printf "%${bar_len}s" | tr ' ' '▓')
+          ^-^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1118:
+  local start_time=$(date +%s)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1143:
+  local current_time=$(date +%s)
+        ^----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1145:
+  if [ $elapsed -gt $MAX_TOTAL_TIME ]; then
+                    ^-------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  if [ $elapsed -gt "$MAX_TOTAL_TIME" ]; then
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1183:
+  while [ $retries -lt $MAX_RETRIES ]; do
+                       ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  while [ $retries -lt "$MAX_RETRIES" ]; do
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1184:
+    local tmp_file=$(mktemp)
+          ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1193:
+          $CURL_PROXY_ARGS \
+          ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+          "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1200:
+          $CURL_PROXY_ARGS \
+          ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+          "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1208:
+        $CURL_PROXY_ARGS \
+        ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+        "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1226:
+    local end_time=$(date +%s)
+          ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1334:
+  local count_response=$(api_call "$endpoint" "GET" "output_mode=json&count=1")
+        ^------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1335:
+  if [ $? -ne 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1350:
+  while [ $offset -lt $total ]; do
+                      ^----^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  while [ $offset -lt "$total" ]; do
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1355:
+    local batch_response=$(api_call "$endpoint" "GET" "output_mode=json&count=$BATCH_SIZE&offset=$offset")
+          ^------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1356:
+    if [ $? -ne 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1365:
+    local batch_count=$(echo "$batch_response" | $PYTHON_CMD -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('entry',[])))" 2>/dev/null || echo "0")
+          ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1477:
+  local checkpoint_time=$($PYTHON_CMD -c "import json; print(json.load(open('$CHECKPOINT_FILE')).get('timestamp',''))" 2>/dev/null)
+        ^-------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1478:
+  local checkpoint_category=$($PYTHON_CMD -c "import json; print(json.load(open('$CHECKPOINT_FILE')).get('category',''))" 2>/dev/null)
+        ^-----------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1487:
+    read -p "  Resume from checkpoint? (Y/n): " resume_choice
+    ^--^ SC2162 (info): read without -r will mangle backslashes.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1509:
+  local end_time=$(date +%s)
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1544:
+  local hostname=$(echo "$url" | sed 's|https://||' | sed 's|:.*||')
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1568:
+    local dns_ip=$(echo "$dns_result" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+          ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1575:
+      echo "$dns_result" | sed 's/^/    /'
+      ^-- SC2001 (style): See if you can use ${variable//search/replace} instead.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1595:
+        echo "$nc_result" | sed 's/^/    /'
+        ^-- SC2001 (style): See if you can use ${variable//search/replace} instead.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1627:
+    $CURL_PROXY_ARGS \
+    ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1641:
+  local time_total=$(echo "$curl_output" | grep "TIME_TOTAL:" | cut -d: -f2)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1642:
+  local time_connect=$(echo "$curl_output" | grep "TIME_CONNECT:" | cut -d: -f2)
+        ^----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1643:
+  local time_appconnect=$(echo "$curl_output" | grep "TIME_APPCONNECT:" | cut -d: -f2)
+        ^-------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1644:
+  local time_dns=$(echo "$curl_output" | grep "TIME_NAMELOOKUP:" | cut -d: -f2)
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1734:
+  local session_key
+        ^---------^ SC2034 (warning): session_key appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1748:
+      response=$(curl -s -k $CURL_PROXY_ARGS \
+                            ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+      response=$(curl -s -k "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1760:
+      local username=$(json_value "$response" '.entry[0].content.username')
+            ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1776:
+    response=$(curl -s -k $CURL_PROXY_ARGS \
+                          ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    response=$(curl -s -k "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1810:
+  if [ $? -ne 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 1990:
+    local py_ver=$(python --version 2>&1 | grep -o '[0-9]*' | head -1)
+          ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2227:
+  if [ $? -ne 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2235:
+  local server_name=$(json_value "$server_info" '.entry[0].content.serverName')
+        ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2236:
+  local os_name=$(json_value "$server_info" '.entry[0].content.os_name')
+        ^-----^ SC2034 (warning): os_name appears unused. Verify use (or export if used externally).
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2237:
+  local cpu_arch=$(json_value "$server_info" '.entry[0].content.cpu_arch')
+        ^------^ SC2034 (warning): cpu_arch appears unused. Verify use (or export if used externally).
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2330:
+  if [ $? -ne 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2456:
+        if [[ " ${apps[*]} " =~ " $app " ]]; then
+                                ^------^ SC2076 (warning): Remove quotes from right-hand side of =~ to match as a regex rather than literally.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2491:
+          for ((n=${BASH_REMATCH[1]}; n<=${BASH_REMATCH[2]}; n++)); do
+                  ^----------------^ SC2004 (style): $/${} is unnecessary on arithmetic variables.
+                                         ^----------------^ SC2004 (style): $/${} is unnecessary on arithmetic variables.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2492:
+            if [ $n -ge 1 ] && [ $n -le $total_apps ]; then
+                                        ^---------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+            if [ $n -ge 1 ] && [ $n -le "$total_apps" ]; then
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2498:
+          if [ "$part" -ge 1 ] && [ "$part" -le $total_apps ]; then
+                                                ^---------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+          if [ "$part" -ge 1 ] && [ "$part" -le "$total_apps" ]; then
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2650:
+  local stack_clean=$(echo "$SPLUNK_STACK" | sed 's/\.splunkcloud\.com//' | sed 's/[^a-zA-Z0-9_-]/_/g')
+        ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2692:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2699:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2706:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2712:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2736:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2761:
+  if [ $? -ne 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2793:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2815:
+      local dash_count=$(echo "$names" | grep -c . 2>/dev/null || echo "0")
+            ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 2834:
+          if [ $? -eq 0 ]; then
+               ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3098:
+  STATS_SAVED_SEARCHES=$total_saved_searches
+  ^------------------^ SC2034 (warning): STATS_SAVED_SEARCHES appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3395:
+    local app_filter=$(get_app_filter "app")
+          ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3413:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3427:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3537:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3603:
+  local in_clause=$(get_app_in_clause "$field")
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3664:
+  usage_days=$(echo "$USAGE_PERIOD" | sed 's/d$//')
+               ^-- SC2001 (style): See if you can use ${variable//search/replace} instead.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3667:
+  local analytics_start=$(date +%s)
+        ^-------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3860:
+    local apps_json=$(printf '"%s",' "${SELECTED_APPS[@]}" | sed 's/,$//')
+          ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 3966:
+  local start_time=$(date +%s)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4019:
+    if [ $elapsed -gt $max_wait ]; then
+                      ^-------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    if [ $elapsed -gt "$max_wait" ]; then
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4082:
+  if [ $? -eq 0 ] && [ -n "$results" ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4105:
+  local start_time=$(date +%s)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4143:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4172:
+  if [ $? -eq 0 ] && [ -n "$response" ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4178:
+        local apps_json=$(printf '"%s",' "${SELECTED_APPS[@]}" | sed 's/,$//')
+              ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4193:
+      if [ $? -eq 0 ]; then
+           ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4221:
+  if [ $? -eq 0 ] && [ -n "$response" ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4227:
+        local apps_json=$(printf '"%s",' "${SELECTED_APPS[@]}" | sed 's/,$//')
+              ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4244:
+      if [ $? -eq 0 ]; then
+           ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4273:
+  if [ $? -ne 0 ] && [ -n "$fallback_type" ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4311:
+      if [ $? -eq 0 ]; then
+           ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4363:
+      if [ $? -eq 0 ]; then
+           ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4393:
+    local app_filter=$(get_app_filter "app")
+          ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4411:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4424:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4472:
+          local entry_count=$(echo "$filtered_response" | jq '.entry | length // 0' 2>/dev/null || echo 0)
+                ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4492:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4498:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4504:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4510:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4516:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4522:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4528:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4539:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4545:
+    if [ $? -eq 0 ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4571:
+            if [ $? -eq 0 ]; then
+                 ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4719:
+      local app_studio=$(find "$EXPORT_DIR/$app/dashboards/studio" -name "*.json" ! -name "*_definition.json" 2>/dev/null | wc -l | tr -d ' ')
+            ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4723:
+      local app_classic=$(find "$EXPORT_DIR/$app/dashboards/classic" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+            ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4729:
+  local total_files=$(find "$EXPORT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+        ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4730:
+  local total_size=$(du -sb "$EXPORT_DIR" 2>/dev/null | cut -f1 || echo "0")
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 4956:
+  local validation_result=$(json_format "$manifest_file")
+        ^---------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5006:
+    local existing=$(grep "^${real_email}|" "$mapping_file" 2>/dev/null | cut -d'|' -f2)
+          ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5014:
+  local anon_id=$(generate_anon_id "$real_email" "user" 6)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5043:
+    local existing=$(grep "^${real_host}|" "$mapping_file" 2>/dev/null | cut -d'|' -f2)
+          ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5051:
+  local anon_id=$(generate_anon_id "$real_host" "" 8)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5334:
+    sed_inplace="-i ''"
+                 ^---^ SC2089 (warning): Quotes/backslashes will be treated literally. Use an array.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5338:
+  sed $sed_inplace 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5339:
+  sed $sed_inplace 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5340:
+  sed $sed_inplace 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5341:
+  sed $sed_inplace 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5342:
+  sed $sed_inplace 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5455:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5456:
+    local size=$(du -h "$archive_name" | cut -f1)
+          ^--^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5693:
+  if [ $? -eq 0 ]; then
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5694:
+    local size=$(du -h "$masked_archive" | cut -f1)
+          ^--^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 5772:
+        local filename=$(basename "$json_file")
+              ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 6486:
+  roles_response=$(api_call "/services/authorization/roles" "GET" "output_mode=json&count=1" 2>/dev/null)
+  ^------------^ SC2034 (warning): roles_response appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 6521:
+  if [ $? -eq 0 ]; then macros_ok=true; details="macros"; fi
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 6525:
+  if [ $? -eq 0 ]; then props_ok=true; details="${details:+${details}, }props"; fi
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 6529:
+  if [ $? -eq 0 ]; then lookups_ok=true; details="${details:+${details}, }lookups"; fi
+       ^-- SC2181 (style): Check exit code directly with e.g. 'if mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 6720:
+    if [ $? -ne 0 ] || [ -z "$apps_response" ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 6909:
+        OUTPUT_DIR="$2"
+        ^--------^ SC2034 (warning): OUTPUT_DIR appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 7169:
+    if [ $? -ne 0 ] || [ -z "$server_info" ]; then
+         ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+
+In splunk-export/dma-splunk-cloud-export.sh line 7204:
+      if [ $? -ne 0 ] || [ -z "$apps_response" ]; then
+           ^-- SC2181 (style): Check exit code directly with e.g. 'if ! mycmd;', not indirectly with $?.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2034 -- COLLECT_AUDIT appears unused. Ver...
+  https://www.shellcheck.net/wiki/SC2076 -- Remove quotes from right-hand sid...
+  https://www.shellcheck.net/wiki/SC2089 -- Quotes/backslashes will be treate...

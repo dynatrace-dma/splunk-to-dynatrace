@@ -1,0 +1,958 @@
+
+In splunk-export/dma-splunk-export.sh line 150:
+SCRIPT_NAME="DMA Splunk Export"
+^---------^ SC2034 (warning): SCRIPT_NAME appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 254:
+MAX_CONCURRENT_SEARCHES=1  # Don't run multiple searches in parallel
+^---------------------^ SC2034 (warning): MAX_CONCURRENT_SEARCHES appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 255:
+SEARCH_POLL_INTERVAL=1     # How often to check if search is done (seconds)
+^------------------^ SC2034 (warning): SEARCH_POLL_INTERVAL appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 335:
+    echo "DMA Export Debug Log" >> "$DEBUG_LOG_FILE"
+    ^-- SC2129 (style): Consider using { cmd1; cmd2; } >> file instead of individual redirects.
+
+
+In splunk-export/dma-splunk-export.sh line 362:
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 394:
+  local safe_url=$(echo "$url" | sed 's/password=[^&]*/password=REDACTED/g' | sed 's/token=[^&]*/token=REDACTED/g')
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 449:
+    echo "" >> "$DEBUG_LOG_FILE"
+    ^--------------------------^ SC2129 (style): Consider using { cmd1; cmd2; } >> file instead of individual redirects.
+
+
+In splunk-export/dma-splunk-export.sh line 858:
+SPINNER_CHARS=('/' '-' '\' '|')
+                        ^-- SC1003 (info): Want to escape a single quote? echo 'This is how it'\''s done'.
+
+
+In splunk-export/dma-splunk-export.sh line 954:
+  local spinner=$(get_spinner)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1007:
+    overall_percent=$(( (overall_current * 100) / overall_total ))
+    ^-------------^ SC2034 (warning): overall_percent appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 1162:
+  local stripped=$(echo -e "$content" | sed 's/\x1b\[[0-9;]*m//g')
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1362:
+  echo "# Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERROR_LOG_FILE"
+  ^-- SC2129 (style): Consider using { cmd1; cmd2; } >> file instead of individual redirects.
+
+
+In splunk-export/dma-splunk-export.sh line 1446:
+  LOADED_ITEM=$(json_get "$CHECKPOINT_FILE" ".last_item" "")
+  ^---------^ SC2034 (warning): LOADED_ITEM appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 1479:
+  local start_time=$(date +%s%3N 2>/dev/null || date +%s)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1484:
+  while [ $attempt -le $MAX_RETRIES ]; do
+                       ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  while [ $attempt -le "$MAX_RETRIES" ]; do
+
+
+In splunk-export/dma-splunk-export.sh line 1489:
+      $CURL_PROXY_ARGS \
+      ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+      "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 1496:
+    local end_time=$(date +%s%3N 2>/dev/null || date +%s)
+          ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1498:
+    local response_size=$(wc -c < "$output_file" 2>/dev/null || echo "0")
+          ^-----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1560:
+  local temp_file=$(mktemp)
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1564:
+    local total=$($PYTHON_CMD -c "
+          ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1602:
+  local total_count=$(splunk_api_get_count "$endpoint")
+        ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1620:
+  while [ $offset -lt $total_count ] && [ $empty_batches -lt $max_empty ]; do
+          ^-----^ SC2086 (info): Double quote to prevent globbing and word splitting.
+                      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  while [ "$offset" -lt "$total_count" ] && [ $empty_batches -lt $max_empty ]; do
+
+
+In splunk-export/dma-splunk-export.sh line 1633:
+      local batch_count=$($PYTHON_CMD -c "
+            ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1798:
+  local temp_file=$(mktemp)
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1807:
+      local is_registered=$($PYTHON_CMD -c "
+            ^-----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1833:
+      $CURL_PROXY_ARGS \
+      ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+      "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 1907:
+  read -p "Enter choice [1-4]: " choice
+  ^--^ SC2162 (info): read without -r will mangle backslashes.
+
+
+In splunk-export/dma-splunk-export.sh line 1951:
+    local count_start=$(date +%s)
+          ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1971:
+          local count=$(grep -c '^\[' "$app_path/$conf_dir/savedsearches.conf" 2>/dev/null)
+                ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 1985:
+          local count=$(ls -1 "$app_path/$view_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+                ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                        ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 2020:
+  read -p "Enter choice [1-4] (default: 1): " choice
+  ^--^ SC2162 (info): read without -r will mangle backslashes.
+
+
+In splunk-export/dma-splunk-export.sh line 2081:
+  local calculated=$($PYTHON_CMD -c "
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2163:
+  local batch_files=$(ls -1 "$batch_dir/${prefix}_batch_"*.json 2>/dev/null | wc -l | tr -d ' ')
+        ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                      ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 2174:
+  local end_time=$(date +%s)
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2380:
+    echo -e "    ${GREEN}✓${NC} Python: $($SPLUNK_HOME/bin/python3 --version 2>&1) (Splunk bundled)"
+                                          ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    echo -e "    ${GREEN}✓${NC} Python: $("$SPLUNK_HOME"/bin/python3 --version 2>&1) (Splunk bundled)"
+
+
+In splunk-export/dma-splunk-export.sh line 2467:
+    local py_version=$("$PYTHON_CMD" --version 2>&1 | head -1)
+          ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2471:
+    local py_version=$(python3 --version 2>&1 | head -1)
+          ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2475:
+    local py_ver=$(python --version 2>&1 | grep -oP 'Python \K[0-9]+')
+          ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2478:
+      local py_version=$(python --version 2>&1 | head -1)
+            ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2502:
+  local free_space=$(df -m /tmp 2>/dev/null | awk 'NR==2 {print $4}')
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2540:
+    SPLUNK_HOME="${SPLUNK_HOME}"
+    ^---------^ SC2269 (info): This variable is assigned to itself, so the assignment does nothing.
+
+
+In splunk-export/dma-splunk-export.sh line 2646:
+      local cluster_mode=$(grep -A5 "\[clustering\]" "$server_conf" | grep "mode" | cut -d= -f2 | tr -d ' ')
+            ^----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2674:
+      local has_indexes=$(ls -1 "$SPLUNK_HOME/var/lib/splunk/" 2>/dev/null | grep -v "^kvstore" | grep -v "^modinput" | wc -l)
+            ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                          ^-- SC2010 (warning): Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.
+                                                                                                  ^-----------------^ SC2126 (style): Consider using 'grep -c' instead of 'grep|wc -l'.
+
+
+In splunk-export/dma-splunk-export.sh line 2684:
+      local app_count=$(ls -1 "$SPLUNK_HOME/etc/deployment-apps/" 2>/dev/null | wc -l)
+            ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                        ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 2867:
+        local app_name=$(basename "$app_path")
+              ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2895:
+          dash_count=$(ls -1 "$app_path/default/data/ui/views/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+                       ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 2898:
+          local local_dash=$(ls -1 "$app_path/local/data/ui/views/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+                ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                             ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 2907:
+            local alerts=$(grep -c "alert.track" "$app_path/$conf_dir/savedsearches.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+                  ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 2920:
+  if [ $app_count -eq 0 ]; then
+       ^--------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  if [ "$app_count" -eq 0 ]; then
+
+
+In splunk-export/dma-splunk-export.sh line 3037:
+          for ((i=${BASH_REMATCH[1]}; i<=${BASH_REMATCH[2]}; i++)); do
+                  ^----------------^ SC2004 (style): $/${} is unnecessary on arithmetic variables.
+                                         ^----------------^ SC2004 (style): $/${} is unnecessary on arithmetic variables.
+
+
+In splunk-export/dma-splunk-export.sh line 3038:
+            selected_nums+=($i)
+                            ^-- SC2206 (warning): Quote to prevent word splitting/globbing, or split robustly with mapfile or read -a.
+
+
+In splunk-export/dma-splunk-export.sh line 3042:
+          selected_nums+=($part)
+                          ^---^ SC2206 (warning): Quote to prevent word splitting/globbing, or split robustly with mapfile or read -a.
+
+
+In splunk-export/dma-splunk-export.sh line 3049:
+        if [ $num -ge 1 ] && [ $num -le $app_count ]; then
+             ^--^ SC2086 (info): Double quote to prevent globbing and word splitting.
+                               ^--^ SC2086 (info): Double quote to prevent globbing and word splitting.
+                                        ^--------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+        if [ "$num" -ge 1 ] && [ "$num" -le "$app_count" ]; then
+
+
+In splunk-export/dma-splunk-export.sh line 3192:
+        1) [ "$COLLECT_CONFIGS" = true ] && { COLLECT_CONFIGS=false; info "Configurations: OFF"; } || { COLLECT_CONFIGS=true; info "Configurations: ON"; } ;;
+                                         ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3193:
+        2) [ "$COLLECT_DASHBOARDS" = true ] && { COLLECT_DASHBOARDS=false; info "Dashboards: OFF"; } || { COLLECT_DASHBOARDS=true; info "Dashboards: ON"; } ;;
+                                            ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3194:
+        3) [ "$COLLECT_ALERTS" = true ] && { COLLECT_ALERTS=false; info "Alerts: OFF"; } || { COLLECT_ALERTS=true; info "Alerts: ON"; } ;;
+                                        ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3195:
+        4) [ "$COLLECT_RBAC" = true ] && { COLLECT_RBAC=false; info "Users/RBAC: OFF"; } || { COLLECT_RBAC=true; info "Users/RBAC: ON"; } ;;
+                                      ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3196:
+        5) [ "$COLLECT_USAGE" = true ] && { COLLECT_USAGE=false; info "Usage Analytics: OFF"; } || { COLLECT_USAGE=true; info "Usage Analytics: ON"; } ;;
+                                       ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3197:
+        6) [ "$COLLECT_INDEXES" = true ] && { COLLECT_INDEXES=false; info "Index Stats: OFF"; } || { COLLECT_INDEXES=true; info "Index Stats: ON"; } ;;
+                                         ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3198:
+        7) [ "$COLLECT_LOOKUPS" = true ] && { COLLECT_LOOKUPS=false; info "Lookup Tables: OFF"; } || { COLLECT_LOOKUPS=true; info "Lookup Tables: ON"; } ;;
+                                         ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3199:
+        8) [ "$COLLECT_AUDIT" = true ] && { COLLECT_AUDIT=false; info "Audit Sample: OFF"; } || { COLLECT_AUDIT=true; info "Audit Sample: ON"; } ;;
+                                       ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3200:
+        9) [ "$ANONYMIZE_DATA" = true ] && { ANONYMIZE_DATA=false; info "Data Anonymization: OFF - Real emails, hostnames, and IPs will be preserved"; } || { ANONYMIZE_DATA=true; info "Data Anonymization: ON"; } ;;
+                                        ^-- SC2015 (info): Note that A && B || C is not if-then-else. C may run when A is true.
+
+
+In splunk-export/dma-splunk-export.sh line 3231:
+      $CURL_PROXY_ARGS \
+      ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+      "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 3306:
+  local temp_login=$(mktemp)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3309:
+    $CURL_PROXY_ARGS \
+    ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 3333:
+        $CURL_PROXY_ARGS \
+        ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+        "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 3456:
+  local hostname=$(get_hostname short)
+        ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3523:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 3528:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 3533:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 3538:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 3583:
+    local count=$(grep -c '^\[' "$SPLUNK_HOME/etc/system/local/macros.conf" 2>/dev/null || echo 0)
+          ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3591:
+    local count=$(grep -c '^\[' "$SPLUNK_HOME/etc/system/default/macros.conf" 2>/dev/null || echo 0)
+          ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3616:
+        local user=$(basename "$user_dir")
+              ^--^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3620:
+            local app=$(basename "$app_dir")
+                  ^-^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3625:
+              local count=$(grep -c '^\[' "$app_dir/local/macros.conf" 2>/dev/null || echo 0)
+                    ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3701:
+        local dash_count=$(ls -1 "$EXPORT_DIR/$app/$dash_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+              ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                           ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 3732:
+      model_count=$(ls -1 "$EXPORT_DIR/$app/$models_dir/"*.json 2>/dev/null | wc -l | tr -d ' ')
+                    ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 3755:
+      local alerts=$(grep -c "alert.track" "$EXPORT_DIR/$app/$conf_dir/savedsearches.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+            ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 3819:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 3864:
+  if [ $total_dashboards -eq 0 ]; then
+       ^---------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  if [ "$total_dashboards" -eq 0 ]; then
+
+
+In splunk-export/dma-splunk-export.sh line 3900:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4153:
+      local basename=$(basename "$js_file")
+            ^------^ SC2034 (warning): basename appears unused. Verify use (or export if used externally).
+            ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4186:
+    local app_filter=$(get_app_filter "app")
+          ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4193:
+    local temp_file=$(mktemp)
+          ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4194:
+    local http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+          ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4204:
+      local sid=$(grep -o '"sid":"[^"]*"' "$temp_file" | cut -d'"' -f4)
+            ^-^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4212:
+          local status=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                                       ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+          local status=$(curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4219:
+          curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                        ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+          curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4224:
+          local active_users=$(grep -c '"user"' "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" 2>/dev/null | tr -d ' ')
+                ^----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4234:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4239:
+  local user_count=$(grep -o '"name"' "$EXPORT_DIR/dma_analytics/rbac/users.json" 2>/dev/null | wc -l | tr -d ' ')
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4243:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4249:
+  local caps_response http_code_caps entry_count
+                      ^------------^ SC2034 (warning): http_code_caps appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 4250:
+  caps_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  caps_response=$(curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4263:
+  saml_groups_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                                       ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  saml_groups_response=$(curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4277:
+  saml_config_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                                       ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  saml_config_response=$(curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4289:
+  ldap_groups_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                                       ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  ldap_groups_response=$(curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4303:
+  ldap_config_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                                       ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  ldap_config_response=$(curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4404:
+  local in_clause=$(get_app_in_clause "$field")
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4429:
+  local search_start_time=$(date +%s)
+        ^---------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4441:
+    $CURL_PROXY_ARGS \
+    ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 4518:
+  local event_count=""
+        ^---------^ SC2034 (warning): event_count appears unused. Verify use (or export if used externally).
+
+
+In splunk-export/dma-splunk-export.sh line 4539:
+      $CURL_PROXY_ARGS \
+      ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+      "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 4593:
+    local spinner=$(get_spinner)
+          ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4650:
+    $CURL_PROXY_ARGS \
+    ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    "$CURL_PROXY_ARGS" \
+
+
+In splunk-export/dma-splunk-export.sh line 4710:
+  usage_days=$(echo "$USAGE_PERIOD" | sed 's/d$//')
+               ^-- SC2001 (style): See if you can use ${variable//search/replace} instead.
+
+
+In splunk-export/dma-splunk-export.sh line 4713:
+  local analytics_start=$(date +%s)
+        ^-------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4829:
+      local temp_file=$(mktemp)
+            ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4839:
+      local job_response=$(cat "$temp_file")
+            ^----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4842:
+        local sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
+              ^-^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 4943:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4952:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 4957:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 5053:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 5058:
+    local index_count=$(grep -o '"title"' "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" 2>/dev/null | wc -l | tr -d ' ')
+          ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5067:
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                  ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 5093:
+      local parsed=$($PYTHON_CMD -c "
+            ^----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5243:
+  local ip_addresses=$(get_host_ips_json 2>/dev/null || echo "[]")
+        ^----------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5254:
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/savedsearches.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+              ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5266:
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/macros.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+              ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5278:
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/props.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+              ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5290:
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/transforms.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+              ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5303:
+      local count=$(ls -1 "$dir"/*.json 2>/dev/null | grep -v '_definition\.json$' | wc -l | tr -d ' ')
+            ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                    ^-- SC2010 (warning): Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.
+                                                      ^--------------------------^ SC2126 (style): Consider using 'grep -c' instead of 'grep|wc -l'.
+
+
+In splunk-export/dma-splunk-export.sh line 5309:
+      local count=$(ls -1 "$dir"/*.json 2>/dev/null | wc -l | tr -d ' ')
+            ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                    ^-----------------------------^ SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 5326:
+  local apps_json=$(build_apps_json "$EXPORT_DIR" "${SELECTED_APPS[@]}")
+        ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5333:
+  local total_files=$(ls -lR "$EXPORT_DIR" 2>/dev/null | grep -c "^-" | tr -d ' ')
+        ^---------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                      ^-- SC2010 (warning): Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 5334:
+  local total_size=$(du -sb "$EXPORT_DIR" 2>/dev/null | cut -f1)
+        ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5422:
+  local validation_result=$(json_format "$manifest_file")
+        ^---------------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5479:
+  local anon_id=$(generate_anon_id "$real_email" "user" 6)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5512:
+  local anon_id=$(generate_anon_id "$real_host" "" 8)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5539:
+  local anon_id=$(generate_anon_id "$real_url" "" 12)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5567:
+  local anon_id=$(generate_anon_id "$real_key" "" 8)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5594:
+  local anon_id=$(generate_anon_id "$real_channel" "" 6)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 5628:
+  local anon_id=$(generate_anon_id "$real_user" "" 6)
+        ^-----^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 6021:
+    sed_inplace="-i ''"
+                 ^---^ SC2089 (warning): Quotes/backslashes will be treated literally. Use an array.
+
+
+In splunk-export/dma-splunk-export.sh line 6026:
+  sed $sed_inplace 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-export.sh line 6027:
+  sed $sed_inplace 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-export.sh line 6028:
+  sed $sed_inplace 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-export.sh line 6029:
+  sed $sed_inplace 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-export.sh line 6030:
+  sed $sed_inplace 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+      ^----------^ SC2090 (warning): Quotes/backslashes in this variable will not be respected.
+      ^----------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  sed "$sed_inplace" 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+
+In splunk-export/dma-splunk-export.sh line 6197:
+  local size=$(du -h "$tarball" | cut -f1)
+        ^--^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 6276:
+  local size=$(du -h "$tarball" | cut -f1)
+        ^--^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 6376:
+        local filename=$(basename "$json_file")
+              ^------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 6377:
+        local error_type=$(grep -o '"error": *"[^"]*"' "$json_file" | head -1 | cut -d'"' -f4)
+              ^--------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 6378:
+        local error_msg=$(grep -o '"message": *"[^"]*"' "$json_file" | head -1 | cut -d'"' -f4)
+              ^-------^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 6796:
+            ls -1 "$(dirname "$2")"/*.tar.gz 2>/dev/null | sed 's/^/    /' >&2 || echo "    (no .tar.gz files found)" >&2
+            ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 6952:
+    if [ -d "/tmp/dma_export_"* ] 2>/dev/null; then
+            ^-----------------^ SC2144 (error): -d doesn't work with globs. Use a for loop.
+
+
+In splunk-export/dma-splunk-export.sh line 7078:
+          local count=$(ls -1 "$EXPORT_DIR/$app/$dash_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+                ^---^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+                        ^-- SC2012 (info): Use find instead of ls to better handle non-alphanumeric filenames.
+
+
+In splunk-export/dma-splunk-export.sh line 7231:
+  local tmp=$(mktemp)
+        ^-^ SC2155 (warning): Declare and assign separately to avoid masking return values.
+
+
+In splunk-export/dma-splunk-export.sh line 7234:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7246:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7257:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7268:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7278:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7288:
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+  curl -k -s -G "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7302:
+    sid_resp=$(curl -k -s $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                          ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    sid_resp=$(curl -k -s "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+
+In splunk-export/dma-splunk-export.sh line 7318:
+    sid_resp=$(curl -k -s $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+                          ^--------------^ SC2086 (info): Double quote to prevent globbing and word splitting.
+
+Did you mean:
+    sid_resp=$(curl -k -s "$CURL_PROXY_ARGS" -H "$AUTH_HEADER" \
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2144 -- -d doesn't work with globs. Use a...
+  https://www.shellcheck.net/wiki/SC2010 -- Don't use ls | grep. Use a glob o...
+  https://www.shellcheck.net/wiki/SC2034 -- LOADED_ITEM appears unused. Verif...

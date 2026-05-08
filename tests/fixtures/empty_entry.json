@@ -1,0 +1,19 @@
+{
+  "links": {
+    "create": "/services/saved/searches/_new",
+    "_reload": "/services/saved/searches/_reload"
+  },
+  "origin": "https://splunk.example.com/services/saved/searches",
+  "updated": "2026-05-01T00:00:00+00:00",
+  "generator": {
+    "build": "synthetic",
+    "version": "fixture-generate-2.0"
+  },
+  "entry": [],
+  "paging": {
+    "total": 0,
+    "perPage": 50,
+    "offset": 0
+  },
+  "messages": []
+}

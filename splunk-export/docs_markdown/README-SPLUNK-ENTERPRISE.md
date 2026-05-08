@@ -1,7 +1,7 @@
 # DMA Splunk Enterprise Export Script
 
-**Version**: 4.6.4
-**Last Updated**: April 2026
+**Version**: 4.6.5
+**Last Updated**: May 2026
 **Related Documents**: [Script-Generated Analytics Reference](SCRIPT-GENERATED-ANALYTICS-REFERENCE.md) | [Enterprise Export Specification](SPLUNK-ENTERPRISE-EXPORT-SPECIFICATION.md) | [Manual Usage Queries (SHC/Distributed)](MANUAL-USAGE-QUERIES.md) | For Splunk Cloud exports, see [Cloud Export README](README-SPLUNK-CLOUD.md)
 
 > **Developed for Dynatrace One by Enterprise Solutions & Architecture**
@@ -11,7 +11,10 @@
 
 ## Recent Changes
 
-> **Note on version history.** The Enterprise script (`dma-splunk-export.sh`) and the Cloud scripts (`dma-splunk-cloud-export.sh` / `dma-splunk-cloud-export.ps1`) are versioned independently. Enterprise jumped from **v4.6.0 → v4.6.3 → v4.6.4**. Versions **v4.6.1 and v4.6.2 do not exist for Enterprise** — those tags were used only by the Cloud scripts (resume-reliability and `search`-app-inclusion fixes that didn't apply to Enterprise's filesystem-based collection path; the Enterprise script always exported the `search` app). If you read the Cloud changelog, you can ignore the v4.6.1 and v4.6.2 entries when running Enterprise.
+> **Note on version history.** The Enterprise script (`dma-splunk-export.sh`) and the Cloud scripts (`dma-splunk-cloud-export.sh` / `dma-splunk-cloud-export.ps1`) are versioned independently. Enterprise jumped from **v4.6.0 → v4.6.3 → v4.6.4 → v4.6.5**. Versions **v4.6.1, v4.6.2, and v4.6.6 do not exist for Enterprise** — those tags were used only by the Cloud scripts (resume-reliability, `search`-app-inclusion, and large-environment hardening fixes that didn't apply to Enterprise's filesystem-based collection path; the Enterprise script always exported the `search` app and doesn't have the per-app REST timeout-cascade failure mode v4.6.6 addresses). If you read the Cloud changelog, you can ignore the v4.6.1, v4.6.2, and v4.6.6 entries when running Enterprise.
+
+### v4.6.5 (May 2026)
+- **Test-harness `BASH_SOURCE` guard.** The script can now be `source`d as a library by the new `tests/` harness (bats-core 1.10.0) without invoking `main`. **No behavioral change when the script is run normally.** Failure-mode hardening that the Cloud scripts received in v4.6.6 (single-call REST partitioning, fatal runtime cap, resume self-heal) is scheduled for the next Enterprise release; the Enterprise collection path doesn't have the per-app REST timeout-cascade failure mode that motivated those changes, but a parity pass is planned.
 
 ### v4.6.4 (April 2026)
 - **FIX: `--apps` runs no longer flood the log with three "SEARCH FAILED" errors per pass.** Splunk's `where` parser rejects unquoted field names that contain `:` or `.` (e.g. `eai:acl.app`). The three ownership-collection searches — `Dashboard ownership mapping`, `Alert/saved search ownership mapping`, `Ownership summary by user` — were emitting `| where eai:acl.app IN ("appname")` and getting back the parser error `"The operator at ':acl.app IN (...)' is invalid."` for every single run. The helper that builds the `IN (...)` clause now wraps fields containing special characters in single quotes (`| where 'eai:acl.app' IN ("appname")`), which Splunk accepts. Plain field names (e.g. `app` used in audit-log searches) are unchanged. **Customer impact: re-running the script after upgrading is enough — the failed searches don't write checkpoints, so resume picks up cleanly and the previously-failing queries now succeed. No `--reset-collect` needed.**

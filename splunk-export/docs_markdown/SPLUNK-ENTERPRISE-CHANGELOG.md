@@ -1,5 +1,53 @@
 # DMA Splunk Enterprise Export — Changelog
 
+## v4.6.6 (May 2026) — large-environment hardening
+
+Closes a structural failure mode where Splunk Cloud environments with
+many apps could exceed the 12-hour runtime cap and silently produce
+"complete-looking" archives that contained zero alerts.
+
+### Cloud scripts (`dma-splunk-cloud-export.sh` 4.6.3 → 4.6.6, `dma-splunk-cloud-export.ps1` 4.6.3 → 4.6.6)
+
+- **Single-call `collect_alerts`** — replaces the per-app `/saved/searches`
+  REST loop with one stack-wide call partitioned by `acl.app` locally.
+  Per-app savedsearches.json file shape is unchanged. Eliminates the
+  redundant per-app transfer that caused the original timeout cascade.
+- **OS-level timeout backstop now fail-fast** — script exits at startup
+  with install instructions if neither `timeout` (Linux) nor `gtimeout`
+  (macOS via `brew install coreutils`) is on PATH. Previously this was
+  a silent fallback that disabled the curl hung-request kill-switch.
+- **Runtime cap is now fatal** — `exit 124` with resume instructions
+  instead of `return 1`. Prevents the "looks complete but isn't" archive
+  outcome.
+- **Resume validation (R1, R2)**:
+  - R1 (`is_valid_app_savedsearches`): rejects per-app `savedsearches.json`
+    that's corrupt JSON, missing `.entry`, or has foreign `acl.app` entries.
+    Drops the resume sentinel and re-fetches.
+  - R2 (`validate_alerts_inventory_outputs`): rejects `alerts_inventory`
+    checkpoint when its sentinel files are runtime-exceeded error shells.
+    `drop_analytics_checkpoint` invalidates the stale key, Q6 re-runs.
+- **New flag `--validate-archive FILE`** — pre-flight integrity check.
+  Extracts read-only, runs R1/R2, prints verdict, exits. No Splunk connection.
+- **New flag `--clean-resume PHASES`** — explicit phase invalidation
+  on resume. Comma-separated. Phases: `alerts`, `alerts_inventory`,
+  `analytics`. Escape hatch when R1/R2 auto-detection isn't enough.
+- **Banner now logs script version + auth + apps + resume mode** — makes
+  post-mortem investigation possible from `_export.log` alone.
+- Removed accidental duplicate `SCRIPT_VERSION` declaration in cloud-bash.
+
+### Test infrastructure
+
+- New `tests/` tree with bats-core 1.10.0 vendored, fixture generator,
+  Splunk API mock library, baseline snapshots, and 27 unit tests.
+- BASH_SOURCE guard on both `*.sh` scripts so they can be sourced as
+  libraries by the test harness without invoking `main`.
+
+### Enterprise (`dma-splunk-export.sh` 4.6.4 → 4.6.5)
+
+- BASH_SOURCE guard added (test infrastructure prerequisite). No behavioral
+  change when executed normally. Failure-mode hardening (timeout + cap) is
+  scheduled for v4.6.6 in the next release cycle.
+
 ## v4.6.0 (April 2026)
 
 ### Usage Analytics Overhaul — Global Aggregates Replace Detailed Queries

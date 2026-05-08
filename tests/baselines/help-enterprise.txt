@@ -1,0 +1,53 @@
+splunk-export/dma-splunk-export.sh: line 289: declare: -A: invalid option
+declare: usage: declare [-afFirtx] [-p] [name[=value] ...]
+splunk-export/dma-splunk-export.sh: line 290: declare: -A: invalid option
+declare: usage: declare [-afFirtx] [-p] [name[=value] ...]
+splunk-export/dma-splunk-export.sh: line 291: declare: -A: invalid option
+declare: usage: declare [-afFirtx] [-p] [name[=value] ...]
+splunk-export/dma-splunk-export.sh: line 292: declare: -A: invalid option
+declare: usage: declare [-afFirtx] [-p] [name[=value] ...]
+splunk-export/dma-splunk-export.sh: line 293: declare: -A: invalid option
+declare: usage: declare [-afFirtx] [-p] [name[=value] ...]
+splunk-export/dma-splunk-export.sh: line 294: declare: -A: invalid option
+declare: usage: declare [-afFirtx] [-p] [name[=value] ...]
+Usage: splunk-export/dma-splunk-export.sh [OPTIONS]
+
+Options:
+  --token TOKEN           API token for authentication (RECOMMENDED for automation)
+  -u, --username USER     Splunk admin username
+  -p, --password PASS     Splunk admin password
+  -h, --host HOST         Splunk host (default: localhost)
+  -P, --port PORT         Splunk port (default: 8089)
+  --proxy URL             HTTP proxy (e.g., http://proxy.corp.com:8080)
+  --splunk-home PATH      Splunk installation path
+  --apps LIST             Comma-separated list of apps to export
+  --all-apps              Export all applications
+  --rbac                  Collect RBAC/users data (on by default)
+  --no-rbac               Disable RBAC/users data collection
+  --usage                 Collect usage analytics (on by default)
+  --no-usage              Disable usage analytics collection
+  --analytics-period N    Analytics time window (default: 30d; e.g. 7d, 90d, 365d)
+  --skip-internal         Skip index=_audit/_internal searches (restricted accounts)
+  --test-access           Pre-flight check: test API access and exit (no export)
+  --remask FILE           Re-anonymize an existing unmasked archive (no Splunk needed)
+  --resume-collect FILE   Resume a previously interrupted export from archive
+  --quick                 Quick mode - TESTING ONLY (skips critical migration data)
+  --scoped                Scope all collections to selected apps only
+  --anonymize             Enable data anonymization (on by default)
+  --no-anonymize          Disable data anonymization
+  -y, --yes               Auto-confirm all prompts
+  -d, --debug             Enable verbose debug logging (writes to export_debug.log)
+  --help                  Show this help message
+
+WARNING: --quick is for TESTING/VALIDATION ONLY
+  Do NOT use --quick for migration analysis. It skips:
+    - Usage analytics (who uses what, how often)
+    - User/RBAC data (migration audience identification)
+    - Priority assessment data
+  For migration analysis, use full export (default) or --scoped.
+
+Performance Tips:
+  For large environments, use --scoped (not --quick) with --apps:
+    splunk-export/dma-splunk-export.sh -u admin -p pass --apps myapp --scoped
+
+  This exports app configs + app-specific users/usage for migration analysis.

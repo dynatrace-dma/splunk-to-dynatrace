@@ -1,0 +1,4 @@
+splunk-export/dma-splunk-cloud-export.ps1:$Script:SCRIPT_VERSION = "4.6.6"
+splunk-export/dma-splunk-export.sh:SCRIPT_VERSION="4.6.5"
+splunk-export/dma-splunk-cloud-export.sh:SCRIPT_VERSION="4.6.6"
+splunk-export/dma-splunk-cloud-export.sh:# v4.6.6: removed accidental duplicate `SCRIPT_VERSION="4.6.3"` declaration

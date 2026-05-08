@@ -1,0 +1,32 @@
+{
+  "preview": false,
+  "init_offset": 0,
+  "messages": [],
+  "fields": [
+    {"name": "alert_name"},
+    {"name": "cron_schedule"},
+    {"name": "alert.severity"},
+    {"name": "alert.track"},
+    {"name": "actions"},
+    {"name": "disabled"}
+  ],
+  "results": [
+    {
+      "alert_name": "High CPU alert",
+      "cron_schedule": "*/5 * * * *",
+      "alert.severity": "5",
+      "alert.track": "1",
+      "actions": "email,webhook",
+      "disabled": "0"
+    },
+    {
+      "alert_name": "Disk space alert",
+      "cron_schedule": "0 * * * *",
+      "alert.severity": "3",
+      "alert.track": "1",
+      "actions": "email",
+      "disabled": "0"
+    }
+  ],
+  "highlighted": {}
+}
