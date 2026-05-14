@@ -1,0 +1,8670 @@
+#!/bin/bash
+# LINE ENDING FIX: Auto-detect and fix Windows CRLF line endings
+# If you see "$'\r': command not found" errors, this block will auto-fix and re-run
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && grep -q $'\r' "$0" 2>/dev/null; then
+    echo "Detected Windows line endings (CRLF). Converting to Unix (LF)..."
+    sed -i.bak 's/\r$//' "$0" && rm -f "$0.bak"
+    exec bash "$0" "$@"
+fi
+
+################################################################################
+#
+#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.1
+#
+#  ┌────────────────────────────────────────────────────────────────────────┐
+#  │                          THIS IS A BETA BUILD                          │
+#  ├────────────────────────────────────────────────────────────────────────┤
+#  │ Opt-in beta of dma-splunk-export.sh that adds Phase 1 Splunk ITSI      │
+#  │ Comprehensive Cataloging — Glass Tables, Deep Dives, Services, KPIs,   │
+#  │ Entities, NEAPs, Correlation Searches, KPI Base Searches, Service      │
+#  │ Templates, Threshold Templates, Maintenance Calendars, and Glass       │
+#  │ Table image assets.                                                    │
+#  │                                                                        │
+#  │ This script does NOT replace dma-splunk-export.sh. The stable script   │
+#  │ continues to be the publicly-supported export tool. This beta is for   │
+#  │ pilot validation against an ITSI-enabled Splunk Enterprise instance.   │
+#  │                                                                        │
+#  │ Differences from stable:                                               │
+#  │   • Auto-detects ITSI installation (no opt-in flag; opt-out via        │
+#  │     --no-itsi).                                                        │
+#  │   • Writes dma_analytics/system_info/installed_apps.json (NEW — the    │
+#  │     stable script does NOT materialize this file).                     │
+#  │   • Adds per-app dashboards/glasstable/ and dashboards/deepdive/       │
+#  │     subdirs when ITSI artifacts exist for that app.                    │
+#  │   • Adds a new top-level itsi_assets/ directory (only for ITSI         │
+#  │     customers; non-ITSI archives are unchanged from stable output).    │
+#  │   • Adds collection.itsi + statistics.itsi.{...} blocks to             │
+#  │     manifest.json.                                                     │
+#  │                                                                        │
+#  │ All existing collectors are UNTOUCHED — the `itsi` app continues to    │
+#  │ flow through the same dashboard / savedsearches / .conf collectors    │
+#  │ exactly like any other app. The DMA Server importer doesn't need to   │
+#  │ learn that the itsi app is special — only that itsi_assets/ exists.    │
+#  │                                                                        │
+#  │ For pilot diagnostics, see:                                            │
+#  │   • itsi_assets/_collection_trace.log — per-HTTP-call trace            │
+#  │   • itsi_assets/_itsi_inventory.json  — what was found + errors[]      │
+#  │                                                                        │
+#  │ Cloud bash and PowerShell parity scripts are NOT yet updated — only    │
+#  │ this Enterprise script. Cloud customers should keep using the stable  │
+#  │ cloud-export scripts until Cloud parity ships in v4.7.0-beta.2 or      │
+#  │ later.                                                                 │
+#  └────────────────────────────────────────────────────────────────────────┘
+#
+#  v4.7.0-beta.1 Changes (BETA — Phase 1 ITSI Collection):
+#    - NEW: Auto-detected ITSI KV-store collection layer. When an ITSI
+#      app is present (canonical signal: SA-ITOA), the script probes
+#      /servicesNS/nobody/SA-ITOA/itoa_interface/glass_table to confirm
+#      capability access. On success: collects the full ITSI catalog
+#      (Glass Tables, Deep Dives, Services + embedded KPIs, KPI Base
+#      Searches, Service Templates, Entities + Entity Types, NEAPs,
+#      Correlation Searches, Maintenance Calendars, Threshold Templates,
+#      Glass Table image assets, module inventory). On 401/403/404/500:
+#      logs a clear remediation message and skips KV-store collection;
+#      the classic surface (dashboards, savedsearches, .conf) is always
+#      still collected by the standard collectors.
+#    - NEW: --no-itsi opt-out flag. No opt-in flag — auto-detection is
+#      the default behavior; customers running an ITSI Splunk get the
+#      full picture in one pass.
+#    - NEW: dma_analytics/system_info/installed_apps.json written as a
+#      side effect of detect_itsi (the stable script does not write
+#      this file). Available to the DMA Server importer for richer app
+#      metadata.
+#    - NEW: itsi_assets/_itsi_inventory.json — single source of truth
+#      documenting what was found AND what wasn't (with reason).
+#      Written even on detection skip so the importer can distinguish
+#      "ITSI was not attempted" from "ITSI was attempted and nothing
+#      was there."
+#    - NEW: itsi_assets/_collection_trace.log — one line per HTTP call
+#      to ITSI endpoints (ISO8601 timestamp, method, endpoint,
+#      http_code, response bytes, duration_ms, note). Pilot-grade
+#      trace for first-time customer engagements.
+#    - NEW: manifest.json gains `collection.itsi` boolean +
+#      `statistics.itsi.{...}` nested counters block (glass_tables,
+#      deep_dives, services, kpis, kpi_base_searches, service_templates,
+#      entities, entity_types, notable_event_aggregation_policies,
+#      correlation_searches with by-type breakdown, maintenance_calendars,
+#      threshold_templates, images, modules_detected).
+#    - Backward-compatible: non-ITSI customers see zero behavior change.
+#      Resume-collect (--resume-collect) against pre-beta archives
+#      auto-detects ITSI on the resume run and fills in the KV-store
+#      layer without re-fetching anything already on disk.
+#
+#  v4.6.5 Changes (stable — preserved from dma-splunk-export.sh):
+#    - Datamodel collection added: per-app `default/data/models/*.json` and
+#      `local/data/models/*.json` files are now copied alongside the
+#      existing .conf assets. Splunk stores datamodel structural
+#      definitions (constraints, parent_dataset, fields, calculations) as
+#      JSON in these directories, NOT in datamodels.conf (which only
+#      carries acceleration settings). Curator's CIM expansion path
+#      consumes these to translate `| datamodel X Y` references —
+#      without them, customer-defined datamodels fall through to a
+#      generic UNSUPPORTED comment.
+#
+#  v4.6.4 Changes:
+#    - FIX: ownership / dashboard / alert REST searches no longer fail with
+#      "Error in 'where' command: The operator at ':acl.app IN (...)'
+#      is invalid." when --apps is used. Splunk's `where` parser rejects
+#      unquoted field names containing `:` or `.` (e.g. eai:acl.app);
+#      `get_app_in_clause` now wraps such fields in single quotes,
+#      producing `'eai:acl.app' IN ("app1", ...)` which Splunk accepts.
+#      Plain field names (`app`) stay unquoted to keep diffs minimal.
+#
+#  v4.6.0 Changes:
+#    - CRITICAL: Dashboard views now use provenance field (search_type=dashboard was unreliable)
+#    - All _audit queries optimized: sourcetype=audittrail + info=granted (tsidx-level filtering)
+#    - Search type breakdown derived from provenance/search_id (matches Cloud logic)
+#    - Alert firing: added | fields before | stats (reduces indexer memory on large environments)
+#    - Global aggregate queries match Cloud architecture (dma_analytics/usage_analytics/)
+#    - Removed ALL | head N limits from usage queries (was silently dropping data)
+#    - Default USAGE_PERIOD changed to 30d (was 7d) for comprehensive migration planning
+#    - saved_searches_all.json: uses f= field selection (was 256MB+ raw REST dump)
+#    - alert_ownership.json: uses f= field selection (was duplicate 256MB+ REST dump)
+#    - Usage collection ON by default (was already true, now explicit)
+#    - --resume-collect + usage active: clears usage checkpoints to force re-collection
+#    - Dynamic daily_avg_gb calculation uses actual USAGE_PERIOD days (was hardcoded /7)
+#
+#  v4.4.0 Changes:
+#    - Added --proxy URL flag: routes all curl calls through an HTTP proxy
+#    - Added --skip-internal flag: skips index=_audit/_internal searches (restricted accounts)
+#    - Added --test-access flag: pre-flight API check across all categories (no export written)
+#    - Added --remask FILE flag: re-anonymizes an existing archive without connecting to Splunk
+#    - Added --resume-collect FILE flag: resumes a previously interrupted export from archive
+#    - Expanded RBAC: now collects capabilities, LDAP groups/config, SAML groups/config
+#    - Progressive analytics checkpointing: each task group saves a checkpoint on success;
+#      resume skips already-completed groups automatically
+#    - RBAC/Usage/IndexStats phases wrapped with has_collected_data guards for resume support
+#
+#  v4.3.0 Changes:
+#    - Added --token TOKEN flag for API token authentication (recommended for automation)
+#    - Password authentication now uses Python URL-encoding via stdin (safe for special chars)
+#    - Session key auth replaces curl basic auth (-u user:pass) throughout all API calls
+#    - Added --analytics-period N flag (e.g. 7d, 30d, 90d); skips interactive period prompt
+#    - Added --usage and --rbac enable flags to match Cloud script interface
+#    - Changed USAGE_PERIOD default from 30d to 7d (matches Cloud default)
+#    - Async search dispatch: analytics searches now use exec_mode=normal + dispatchState polling
+#    - Adaptive poll interval (5s→30s) and job cancellation on timeout replace fixed 1s polling
+#    - Token-only invocation auto-enables NON_INTERACTIVE mode
+#    - All API guards updated to check AUTH_HEADER (works for both token and session key auth)
+#
+#  v4.2.4 Changes:
+#    - Anonymization now creates TWO archives: original (untouched) + _masked (anonymized)
+#    - Preserves original data in case anonymization corrupts files
+#    - Users can re-run anonymization on original if needed without full re-export
+#    - RBAC/Users collection now OFF by default (use --rbac to enable)
+#    - Usage analytics collection now OFF by default (use --usage to enable)
+#    - Faster performance defaults: batch size 250 (was 100), API delay 50ms (was 250ms)
+#    - Optimized usage analytics queries with sampling for expensive regex extractions
+#    - Changed latest() to max() for faster time aggregations
+#    - Moved filters to search-time for better performance
+#
+#  Complete Splunk Environment Data Collection for Migration to Dynatrace
+#
+#  This script collects configurations, dashboards, alerts, users, and usage
+#  analytics from your Splunk environment to enable migration planning and
+#  execution using the Dynatrace Migration Assistant application.
+#
+################################################################################
+#
+#  ╔═══════════════════════════════════════════════════════════════════════════╗
+#  ║                    PRE-FLIGHT CHECKLIST                                   ║
+#  ╠═══════════════════════════════════════════════════════════════════════════╣
+#  ║                                                                           ║
+#  ║  BEFORE RUNNING THIS SCRIPT, VERIFY THE FOLLOWING:                        ║
+#  ║                                                                           ║
+#  ║  □ 1. SYSTEM REQUIREMENTS                                                 ║
+#  ║     □ bash 4.0+ (REQUIRED) Run: bash --version                           ║
+#  ║       └─ Most Linux servers have this. macOS default bash is too old.    ║
+#  ║     □ curl installed   Run: curl --version                                ║
+#  ║     □ Python 3 available (uses Splunk's bundled Python if available)      ║
+#  ║       └─ Splunk includes Python - no separate install needed              ║
+#  ║     □ tar installed    Run: tar --version                                 ║
+#  ║     □ 500MB+ free      Run: df -h /tmp                                    ║
+#  ║                                                                           ║
+#  ║  □ 2. SPLUNK ACCESS                                                       ║
+#  ║     □ Know SPLUNK_HOME path (e.g., /opt/splunk)                          ║
+#  ║     □ Have admin username and password                                    ║
+#  ║     □ User has these capabilities:                                        ║
+#  ║       └─ search, admin_all_objects, list_settings, rest_properties_get    ║
+#  ║       └─ schedule_search (for analytics searches)                         ║
+#  ║                                                                           ║
+#  ║  □ 3. NETWORK ACCESS                                                      ║
+#  ║     □ Can reach Splunk REST API on port 8089                              ║
+#  ║       Test: curl -k https://localhost:8089/services/server/info           ║
+#  ║     □ No firewall blocking localhost:8089 or splunk-server:8089           ║
+#  ║                                                                           ║
+#  ║  □ 4. INTERNAL INDEXES (for usage analytics)                              ║
+#  ║     □ User can search index=_audit                                        ║
+#  ║     □ User can search index=_internal                                     ║
+#  ║     □ These indexes have 30+ days retention (ideal)                       ║
+#  ║       Test: | search index=_audit | head 1                                ║
+#  ║                                                                           ║
+#  ║  □ 5. INFORMATION TO GATHER BEFOREHAND                                    ║
+#  ║     □ Splunk admin username: ___________________                          ║
+#  ║     □ Splunk admin password: ___________________                          ║
+#  ║     □ Splunk host (if not localhost): ___________________                 ║
+#  ║     □ Splunk port (if not 8089): ___________________                      ║
+#  ║     □ Apps to export (or "all"): ___________________                      ║
+#  ║                                                                           ║
+#  ╚═══════════════════════════════════════════════════════════════════════════╝
+#
+#  QUICK TEST: Verify API access before running full export:
+#    curl -k -u admin:password https://localhost:8089/services/server/info
+#
+#  If the test fails, check:
+#    1. Splunk is running: $SPLUNK_HOME/bin/splunk status
+#    2. Port is correct: netstat -tlnp | grep 8089
+#    3. Credentials work: Try logging into Splunk Web
+#
+################################################################################
+
+set -o pipefail  # Fail on pipe errors
+# Note: We don't use set -e because we want to handle errors gracefully
+
+# =============================================================================
+# SCRIPT CONFIGURATION
+# =============================================================================
+
+SCRIPT_VERSION="4.7.0-beta.1"
+SCRIPT_NAME="DMA Splunk Export"
+
+# ANSI color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+WHITE='\033[1;37m'
+GRAY='\033[0;90m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+DIM='\033[2m'
+
+# Box drawing characters
+BOX_TL="╔"
+BOX_TR="╗"
+BOX_BL="╚"
+BOX_BR="╝"
+BOX_H="═"
+BOX_V="║"
+BOX_T="╠"
+BOX_B="╣"
+
+# =============================================================================
+# GLOBAL VARIABLES
+# =============================================================================
+
+SPLUNK_HOME=""
+SPLUNK_USER="${SPLUNK_USER:-}"
+# Preserve SPLUNK_PASSWORD from environment if set (common in container deployments)
+SPLUNK_PASSWORD="${SPLUNK_PASSWORD:-}"
+SPLUNK_HOST="localhost"
+SPLUNK_PORT="8089"
+EXPORT_DIR=""
+EXPORT_NAME=""
+TIMESTAMP=""
+LOG_FILE=""
+
+# Authentication state (set by authenticate_splunk, used by all API calls)
+AUTH_TOKEN=""            # API token (set via --token flag)
+AUTH_METHOD="userpass"  # "token" or "userpass"
+SESSION_KEY=""          # Session key obtained from /services/auth/login
+AUTH_HEADER=""          # Constructed auth header used in every curl call
+
+# Proxy settings
+PROXY_URL=""            # Optional HTTP proxy (e.g., http://proxy.corp.com:8080)
+CURL_PROXY_ARGS=""      # Built from PROXY_URL at runtime; unquoted so empty = no-op
+
+# Feature flags
+SKIP_INTERNAL=false     # Skip index=_audit/_internal searches (for locked-down accounts)
+TEST_ACCESS_MODE=false  # Pre-flight check: test API access and exit (no export written)
+
+# Remask mode (--remask FILE: re-anonymize an existing archive, no Splunk connection)
+REMASK_ARCHIVE=""
+REMASK_MODE=false
+
+# Resume mode (--resume-collect FILE: continue an interrupted export)
+RESUME_ARCHIVE=""
+RESUME_MODE=false
+
+# Environment detection
+SPLUNK_FLAVOR=""           # enterprise, uf, hf
+SPLUNK_ARCHITECTURE=""     # standalone, distributed, cloud
+SPLUNK_ROLE=""            # search_head, indexer, forwarder, etc.
+IS_SHC_MEMBER=false
+IS_SHC_CAPTAIN=false
+IS_IDX_CLUSTER=false
+IS_CLOUD=false
+
+# Collection options
+SELECTED_APPS=()
+EXPORT_ALL_APPS=true
+COLLECT_CONFIGS=true
+COLLECT_DASHBOARDS=true
+COLLECT_ALERTS=true
+COLLECT_RBAC=true           # ON by default - use --no-rbac to disable
+COLLECT_USAGE=true          # ON by default - use --no-usage to disable
+COLLECT_INDEXES=true
+COLLECT_LOOKUPS=false
+COLLECT_AUDIT=false
+ANONYMIZE_DATA=true
+
+# ─────────────────────────── ITSI BLOCK BEGIN ───────────────────────────
+# ITSI KV-store collection — auto-detected from installed apps. Opt-out only.
+# See DMA-SPLUNK-ITSI-GLASS-TABLES-PLANNING.md (§10.4) for full design notes.
+#
+# Design principles:
+#   1. Existing per-app structure is sacred. The `itsi` app continues to flow
+#      through dashboard/savedsearches/.conf collectors exactly like any other
+#      app. The ITSI block is purely additive.
+#   2. Per-app additions only: `<App>/dashboards/glasstable/` and
+#      `<App>/dashboards/deepdive/` — new subdirs alongside `classic/studio/`.
+#   3. KV-store-only data (services, KPIs, entities, NEAPs, etc.) lives in
+#      a NEW top-level `itsi_assets/` dir. Non-ITSI archives never have it.
+#   4. Raw API response preserved per object — no transformation here.
+#      The future importer normalizes.
+#   5. Never abort the export for an ITSI failure. Every error path writes
+#      to `_itsi_inventory.json.errors[]` and continues.
+COLLECT_ITSI=auto             # set to true|false|skipped by detect_itsi() at runtime
+COLLECT_ITSI_OPTOUT=false     # only true via --no-itsi
+ITSI_SKIP_REASON=""           # populated when COLLECT_ITSI != true (e.g. "itsi_not_installed", "missing_capability")
+ITSI_VERSION="unknown"        # populated from SA-ITOA app version
+ITSI_RESPONSE_WRAPPER=""      # "entry" or "array" — detected on first list call; per ITSI docs, itoa_interface returns bare array
+ITSI_BATCH_SIZE=500           # per-request `limit`. Docs: "if limit isn't set, all entries are returned" — but we paginate defensively.
+ITSI_DEFAULT_APP="itsi"       # default `<App>` for per-app glasstable/deepdive when acl.app is missing on a record
+# Counters for inventory + manifest
+STATS_ITSI_GLASSTABLES=0
+STATS_ITSI_DEEPDIVES=0
+STATS_ITSI_SERVICES=0
+STATS_ITSI_KPIS=0
+STATS_ITSI_KPI_BASE_SEARCHES=0
+STATS_ITSI_SERVICE_TEMPLATES=0
+STATS_ITSI_ENTITIES=0
+STATS_ITSI_ENTITY_TYPES=0
+STATS_ITSI_NEAPS=0
+STATS_ITSI_CORRELATION_SEARCHES=0
+STATS_ITSI_CORR_MULTI_KPI=0
+STATS_ITSI_CORR_SINGLE_KPI=0
+STATS_ITSI_CORR_ADHOC=0
+STATS_ITSI_MAINT_CALENDARS=0
+STATS_ITSI_THRESHOLD_TEMPLATES=0
+STATS_ITSI_IMAGES=0
+STATS_ITSI_MODULES=0
+# ──────────────────────────── ITSI BLOCK END ────────────────────────────
+AUTO_CONFIRM=false
+USAGE_PERIOD="30d"          # Default analytics window (30d recommended for migration; override with --analytics-period)
+ANALYTICS_PERIOD_SET=false  # true when --analytics-period was passed on CLI (skips interactive prompt)
+
+# App-scoped collection mode - when true, limits all collections to selected apps only
+# This dramatically reduces export time when only specific apps are selected
+# Auto-enabled when --apps is used (unless --all-apps is also specified)
+SCOPE_TO_APPS=false
+
+# Quick mode - skips expensive global analytics entirely, just collects app configs
+QUICK_MODE=false
+
+# Non-interactive mode flag (set automatically when all params provided)
+NON_INTERACTIVE=false
+
+# Debug mode - enables verbose logging for troubleshooting
+DEBUG_MODE=false
+DEBUG_LOG_FILE=""
+
+# Rate limiting (to avoid impacting Splunk performance)
+API_DELAY_SECONDS=0.05     # Delay between API calls (seconds) - 50ms (was 250ms)
+MAX_CONCURRENT_SEARCHES=1  # Don't run multiple searches in parallel
+SEARCH_POLL_INTERVAL=1     # How often to check if search is done (seconds)
+
+# =============================================================================
+# PHASE 1: ENTERPRISE RESILIENCE CONFIGURATION
+# =============================================================================
+# These settings enable enterprise-scale exports (4000+ dashboards, 10K+ alerts)
+# Override via environment variables: BATCH_SIZE=50 ./dma-splunk-export.sh
+
+# Pagination settings
+BATCH_SIZE=${BATCH_SIZE:-250}              # Items per API request (was 100, increased for speed)
+RATE_LIMIT_DELAY=${RATE_LIMIT_DELAY:-0.05} # Delay between paginated requests (50ms - was 100ms)
+
+# Timeout settings - GENEROUS defaults for enterprise environments
+API_TIMEOUT=${API_TIMEOUT:-120}            # Per-request timeout (2 min - handles large result sets)
+CONNECT_TIMEOUT=${CONNECT_TIMEOUT:-10}     # Connection timeout in seconds
+MAX_TOTAL_TIME=${MAX_TOTAL_TIME:-14400}    # Maximum total script runtime (4 hours for 5000+ assets)
+
+# Retry settings
+MAX_RETRIES=${MAX_RETRIES:-3}              # Number of retry attempts for failed requests
+RETRY_DELAY=${RETRY_DELAY:-2}              # Initial retry delay in seconds (exponential backoff)
+
+# Progress & Resume settings
+CHECKPOINT_ENABLED=${CHECKPOINT_ENABLED:-true}   # Enable checkpoint/resume capability
+PROGRESS_FILE=""                                  # Set at runtime: .export_progress
+CHECKPOINT_FILE=""                                # Set at runtime: .export_checkpoint
+ERROR_LOG_FILE=""                                 # Set at runtime: export_errors.log
+
+# Statistics for resilience tracking
+STATS_API_CALLS=0
+STATS_API_RETRIES=0
+STATS_API_FAILURES=0
+STATS_BATCHES_COMPLETED=0
+
+# Anonymization mappings (populated at runtime)
+declare -A EMAIL_MAP
+declare -A HOST_MAP
+declare -A WEBHOOK_MAP
+declare -A APIKEY_MAP
+declare -A SLACK_CHANNEL_MAP
+declare -A USERNAME_MAP
+ANON_EMAIL_COUNTER=0
+ANON_HOST_COUNTER=0
+ANON_WEBHOOK_COUNTER=0
+ANON_APIKEY_COUNTER=0
+ANON_SLACK_COUNTER=0
+ANON_USERNAME_COUNTER=0
+
+# Statistics
+STATS_APPS=0
+STATS_DASHBOARDS=0
+STATS_DASHBOARDS_XML=0  # Fallback count from XML files (used if REST API unavailable)
+STATS_ALERTS=0
+STATS_USERS=0
+STATS_INDEXES=0
+STATS_ERRORS=0
+
+# Timing
+EXPORT_START_TIME=0
+EXPORT_END_TIME=0
+
+# =============================================================================
+# UTILITY FUNCTIONS
+# =============================================================================
+
+# Print a horizontal line
+print_line() {
+  local char="${1:-─}"
+  local width="${2:-72}"
+  printf '%*s\n' "$width" '' | tr ' ' "$char"
+}
+
+# =============================================================================
+# DEBUG LOGGING FUNCTIONS
+# =============================================================================
+
+# Initialize debug log file
+init_debug_log() {
+  if [ "$DEBUG_MODE" = "true" ]; then
+    DEBUG_LOG_FILE="${EXPORT_DIR:-/tmp}/export_debug.log"
+    echo "===============================================================================" > "$DEBUG_LOG_FILE"
+    echo "DMA Export Debug Log" >> "$DEBUG_LOG_FILE"
+    echo "Started: $(date -Iseconds 2>/dev/null || date)" >> "$DEBUG_LOG_FILE"
+    echo "Script Version: $SCRIPT_VERSION" >> "$DEBUG_LOG_FILE"
+    echo "===============================================================================" >> "$DEBUG_LOG_FILE"
+    echo "" >> "$DEBUG_LOG_FILE"
+
+    # Log environment info
+    debug_log "ENV" "Bash Version: ${BASH_VERSION:-unknown}"
+    debug_log "ENV" "OS: $(uname -s 2>/dev/null || echo 'unknown') $(uname -r 2>/dev/null || echo '')"
+    debug_log "ENV" "Hostname: $(get_hostname)"
+    debug_log "ENV" "User: $(whoami 2>/dev/null || echo 'unknown')"
+    debug_log "ENV" "PWD: $(pwd)"
+    debug_log "ENV" "curl version: $(curl --version 2>/dev/null | head -1 || echo 'not found')"
+
+    echo -e "${CYAN}[DEBUG] Debug logging enabled → $DEBUG_LOG_FILE${NC}"
+  fi
+}
+
+# Log debug message (only when DEBUG_MODE is true)
+# Usage: debug_log "CATEGORY" "message"
+debug_log() {
+  if [ "$DEBUG_MODE" != "true" ]; then
+    return
+  fi
+
+  local category="${1:-INFO}"
+  local message="$2"
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date)
+
+  # Write to debug log file
+  if [ -n "$DEBUG_LOG_FILE" ] && [ -w "$(dirname "$DEBUG_LOG_FILE" 2>/dev/null || echo "/tmp")" ]; then
+    echo "[$timestamp] [$category] $message" >> "$DEBUG_LOG_FILE"
+  fi
+
+  # Also show on console in debug mode (with color coding)
+  case "$category" in
+    ERROR)   echo -e "${RED}[DEBUG:$category] $message${NC}" ;;
+    WARN)    echo -e "${YELLOW}[DEBUG:$category] $message${NC}" ;;
+    API)     echo -e "${CYAN}[DEBUG:$category] $message${NC}" ;;
+    SEARCH)  echo -e "${MAGENTA}[DEBUG:$category] $message${NC}" ;;
+    TIMING)  echo -e "${BLUE}[DEBUG:$category] $message${NC}" ;;
+    *)       echo -e "${GRAY}[DEBUG:$category] $message${NC}" ;;
+  esac
+}
+
+# Log API call details (redacts sensitive info)
+# Usage: debug_api_call "METHOD" "URL" "HTTP_CODE" "RESPONSE_SIZE" "DURATION_MS"
+debug_api_call() {
+  if [ "$DEBUG_MODE" != "true" ]; then
+    return
+  fi
+
+  local method="$1"
+  local url="$2"
+  local http_code="$3"
+  local response_size="${4:-unknown}"
+  local duration_ms="${5:-unknown}"
+
+  # Redact sensitive parts of URL
+  local safe_url=$(echo "$url" | sed 's/password=[^&]*/password=REDACTED/g' | sed 's/token=[^&]*/token=REDACTED/g')
+
+  debug_log "API" "$method $safe_url → HTTP $http_code (${response_size} bytes, ${duration_ms}ms)"
+}
+
+# Log search job lifecycle
+# Usage: debug_search_job "ACTION" "SID" "DETAILS"
+debug_search_job() {
+  if [ "$DEBUG_MODE" != "true" ]; then
+    return
+  fi
+
+  local action="$1"
+  local sid="$2"
+  local details="${3:-}"
+
+  debug_log "SEARCH" "[$action] sid=$sid $details"
+}
+
+# Log timing for operations
+# Usage: debug_timing "OPERATION" "DURATION_SECONDS"
+debug_timing() {
+  if [ "$DEBUG_MODE" != "true" ]; then
+    return
+  fi
+
+  local operation="$1"
+  local duration="$2"
+
+  debug_log "TIMING" "$operation completed in ${duration}s"
+}
+
+# Log current configuration state
+debug_config_state() {
+  if [ "$DEBUG_MODE" != "true" ]; then
+    return
+  fi
+
+  debug_log "CONFIG" "SPLUNK_HOST=$SPLUNK_HOST:$SPLUNK_PORT"
+  debug_log "CONFIG" "SPLUNK_HOME=$SPLUNK_HOME"
+  debug_log "CONFIG" "EXPORT_ALL_APPS=$EXPORT_ALL_APPS"
+  debug_log "CONFIG" "SCOPE_TO_APPS=$SCOPE_TO_APPS"
+  debug_log "CONFIG" "QUICK_MODE=$QUICK_MODE"
+  debug_log "CONFIG" "COLLECT_RBAC=$COLLECT_RBAC"
+  debug_log "CONFIG" "COLLECT_USAGE=$COLLECT_USAGE"
+  debug_log "CONFIG" "COLLECT_INDEXES=$COLLECT_INDEXES"
+  debug_log "CONFIG" "USAGE_PERIOD=$USAGE_PERIOD"
+  debug_log "CONFIG" "SELECTED_APPS=(${SELECTED_APPS[*]})"
+  debug_log "CONFIG" "BATCH_SIZE=$BATCH_SIZE"
+  debug_log "CONFIG" "API_TIMEOUT=$API_TIMEOUT"
+}
+
+# Finalize debug log
+finalize_debug_log() {
+  if [ "$DEBUG_MODE" = "true" ] && [ -n "$DEBUG_LOG_FILE" ]; then
+    echo "" >> "$DEBUG_LOG_FILE"
+    echo "===============================================================================" >> "$DEBUG_LOG_FILE"
+    echo "Export Completed: $(date -Iseconds 2>/dev/null || date)" >> "$DEBUG_LOG_FILE"
+    echo "Total Errors: $STATS_ERRORS" >> "$DEBUG_LOG_FILE"
+    echo "Total API Calls: $STATS_API_CALLS" >> "$DEBUG_LOG_FILE"
+    echo "Total Retries: $STATS_API_RETRIES" >> "$DEBUG_LOG_FILE"
+    echo "===============================================================================" >> "$DEBUG_LOG_FILE"
+
+    echo -e "${GREEN}[DEBUG] Debug log saved to: $DEBUG_LOG_FILE${NC}"
+  fi
+}
+
+# Get hostname with multiple fallbacks (for containers without hostname command)
+get_hostname() {
+  local mode="${1:-short}"  # short, full, or fqdn
+
+  if [ "$mode" = "short" ] || [ "$mode" = "s" ]; then
+    # Try multiple methods for short hostname
+    hostname -s 2>/dev/null || \
+    cat /etc/hostname 2>/dev/null | cut -d. -f1 || \
+    echo "$HOSTNAME" | cut -d. -f1 || \
+    cat /proc/sys/kernel/hostname 2>/dev/null | cut -d. -f1 || \
+    echo "splunk"
+  elif [ "$mode" = "fqdn" ] || [ "$mode" = "f" ]; then
+    # Try multiple methods for FQDN
+    hostname -f 2>/dev/null || \
+    cat /etc/hostname 2>/dev/null || \
+    echo "$HOSTNAME" || \
+    cat /proc/sys/kernel/hostname 2>/dev/null || \
+    echo "splunk.local"
+  else
+    # Default: try hostname command first, then fallbacks
+    hostname 2>/dev/null || \
+    cat /etc/hostname 2>/dev/null || \
+    echo "$HOSTNAME" || \
+    cat /proc/sys/kernel/hostname 2>/dev/null || \
+    echo "splunk"
+  fi
+}
+
+# =============================================================================
+# PYTHON JSON HELPER FUNCTIONS (replaces jq dependency)
+# =============================================================================
+# These functions use Python (Splunk's bundled or system) for JSON processing
+# to avoid requiring jq installation on customer servers.
+
+# Global variable for Python command (set during prerequisites check)
+PYTHON_CMD=""
+
+# Get a value from a JSON file
+# Usage: json_get "file.json" ".field.subfield" [default]
+json_get() {
+  local file="$1"
+  local path="$2"
+  local default="${3:-}"
+
+  if [ ! -f "$file" ]; then
+    echo "$default"
+    return
+  fi
+
+  $PYTHON_CMD -c "
+import json
+import sys
+
+try:
+    with open('$file', 'r') as f:
+        data = json.load(f)
+
+    # Parse the path (e.g., '.results[0].field' or '.results[:10]')
+    path = '''$path'''.strip()
+    if path.startswith('.'):
+        path = path[1:]
+
+    result = data
+    for part in path.replace('][', '.').replace('[', '.').replace(']', '').split('.'):
+        if not part:
+            continue
+        if ':' in part:
+            # Handle slicing like [:10]
+            start, end = part.split(':')
+            start = int(start) if start else None
+            end = int(end) if end else None
+            result = result[start:end]
+        elif part.isdigit():
+            result = result[int(part)]
+        else:
+            result = result.get(part, None) if isinstance(result, dict) else None
+            if result is None:
+                print('''$default''' or '[]' if '''$default''' == '' else '''$default''')
+                sys.exit(0)
+
+    if isinstance(result, (dict, list)):
+        print(json.dumps(result))
+    elif result is None:
+        print('''$default''' if '''$default''' else 'null')
+    else:
+        print(result)
+except Exception as e:
+    print('''$default''' if '''$default''' else '[]')
+" 2>/dev/null
+}
+
+# Get array length from JSON file
+# Usage: json_length "file.json" ".results"
+json_length() {
+  local file="$1"
+  local path="${2:-.}"
+
+  if [ ! -f "$file" ]; then
+    echo "0"
+    return
+  fi
+
+  $PYTHON_CMD -c "
+import json
+try:
+    with open('$file', 'r') as f:
+        data = json.load(f)
+    path = '''$path'''.strip()
+    if path.startswith('.'):
+        path = path[1:]
+    result = data
+    for part in path.split('.'):
+        if part:
+            result = result.get(part, []) if isinstance(result, dict) else []
+    print(len(result) if isinstance(result, list) else 0)
+except:
+    print(0)
+" 2>/dev/null
+}
+
+# Build a JSON object from arguments
+# Usage: json_build key1 value1 key2 value2 ...
+json_build() {
+  $PYTHON_CMD -c "
+import json
+import sys
+
+args = sys.argv[1:]
+obj = {}
+i = 0
+while i < len(args) - 1:
+    key = args[i]
+    val = args[i + 1]
+    # Try to parse as JSON first (for nested objects, arrays, numbers, bools)
+    try:
+        obj[key] = json.loads(val)
+    except:
+        obj[key] = val
+    i += 2
+print(json.dumps(obj))
+" "$@" 2>/dev/null
+}
+
+# Append an object to a JSON array
+# Usage: echo '[]' | json_array_append '{"name": "test"}'
+json_array_append() {
+  local new_item="$1"
+
+  $PYTHON_CMD -c "
+import json
+import sys
+
+try:
+    arr = json.loads(sys.stdin.read())
+    item = json.loads('''$new_item''')
+    arr.append(item)
+    print(json.dumps(arr))
+except Exception as e:
+    print('[]')
+" 2>/dev/null
+}
+
+# Validate and pretty-print JSON file
+# Usage: json_format "file.json"
+json_format() {
+  local file="$1"
+
+  $PYTHON_CMD -c "
+import json
+try:
+    with open('$file', 'r') as f:
+        data = json.load(f)
+    with open('$file', 'w') as f:
+        json.dump(data, f, indent=2)
+    print('valid')
+except Exception as e:
+    print('invalid: ' + str(e))
+" 2>/dev/null
+}
+
+# Escape a string for JSON
+# Usage: json_escape "string with \"quotes\""
+json_escape() {
+  local str="$1"
+  $PYTHON_CMD -c "
+import json
+print(json.dumps('''$str'''))
+" 2>/dev/null
+}
+
+# Build apps JSON array for manifest
+# Usage: build_apps_json "app1" "app2" "app3"
+build_apps_json() {
+  local export_dir="$1"
+  shift
+  local apps=("$@")
+
+  $PYTHON_CMD -c "
+import json
+import os
+import re
+
+export_dir = '''$export_dir'''
+apps = '''${apps[*]}'''.split()
+
+result = []
+for app in apps:
+    app_dashboards = 0
+    app_alerts = 0
+    app_saved = 0
+    has_props = False
+    has_transforms = False
+    has_lookups = False
+
+    # Count dashboards
+    for dash_dir in ['default/data/ui/views', 'local/data/ui/views']:
+        path = os.path.join(export_dir, app, dash_dir)
+        if os.path.isdir(path):
+            app_dashboards += len([f for f in os.listdir(path) if f.endswith('.xml')])
+
+    # Count alerts and saved searches
+    for conf_dir in ['default', 'local']:
+        ss_path = os.path.join(export_dir, app, conf_dir, 'savedsearches.conf')
+        if os.path.isfile(ss_path):
+            with open(ss_path, 'r') as f:
+                content = f.read()
+                app_alerts += len(re.findall(r'alert\.track', content))
+                app_saved += len(re.findall(r'^\[', content, re.MULTILINE))
+
+        if os.path.isfile(os.path.join(export_dir, app, conf_dir, 'props.conf')):
+            has_props = True
+        if os.path.isfile(os.path.join(export_dir, app, conf_dir, 'transforms.conf')):
+            has_transforms = True
+
+    if os.path.isdir(os.path.join(export_dir, app, 'lookups')):
+        has_lookups = True
+
+    result.append({
+        'name': app,
+        'dashboards': app_dashboards,
+        'alerts': app_alerts,
+        'saved_searches': app_saved,
+        'has_props': has_props,
+        'has_transforms': has_transforms,
+        'has_lookups': has_lookups
+    })
+
+print(json.dumps(result))
+" 2>/dev/null || echo "[]"
+}
+
+# Build usage intelligence JSON for manifest
+# Usage: build_usage_intel_json "$EXPORT_DIR"
+build_usage_intel_json() {
+  local export_dir="$1"
+
+  $PYTHON_CMD -c "
+import json
+import os
+
+export_dir = '''$export_dir'''
+analytics_dir = os.path.join(export_dir, '_usage_analytics')
+
+def safe_get(file_path, key_path, default):
+    \"\"\"Safely get a value from a JSON file.\"\"\"
+    try:
+        if not os.path.isfile(file_path):
+            return default
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        result = data
+        for key in key_path.split('.'):
+            if key.startswith('[') and key.endswith(']'):
+                idx = key[1:-1]
+                if ':' in idx:
+                    start, end = idx.split(':')
+                    start = int(start) if start else None
+                    end = int(end) if end else None
+                    result = result[start:end]
+                else:
+                    result = result[int(idx)]
+            else:
+                result = result.get(key, default)
+        return result
+    except:
+        return default
+
+def safe_len(file_path, key='results'):
+    \"\"\"Safely get length of results array.\"\"\"
+    try:
+        if not os.path.isfile(file_path):
+            return 0
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        return len(data.get(key, []))
+    except:
+        return 0
+
+if not os.path.isdir(analytics_dir):
+    print('{}')
+else:
+    # v4.6.0: Reference global aggregate files only
+    result = {
+        'prioritization': {
+            'top_dashboards': safe_get(os.path.join(analytics_dir, 'dashboard_views_global.json'), 'results.[:10]', []),
+            'top_alerts': safe_get(os.path.join(analytics_dir, 'alert_firing_global.json'), 'results.[:10]', []),
+            'top_users': safe_get(os.path.join(analytics_dir, 'user_activity_global.json'), 'results.[:10]', [])
+        },
+        'volume': {
+            'index_volume': safe_get(os.path.join(analytics_dir, 'index_volume_summary.json'), 'results.[:50]', []),
+            'index_events': safe_get(os.path.join(analytics_dir, 'index_event_counts_daily.json'), 'results.[:10]', []),
+            'note': 'See index_volume_summary.json for per-index daily ingestion'
+        },
+        'search_patterns': safe_get(os.path.join(analytics_dir, 'search_patterns_global.json'), 'results.[:10]', [])
+    }
+    print(json.dumps(result))
+" 2>/dev/null || echo "{}"
+}
+
+# Get host IPs as JSON array (with fallbacks for containers)
+# Usage: get_host_ips_json
+get_host_ips_json() {
+  $PYTHON_CMD -c "
+import json
+import subprocess
+import socket
+
+ips = []
+try:
+    # Method 1: hostname -I (Linux)
+    result = subprocess.run(['hostname', '-I'], capture_output=True, text=True, timeout=5)
+    if result.returncode == 0 and result.stdout.strip():
+        ips = [ip.strip() for ip in result.stdout.split() if ip.strip()][:5]
+except:
+    pass
+
+if not ips:
+    try:
+        # Method 2: ip addr (Linux containers)
+        result = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            import re
+            ips = re.findall(r'inet (\d+\.\d+\.\d+\.\d+)', result.stdout)
+            ips = [ip for ip in ips if ip != '127.0.0.1'][:5]
+    except:
+        pass
+
+if not ips:
+    try:
+        # Method 3: Socket connection (works anywhere)
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ips = [s.getsockname()[0]]
+        s.close()
+    except:
+        pass
+
+print(json.dumps(ips if ips else []))
+" 2>/dev/null || echo "[]"
+}
+
+# Iterate over JSON array entries and output each as a line
+# Usage: json_iterate "file.json" ".entry"
+json_iterate() {
+  local file="$1"
+  local path="${2:-.}"
+
+  $PYTHON_CMD -c "
+import json
+try:
+    with open('$file', 'r') as f:
+        data = json.load(f)
+    path = '''$path'''.strip()
+    if path.startswith('.'):
+        path = path[1:]
+    result = data
+    for part in path.split('.'):
+        if part:
+            result = result.get(part, []) if isinstance(result, dict) else []
+    for item in result:
+        print(json.dumps(item))
+except:
+    pass
+" 2>/dev/null
+}
+
+# =============================================================================
+# PROGRESS BAR AND HISTOGRAM FUNCTIONS (Scale-aware for 1000s of items)
+# =============================================================================
+
+# Global progress tracking
+PROGRESS_START_TIME=0
+PROGRESS_CURRENT=0
+PROGRESS_TOTAL=0
+PROGRESS_LABEL=""
+
+# Spinner characters for visual feedback
+SPINNER_CHARS=('/' '-' '\' '|')
+SPINNER_INDEX=0
+
+# Get next spinner character
+get_spinner() {
+  echo "${SPINNER_CHARS[$SPINNER_INDEX]}"
+  SPINNER_INDEX=$(( (SPINNER_INDEX + 1) % 4 ))
+}
+
+# Initialize progress bar
+# Usage: progress_init "Collecting dashboards" 1500
+progress_init() {
+  PROGRESS_LABEL="$1"
+  PROGRESS_TOTAL="$2"
+  PROGRESS_CURRENT=0
+  PROGRESS_START_TIME=$(date +%s)
+
+  # Show initial state
+  echo -e "\n${CYAN}┌─────────────────────────────────────────────────────────────────────┐${NC}"
+  echo -e "${CYAN}│${NC} ${WHITE}${PROGRESS_LABEL}${NC}"
+  echo -e "${CYAN}│${NC} ${GRAY}Total items: ${PROGRESS_TOTAL}${NC}"
+  echo -e "${CYAN}└─────────────────────────────────────────────────────────────────────┘${NC}"
+}
+
+# Update progress bar
+# Usage: progress_update 50
+# Note: Uses newlines at 5% intervals for container compatibility (kubectl exec)
+PROGRESS_LAST_PERCENT=0
+progress_update() {
+  PROGRESS_CURRENT="$1"
+  local percent=0
+  local elapsed=$(( $(date +%s) - PROGRESS_START_TIME ))
+  local rate=0
+  local eta="calculating..."
+
+  if [ "$PROGRESS_TOTAL" -gt 0 ]; then
+    percent=$(( (PROGRESS_CURRENT * 100) / PROGRESS_TOTAL ))
+  fi
+
+  # Only print at 5% intervals to avoid flooding (container-friendly)
+  local interval=5
+  local rounded_percent=$(( (percent / interval) * interval ))
+  if [ "$rounded_percent" -eq "$PROGRESS_LAST_PERCENT" ] && [ "$percent" -lt 100 ]; then
+    return  # Skip - not at a new interval yet
+  fi
+  PROGRESS_LAST_PERCENT="$rounded_percent"
+
+  # Calculate rate and ETA
+  if [ "$elapsed" -gt 0 ] && [ "$PROGRESS_CURRENT" -gt 0 ]; then
+    rate=$(( PROGRESS_CURRENT / elapsed ))
+    if [ "$rate" -gt 0 ]; then
+      local remaining=$(( PROGRESS_TOTAL - PROGRESS_CURRENT ))
+      local eta_seconds=$(( remaining / rate ))
+      if [ "$eta_seconds" -lt 60 ]; then
+        eta="${eta_seconds}s"
+      elif [ "$eta_seconds" -lt 3600 ]; then
+        eta="$(( eta_seconds / 60 ))m $(( eta_seconds % 60 ))s"
+      else
+        eta="$(( eta_seconds / 3600 ))h $(( (eta_seconds % 3600) / 60 ))m"
+      fi
+    fi
+  fi
+
+  # Build progress bar (30 chars wide for cleaner output)
+  local bar_width=30
+  local filled=$(( (percent * bar_width) / 100 ))
+  local empty=$(( bar_width - filled ))
+  local bar=""
+
+  for ((i=0; i<filled; i++)); do bar+="█"; done
+  for ((i=0; i<empty; i++)); do bar+="░"; done
+
+  # Print progress line with newline (container-friendly)
+  echo -e "${CYAN}│${NC} ${GREEN}${bar}${NC} ${percent}% [${PROGRESS_CURRENT}/${PROGRESS_TOTAL}] ${GRAY}ETA: ${eta}${NC}"
+}
+
+# Mark individual task as complete (shows checkmark)
+task_complete() {
+  local task_name="${1:-Task}"
+  echo -e "${GREEN}✓${NC} ${task_name} ${GRAY}done${NC}"
+}
+
+# =============================================================================
+# ITEM-LEVEL PROGRESS WITH SPINNER (for showing progress within each item)
+# =============================================================================
+
+# Show item progress with spinner and per-item percentage
+# Usage: item_progress_show "app: SplunkForwarder" 50 100 3 21
+# Args: item_name, item_current, item_total, overall_current, overall_total
+item_progress_show() {
+  local item_name="$1"
+  local item_current="${2:-0}"
+  local item_total="${3:-100}"
+  local overall_current="${4:-0}"
+  local overall_total="${5:-1}"
+
+  local spinner=$(get_spinner)
+  local item_percent=0
+  local overall_percent=0
+
+  if [ "$item_total" -gt 0 ]; then
+    item_percent=$(( (item_current * 100) / item_total ))
+  fi
+
+  if [ "$overall_total" -gt 0 ]; then
+    overall_percent=$(( (overall_current * 100) / overall_total ))
+  fi
+
+  # Build item progress bar (30 chars wide)
+  local bar_width=30
+  local filled=$(( (item_percent * bar_width) / 100 ))
+  local empty=$(( bar_width - filled ))
+  local bar=""
+
+  for ((i=0; i<filled; i++)); do bar+="█"; done
+  for ((i=0; i<empty; i++)); do bar+="░"; done
+
+  # Calculate ETA
+  local elapsed=$(( $(date +%s) - PROGRESS_START_TIME ))
+  local eta="calculating..."
+  if [ "$elapsed" -gt 0 ] && [ "$overall_current" -gt 0 ]; then
+    local rate=$(( overall_current * 1000 / elapsed ))  # items per 1000 seconds for precision
+    if [ "$rate" -gt 0 ]; then
+      local remaining=$(( overall_total - overall_current ))
+      local eta_seconds=$(( remaining * 1000 / rate ))
+      if [ "$eta_seconds" -lt 60 ]; then
+        eta="${eta_seconds}s"
+      elif [ "$eta_seconds" -lt 3600 ]; then
+        eta="$(( eta_seconds / 60 ))m $(( eta_seconds % 60 ))s"
+      else
+        eta="$(( eta_seconds / 3600 ))h $(( (eta_seconds % 3600) / 60 ))m"
+      fi
+    fi
+  fi
+
+  # Print: spinner item_name | progress_bar | item% [overall/total] ETA
+  printf "\r${YELLOW}%s${NC} %-30s ${CYAN}│${NC} ${GREEN}%s${NC} %3d%% ${GRAY}[%d/%d]${NC} ${GRAY}ETA: %s${NC}   " \
+    "$spinner" "$item_name" "$bar" "$item_percent" "$overall_current" "$overall_total" "$eta"
+}
+
+# Show item completion at 100% with checkmark
+# Usage: item_progress_complete "app: SplunkForwarder" 3 21
+item_progress_complete() {
+  local item_name="$1"
+  local overall_current="${2:-0}"
+  local overall_total="${3:-1}"
+
+  local overall_percent=0
+  if [ "$overall_total" -gt 0 ]; then
+    overall_percent=$(( (overall_current * 100) / overall_total ))
+  fi
+
+  # Full progress bar for completed item
+  local bar="██████████████████████████████"  # 30 filled chars
+
+  printf "\r${GREEN}✓${NC} %-30s ${CYAN}│${NC} ${GREEN}%s${NC} 100%% ${GRAY}[%d/%d]${NC}                    \n" \
+    "$item_name" "$bar" "$overall_current" "$overall_total"
+}
+
+# Simulate progress for an item with spinner animation
+# Usage: simulate_item_progress "app: SplunkForwarder" 3 21 [delay_ms]
+simulate_item_progress() {
+  local item_name="$1"
+  local overall_current="$2"
+  local overall_total="$3"
+  local delay="${4:-0.02}"  # Default 20ms between updates
+
+  # Simulate progress from 0 to 100 in steps
+  local steps=10
+  for ((step=1; step<=steps; step++)); do
+    local progress=$(( (step * 100) / steps ))
+    item_progress_show "$item_name" "$progress" "100" "$overall_current" "$overall_total"
+    sleep "$delay"
+  done
+
+  # Show completion
+  item_progress_complete "$item_name" "$overall_current" "$overall_total"
+}
+
+# Complete progress bar
+progress_complete() {
+  local elapsed=$(( $(date +%s) - PROGRESS_START_TIME ))
+  local rate=0
+
+  if [ "$elapsed" -gt 0 ] && [ "$PROGRESS_CURRENT" -gt 0 ]; then
+    rate=$(( PROGRESS_CURRENT / elapsed ))
+  fi
+
+  # Format elapsed time
+  local elapsed_str=""
+  if [ "$elapsed" -lt 60 ]; then
+    elapsed_str="${elapsed}s"
+  elif [ "$elapsed" -lt 3600 ]; then
+    elapsed_str="$(( elapsed / 60 ))m $(( elapsed % 60 ))s"
+  else
+    elapsed_str="$(( elapsed / 3600 ))h $(( (elapsed % 3600) / 60 ))m"
+  fi
+
+  printf "\r${CYAN}│${NC} ${GREEN}████████████████████████████████████████████████████${NC} 100%% [%d/%d]      \n" \
+    "$PROGRESS_TOTAL" "$PROGRESS_TOTAL"
+  echo -e "${CYAN}│${NC} ${GREEN}✓ Completed in ${elapsed_str}${NC} (${rate} items/sec)"
+  echo -e "${CYAN}└─────────────────────────────────────────────────────────────────────┘${NC}"
+}
+
+# Show histogram of item distribution
+# Usage: show_histogram "Apps by Dashboard Count" "app1:50" "app2:120" "app3:30" ...
+show_histogram() {
+  local title="$1"
+  shift
+  local items=("$@")
+  local max_value=0
+  local max_label_len=0
+
+  # Find max value and label length
+  for item in "${items[@]}"; do
+    local label="${item%%:*}"
+    local value="${item##*:}"
+    if [ "$value" -gt "$max_value" ]; then
+      max_value="$value"
+    fi
+    if [ "${#label}" -gt "$max_label_len" ]; then
+      max_label_len="${#label}"
+    fi
+  done
+
+  # Cap label length
+  if [ "$max_label_len" -gt 25 ]; then
+    max_label_len=25
+  fi
+
+  echo ""
+  echo -e "${WHITE}$title${NC}"
+  print_line "─" 70
+
+  # Draw histogram bars
+  local bar_max=40
+  for item in "${items[@]}"; do
+    local label="${item%%:*}"
+    local value="${item##*:}"
+    local bar_len=0
+
+    if [ "$max_value" -gt 0 ]; then
+      bar_len=$(( (value * bar_max) / max_value ))
+    fi
+
+    # Truncate label if needed
+    if [ "${#label}" -gt "$max_label_len" ]; then
+      label="${label:0:$((max_label_len-2))}.."
+    fi
+
+    # Build bar
+    local bar=""
+    for ((i=0; i<bar_len; i++)); do bar+="▓"; done
+
+    # Color based on size
+    local color="$GREEN"
+    if [ "$value" -gt 100 ]; then color="$YELLOW"; fi
+    if [ "$value" -gt 500 ]; then color="$RED"; fi
+
+    printf "  %-${max_label_len}s │ ${color}%-${bar_max}s${NC} %5d\n" "$label" "$bar" "$value"
+  done
+
+  print_line "─" 70
+}
+
+# Show scale warning for large environments
+show_scale_warning() {
+  local item_type="$1"
+  local count="$2"
+  local threshold="$3"
+
+  if [ "$count" -gt "$threshold" ]; then
+    echo ""
+    echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║${NC}  ${WHITE}⚠  LARGE ENVIRONMENT DETECTED${NC}                                       ${YELLOW}║${NC}"
+    echo -e "${YELLOW}╠══════════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${YELLOW}║${NC}  Found ${WHITE}${count} ${item_type}${NC} (threshold: ${threshold})                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  This export may take ${WHITE}15-60 minutes${NC} depending on:                   ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}    • Network latency to Splunk REST API                               ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}    • Disk I/O speed                                                   ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}    • Number of dashboards with complex queries                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  ${CYAN}Progress bars will show estimated time remaining.${NC}                   ${YELLOW}║${NC}"
+    echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+  fi
+}
+
+# Print a box header
+print_box_header() {
+  local title="$1"
+  local width=72
+  local padding=$(( (width - ${#title} - 4) / 2 ))
+  echo ""
+  echo -e "${CYAN}${BOX_TL}$(printf '%*s' $width '' | tr ' ' "$BOX_H")${BOX_TR}${NC}"
+  echo -e "${CYAN}${BOX_V}${NC}$(printf '%*s' $padding '')  ${BOLD}${WHITE}$title${NC}  $(printf '%*s' $((width - padding - ${#title} - 4)) '')${CYAN}${BOX_V}${NC}"
+  echo -e "${CYAN}${BOX_T}$(printf '%*s' $width '' | tr ' ' "$BOX_H")${BOX_B}${NC}"
+}
+
+# Print a box content line
+print_box_line() {
+  local content="$1"
+  local width=72
+  local stripped=$(echo -e "$content" | sed 's/\x1b\[[0-9;]*m//g')
+  local padding=$((width - ${#stripped}))
+  if [ $padding -lt 0 ]; then padding=0; fi
+  echo -e "${CYAN}${BOX_V}${NC} $content$(printf '%*s' $padding '')${CYAN}${BOX_V}${NC}"
+}
+
+# Print a box footer
+print_box_footer() {
+  local width=72
+  echo -e "${CYAN}${BOX_BL}$(printf '%*s' $width '' | tr ' ' "$BOX_H")${BOX_BR}${NC}"
+}
+
+# Print an info box with explanation
+print_info_box() {
+  local title="$1"
+  shift
+  print_box_header "$title"
+  for line in "$@"; do
+    print_box_line "$line"
+  done
+  print_box_footer
+}
+
+# Print success message
+success() {
+  echo -e "${GREEN}✓${NC} $1"
+  log "SUCCESS: $1"
+}
+
+# Print error message
+error() {
+  echo -e "${RED}✗${NC} $1"
+  log "ERROR: $1"
+  ((STATS_ERRORS++))
+}
+
+# Print warning message
+warning() {
+  echo -e "${YELLOW}⚠${NC} $1"
+  log "WARNING: $1"
+}
+
+# Print info message
+info() {
+  echo -e "${CYAN}→${NC} $1"
+  log "INFO: $1"
+}
+
+# Print progress
+progress() {
+  echo -e "${BLUE}◐${NC} $1"
+  log "PROGRESS: $1"
+}
+
+# Logging function
+log() {
+  if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+  fi
+}
+
+# Prompt for yes/no with default
+prompt_yn() {
+  local prompt="$1"
+  local default="${2:-Y}"
+  local answer
+
+  # If AUTO_CONFIRM or NON_INTERACTIVE is set, return based on default
+  if [ "$AUTO_CONFIRM" = true ] || [ "$NON_INTERACTIVE" = "true" ]; then
+    echo -e "${DIM}[AUTO] $prompt: ${default}${NC}"
+    case "$default" in
+      Y|y|yes) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+
+  if [ "$default" = "Y" ]; then
+    echo -ne "${YELLOW}$prompt (Y/n): ${NC}"
+  else
+    echo -ne "${YELLOW}$prompt (y/N): ${NC}"
+  fi
+
+  read -r answer
+  answer=${answer:-$default}
+  # Convert to lowercase (portable - works with bash 3.x on macOS)
+  answer=$(echo "$answer" | tr '[:upper:]' '[:lower:]')
+
+  case "$answer" in
+    y|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Prompt for input with default
+prompt_input() {
+  local prompt="$1"
+  local default="$2"
+  local var_name="$3"
+  local answer
+
+  # Check if variable already has a value (from CLI or environment)
+  local current_value
+  eval "current_value=\$$var_name"
+
+  # If AUTO_CONFIRM or NON_INTERACTIVE is set, use existing value or default without prompting
+  if [ "$AUTO_CONFIRM" = true ] || [ "$NON_INTERACTIVE" = "true" ]; then
+    if [ -n "$current_value" ]; then
+      echo -e "${DIM}[AUTO] $prompt: ${current_value}${NC}"
+      return
+    fi
+    echo -e "${DIM}[AUTO] $prompt: ${default}${NC}"
+    eval "$var_name='$default'"
+    return
+  fi
+
+  # If value already set, use it as the default
+  if [ -n "$current_value" ]; then
+    default="$current_value"
+  fi
+
+  if [ -n "$default" ]; then
+    echo -ne "${YELLOW}$prompt [${default}]: ${NC}"
+  else
+    echo -ne "${YELLOW}$prompt: ${NC}"
+  fi
+
+  read -r answer
+  answer=${answer:-$default}
+
+  eval "$var_name='$answer'"
+}
+
+# Prompt for password (hidden)
+prompt_password() {
+  local prompt="$1"
+  local var_name="$2"
+  local answer
+
+  # If AUTO_CONFIRM or NON_INTERACTIVE is set and password already provided via CLI, skip prompt
+  if [ "$AUTO_CONFIRM" = true ] || [ "$NON_INTERACTIVE" = "true" ]; then
+    local current_value
+    eval "current_value=\$$var_name"
+    if [ -n "$current_value" ]; then
+      echo -e "${DIM}[AUTO] $prompt: ********${NC}"
+      return
+    fi
+    # No password provided in non-interactive mode - this is an error
+    echo -e "${RED}[ERROR] Password required but not provided in non-interactive mode${NC}"
+    return 1
+  fi
+
+  echo -ne "${YELLOW}$prompt: ${NC}"
+  read -rs answer
+  echo ""
+
+  eval "$var_name='$answer'"
+}
+
+# Check if command exists
+command_exists() {
+  command -v "$1" &> /dev/null
+}
+
+# =============================================================================
+# PHASE 1: ENTERPRISE RESILIENCE FUNCTIONS
+# =============================================================================
+# These functions provide retry logic, pagination, timeouts, and progress
+# tracking for enterprise-scale exports (4000+ dashboards, 10K+ alerts)
+
+# Initialize resilience tracking files
+# Usage: init_resilience_tracking
+init_resilience_tracking() {
+  if [ -z "$EXPORT_DIR" ]; then
+    return 1
+  fi
+
+  PROGRESS_FILE="$EXPORT_DIR/.export_progress"
+  CHECKPOINT_FILE="$EXPORT_DIR/.export_checkpoint"
+  ERROR_LOG_FILE="$EXPORT_DIR/export_errors.log"
+
+  # Initialize progress file
+  cat > "$PROGRESS_FILE" << EOF
+{
+  "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "server": "$SPLUNK_HOST",
+  "status": "in_progress",
+  "phase1_resilience": true,
+  "config": {
+    "batch_size": $BATCH_SIZE,
+    "max_retries": $MAX_RETRIES,
+    "api_timeout": $API_TIMEOUT
+  },
+  "dashboards": {"total": 0, "exported": 0, "failed": 0},
+  "alerts": {"total": 0, "exported": 0, "failed": 0},
+  "searches": {"total": 0, "exported": 0, "failed": 0}
+}
+EOF
+
+  # Initialize error log
+  echo "# DMA Export Error Log" > "$ERROR_LOG_FILE"
+  echo "# Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$ERROR_LOG_FILE"
+  echo "# Server: $SPLUNK_HOST" >> "$ERROR_LOG_FILE"
+  echo "# ============================================" >> "$ERROR_LOG_FILE"
+
+  log "Resilience tracking initialized"
+}
+
+# Update progress file
+# Usage: update_progress "dashboards" "exported" 50
+update_progress() {
+  local category="$1"
+  local field="$2"
+  local value="$3"
+
+  if [ -z "$PROGRESS_FILE" ] || [ ! -f "$PROGRESS_FILE" ]; then
+    return
+  fi
+
+  $PYTHON_CMD -c "
+import json
+try:
+    with open('$PROGRESS_FILE', 'r') as f:
+        data = json.load(f)
+    if '$category' in data:
+        data['$category']['$field'] = $value
+    data['last_updated'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+    with open('$PROGRESS_FILE', 'w') as f:
+        json.dump(data, f, indent=2)
+except Exception as e:
+    pass
+" 2>/dev/null
+}
+
+# Log error to error log file
+# Usage: log_error "dashboards" "my_dashboard" "Connection timeout after 60s"
+log_error() {
+  local category="$1"
+  local item="$2"
+  local error="$3"
+
+  if [ -n "$ERROR_LOG_FILE" ] && [ -f "$ERROR_LOG_FILE" ]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [$category] $item: $error" >> "$ERROR_LOG_FILE"
+  fi
+
+  ((STATS_API_FAILURES++))
+}
+
+# Save checkpoint for resume capability
+# Usage: save_checkpoint "dashboards" 500 "last_dashboard_name"
+save_checkpoint() {
+  local category="$1"
+  local last_offset="$2"
+  local last_item="$3"
+
+  if [ "$CHECKPOINT_ENABLED" != "true" ] || [ -z "$CHECKPOINT_FILE" ]; then
+    return
+  fi
+
+  cat > "$CHECKPOINT_FILE" << EOF
+{
+  "category": "$category",
+  "last_offset": $last_offset,
+  "last_item": "$last_item",
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+
+  log "Checkpoint saved: $category at offset $last_offset"
+}
+
+# Load checkpoint if exists
+# Usage: if load_checkpoint; then RESUME_OFFSET=$LOADED_OFFSET; fi
+# Sets: LOADED_CATEGORY, LOADED_OFFSET, LOADED_ITEM
+load_checkpoint() {
+  LOADED_CATEGORY=""
+  LOADED_OFFSET=0
+  LOADED_ITEM=""
+
+  if [ "$CHECKPOINT_ENABLED" != "true" ] || [ -z "$CHECKPOINT_FILE" ] || [ ! -f "$CHECKPOINT_FILE" ]; then
+    return 1
+  fi
+
+  LOADED_CATEGORY=$(json_get "$CHECKPOINT_FILE" ".category" "")
+  LOADED_OFFSET=$(json_get "$CHECKPOINT_FILE" ".last_offset" "0")
+  LOADED_ITEM=$(json_get "$CHECKPOINT_FILE" ".last_item" "")
+
+  if [ -n "$LOADED_CATEGORY" ] && [ "$LOADED_OFFSET" -gt 0 ]; then
+    return 0
+  fi
+
+  return 1
+}
+
+# Clear checkpoint after successful completion
+# Usage: clear_checkpoint
+clear_checkpoint() {
+  if [ -n "$CHECKPOINT_FILE" ] && [ -f "$CHECKPOINT_FILE" ]; then
+    rm -f "$CHECKPOINT_FILE"
+    log "Checkpoint cleared"
+  fi
+}
+
+# Splunk API call with retry logic and timeout
+# Usage: splunk_api_call "endpoint" "output_file" [extra_curl_args...]
+# Returns: 0 on success, 1 on failure
+# Example: splunk_api_call "/servicesNS/-/-/data/ui/views" "$output_file" "-d count=100"
+splunk_api_call() {
+  local endpoint="$1"
+  local output_file="$2"
+  shift 2
+  local extra_args=("$@")
+
+  local url="https://${SPLUNK_HOST}:${SPLUNK_PORT}${endpoint}"
+  local attempt=1
+  local delay=$RETRY_DELAY
+  local http_code=""
+  local success=false
+  local start_time=$(date +%s%3N 2>/dev/null || date +%s)
+
+  ((STATS_API_CALLS++))
+  debug_log "API" "→ GET $endpoint (attempt 1/$MAX_RETRIES)"
+
+  while [ $attempt -le $MAX_RETRIES ]; do
+    # Make the API call with timeout
+    http_code=$(curl -k -s -w "%{http_code}" \
+      --connect-timeout "$CONNECT_TIMEOUT" \
+      --max-time "$API_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      -H "Accept: application/json" \
+      -o "$output_file" \
+      "${extra_args[@]}" \
+      "$url" 2>/dev/null)
+
+    local end_time=$(date +%s%3N 2>/dev/null || date +%s)
+    local duration=$((end_time - start_time))
+    local response_size=$(wc -c < "$output_file" 2>/dev/null || echo "0")
+    debug_api_call "GET" "$endpoint" "$http_code" "$response_size" "$duration"
+
+    case "$http_code" in
+      200)
+        success=true
+        break
+        ;;
+      429)
+        # Rate limited - exponential backoff
+        debug_log "WARN" "Rate limited (429) on $endpoint. Backoff ${delay}s"
+        log "Rate limited (429). Waiting ${delay}s before retry $attempt/$MAX_RETRIES"
+        ((STATS_API_RETRIES++))
+        sleep "$delay"
+        delay=$((delay * 2))
+        ;;
+      500|502|503|504)
+        # Server error - retry with backoff
+        debug_log "WARN" "Server error ($http_code) on $endpoint. Retry in ${delay}s"
+        log "Server error ($http_code). Retry $attempt/$MAX_RETRIES in ${delay}s"
+        ((STATS_API_RETRIES++))
+        sleep "$delay"
+        delay=$((delay * 2))
+        ;;
+      401|403)
+        # Auth error - don't retry
+        debug_log "ERROR" "Auth failed ($http_code) on $endpoint"
+        log_error "api" "$endpoint" "Authentication error ($http_code)"
+        return 1
+        ;;
+      000)
+        # Timeout or connection error
+        debug_log "WARN" "Timeout/connection error on $endpoint. Retry in ${delay}s"
+        log "Timeout/connection error. Retry $attempt/$MAX_RETRIES in ${delay}s"
+        ((STATS_API_RETRIES++))
+        sleep "$delay"
+        delay=$((delay * 2))
+        ;;
+      *)
+        # Other error
+        log "Unexpected error ($http_code). Retry $attempt/$MAX_RETRIES"
+        ((STATS_API_RETRIES++))
+        sleep "$delay"
+        delay=$((delay * 2))
+        ;;
+    esac
+
+    ((attempt++))
+  done
+
+  if [ "$success" = true ]; then
+    return 0
+  else
+    log_error "api" "$endpoint" "Failed after $MAX_RETRIES attempts (last code: $http_code)"
+    return 1
+  fi
+}
+
+# Get total count from Splunk API endpoint (for pagination)
+# Usage: total=$(splunk_api_get_count "/servicesNS/-/-/data/ui/views")
+splunk_api_get_count() {
+  local endpoint="$1"
+  local temp_file=$(mktemp)
+
+  # Request with count=0 to get total without fetching all data
+  if splunk_api_call "$endpoint" "$temp_file" "-G" "-d" "output_mode=json" "-d" "count=1"; then
+    local total=$($PYTHON_CMD -c "
+import json
+try:
+    with open('$temp_file', 'r') as f:
+        data = json.load(f)
+    # Try paging.total first, then entry count
+    total = data.get('paging', {}).get('total', 0)
+    if total == 0:
+        total = len(data.get('entry', []))
+    print(total)
+except:
+    print(0)
+" 2>/dev/null)
+    rm -f "$temp_file"
+    echo "$total"
+  else
+    rm -f "$temp_file"
+    echo "0"
+  fi
+}
+
+# Paginated API call - fetches all results in batches
+# Usage: splunk_api_call_paginated "/servicesNS/-/-/data/ui/views" "$output_dir" "dashboards"
+# Creates: $output_dir/dashboards_batch_0.json, dashboards_batch_100.json, etc.
+# Returns: Total count fetched
+splunk_api_call_paginated() {
+  local endpoint="$1"
+  local output_dir="$2"
+  local prefix="$3"
+  local start_offset="${4:-0}"
+
+  local offset=$start_offset
+  local total_fetched=0
+  local batch_num=0
+  local empty_batches=0
+  local max_empty=3  # Stop after 3 consecutive empty batches
+
+  # First, get total count for progress tracking
+  local total_count=$(splunk_api_get_count "$endpoint")
+
+  if [ "$total_count" -eq 0 ]; then
+    log "No items found at $endpoint"
+    echo "0"
+    return
+  fi
+
+  log "Starting paginated export: $total_count items at $endpoint"
+
+  # Show scale warning for very large exports
+  if [ "$total_count" -gt 1000 ]; then
+    show_scale_warning "${prefix}" "$total_count" 1000
+  fi
+
+  # Initialize progress
+  progress_init "Exporting ${prefix} (paginated)" "$total_count"
+
+  while [ $offset -lt $total_count ] && [ $empty_batches -lt $max_empty ]; do
+    local batch_file="$output_dir/${prefix}_batch_${offset}.json"
+
+    # Save checkpoint before each batch
+    save_checkpoint "$prefix" "$offset" "batch_$batch_num"
+
+    # Fetch batch with retry
+    if splunk_api_call "$endpoint" "$batch_file" "-G" \
+        "-d" "output_mode=json" \
+        "-d" "count=$BATCH_SIZE" \
+        "-d" "offset=$offset"; then
+
+      # Verify we got results
+      local batch_count=$($PYTHON_CMD -c "
+import json
+try:
+    with open('$batch_file', 'r') as f:
+        data = json.load(f)
+    print(len(data.get('entry', [])))
+except:
+    print(0)
+" 2>/dev/null)
+
+      if [ "$batch_count" -eq 0 ]; then
+        ((empty_batches++))
+        log "Empty batch at offset $offset ($empty_batches consecutive)"
+      else
+        empty_batches=0
+        total_fetched=$((total_fetched + batch_count))
+        ((STATS_BATCHES_COMPLETED++))
+      fi
+    else
+      log_error "$prefix" "batch_$offset" "Failed to fetch batch"
+      ((empty_batches++))
+    fi
+
+    offset=$((offset + BATCH_SIZE))
+    ((batch_num++))
+
+    # Update progress
+    progress_update "$total_fetched"
+
+    # Rate limiting between batches
+    sleep "$RATE_LIMIT_DELAY"
+  done
+
+  # Complete progress
+  progress_complete
+
+  # Clear checkpoint on success
+  if [ $total_fetched -gt 0 ]; then
+    clear_checkpoint
+  fi
+
+  log "Paginated export complete: $total_fetched items fetched"
+  echo "$total_fetched"
+}
+
+# Merge paginated batch files into single JSON
+# Usage: merge_paginated_batches "$output_dir" "dashboards" "$final_output.json"
+merge_paginated_batches() {
+  local output_dir="$1"
+  local prefix="$2"
+  local final_file="$3"
+
+  $PYTHON_CMD -c "
+import json
+import glob
+import os
+
+output_dir = '$output_dir'
+prefix = '$prefix'
+final_file = '$final_file'
+
+merged = {'entry': []}
+
+# Find and sort batch files
+batch_files = sorted(glob.glob(os.path.join(output_dir, f'{prefix}_batch_*.json')))
+
+for batch_file in batch_files:
+    try:
+        with open(batch_file, 'r') as f:
+            data = json.load(f)
+        entries = data.get('entry', [])
+        merged['entry'].extend(entries)
+    except Exception as e:
+        print(f'Warning: Could not process {batch_file}: {e}')
+
+# Add metadata
+merged['paging'] = {
+    'total': len(merged['entry']),
+    'merged_from_batches': len(batch_files)
+}
+
+# Write merged file
+with open(final_file, 'w') as f:
+    json.dump(merged, f, indent=2)
+
+print(f'Merged {len(merged[\"entry\"])} entries from {len(batch_files)} batches')
+" 2>/dev/null
+
+  log "Merged paginated batches into $final_file"
+}
+
+# Finalize export progress file
+# Usage: finalize_progress "completed"
+finalize_progress() {
+  local status="${1:-completed}"
+
+  if [ -z "$PROGRESS_FILE" ] || [ ! -f "$PROGRESS_FILE" ]; then
+    return
+  fi
+
+  $PYTHON_CMD -c "
+import json
+try:
+    with open('$PROGRESS_FILE', 'r') as f:
+        data = json.load(f)
+    data['status'] = '$status'
+    data['completed_at'] = '$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+    data['statistics'] = {
+        'api_calls': $STATS_API_CALLS,
+        'api_retries': $STATS_API_RETRIES,
+        'api_failures': $STATS_API_FAILURES,
+        'batches_completed': $STATS_BATCHES_COMPLETED
+    }
+    with open('$PROGRESS_FILE', 'w') as f:
+        json.dump(data, f, indent=2)
+except Exception as e:
+    pass
+" 2>/dev/null
+}
+
+# Check for previous incomplete export and offer resume
+# Usage: check_resume_export
+check_resume_export() {
+  if [ "$CHECKPOINT_ENABLED" != "true" ]; then
+    return 1
+  fi
+
+  if load_checkpoint; then
+    echo ""
+    echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║${NC}  ${WHITE}⚠  PREVIOUS EXPORT DETECTED${NC}                                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}╠══════════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${YELLOW}║${NC}  Found checkpoint from previous export:                                ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}    Category: ${WHITE}$LOADED_CATEGORY${NC}                                              ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}    Offset:   ${WHITE}$LOADED_OFFSET${NC}                                                 ${YELLOW}║${NC}"
+    echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    if prompt_yn "Resume from last checkpoint?"; then
+      return 0  # Resume
+    else
+      clear_checkpoint
+      return 1  # Start fresh
+    fi
+  fi
+
+  return 1
+}
+
+# =============================================================================
+# PHASE 2: ENTERPRISE FEATURES - SHC DETECTION & EXPORT SCOPE
+# =============================================================================
+# Detect Search Head Cluster role and offer appropriate options for large envs
+
+# Detect if running on SHC Captain, Member, or standalone
+# Sets: DETECTED_SHC_ROLE (captain, member, standalone)
+# Sets: SHC_MEMBER_COUNT (number of cluster members)
+detect_shc_role() {
+  DETECTED_SHC_ROLE="standalone"
+  SHC_MEMBER_COUNT=0
+
+  if [ -z "$AUTH_HEADER" ]; then
+    return  # Can't detect without API access
+  fi
+
+  local temp_file=$(mktemp)
+
+  # Step 1: Check if this node is an SHC member via /services/shcluster/member/info
+  if curl -k -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$API_TIMEOUT" \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/shcluster/member/info?output_mode=json" \
+      -o "$temp_file" 2>/dev/null; then
+
+    if grep -q '"is_registered"' "$temp_file" 2>/dev/null; then
+      local is_registered=$($PYTHON_CMD -c "
+import json
+try:
+    with open('$temp_file', 'r') as f:
+        data = json.load(f)
+    entry = data.get('entry', [{}])[0].get('content', {})
+    print('true' if entry.get('is_registered', False) else 'false')
+except:
+    print('false')
+" 2>/dev/null)
+
+      if [ "$is_registered" = "true" ]; then
+        IS_SHC_MEMBER=true
+        DETECTED_SHC_ROLE="member"
+      fi
+    fi
+  fi
+
+  # Step 2: If SHC member, probe /services/shcluster/captain/info to detect captain.
+  # This endpoint only returns 200 on the current captain — the "status" field
+  # from member/info is always "Up" regardless of role (captain is elected, not
+  # a status value), so we can't use it for captain detection.
+  if [ "$IS_SHC_MEMBER" = true ]; then
+    local captain_http_code
+    captain_http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+      --connect-timeout "$CONNECT_TIMEOUT" --max-time "$API_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/shcluster/captain/info?output_mode=json" \
+      2>/dev/null)
+
+    if [ "$captain_http_code" = "200" ] && grep -q '"label"' "$temp_file" 2>/dev/null; then
+      DETECTED_SHC_ROLE="captain"
+      IS_SHC_CAPTAIN=true
+      SPLUNK_ROLE="shc_captain"
+      debug_log "SHC" "Captain detected via /services/shcluster/captain/info (HTTP 200)"
+    fi
+  fi
+
+  # Step 3: Get member count
+  if [ "$IS_SHC_MEMBER" = true ]; then
+    if curl -k -s --connect-timeout "$CONNECT_TIMEOUT" --max-time "$API_TIMEOUT" \
+        -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/shcluster/member/members?output_mode=json" \
+        -o "$temp_file" 2>/dev/null; then
+
+      SHC_MEMBER_COUNT=$($PYTHON_CMD -c "
+import json
+try:
+    with open('$temp_file', 'r') as f:
+        data = json.load(f)
+    print(len(data.get('entry', [])))
+except:
+    print(0)
+" 2>/dev/null)
+    fi
+  fi
+
+  rm -f "$temp_file"
+
+  log "SHC Detection: role=$DETECTED_SHC_ROLE, members=$SHC_MEMBER_COUNT"
+}
+
+# Show SHC warning and options if running on Captain
+# Returns: 0 to continue, 1 to exit
+show_shc_captain_warning() {
+  if [ "$DETECTED_SHC_ROLE" != "captain" ]; then
+    return 0
+  fi
+
+  echo ""
+  echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${YELLOW}║${NC}  ${WHITE}⚠  SEARCH HEAD CLUSTER CAPTAIN DETECTED${NC}                                     ${YELLOW}║${NC}"
+  echo -e "${YELLOW}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${YELLOW}║${NC}                                                                                ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}  You are running this script on the ${WHITE}Search Head Cluster Captain${NC}.           ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}  Cluster members: ${WHITE}${SHC_MEMBER_COUNT}${NC}                                                          ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}                                                                                ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}  ${RED}WARNING:${NC} Exporting from the Captain may cause:                               ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    • REST API timeouts due to cluster coordination overhead                   ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    • Slower response times for large datasets (4000+ dashboards)              ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    • Potential impact on cluster operations                                   ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}                                                                                ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}  ${GREEN}RECOMMENDATION:${NC} Run this script from:                                        ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    • A Search Head ${WHITE}member${NC} (not captain)                                       ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    • The ${WHITE}Deployment Server${NC}                                                    ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    • A ${WHITE}standalone search head${NC} with access to configs                         ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}                                                                                ${YELLOW}║${NC}"
+  echo -e "${YELLOW}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${YELLOW}║${NC}  Choose an option:                                                             ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}                                                                                ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    ${WHITE}[1]${NC} Continue anyway (use smaller batch size: ${BATCH_SIZE})                     ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    ${WHITE}[2]${NC} Continue with reduced batch size (${WHITE}25${NC} items per request)              ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    ${WHITE}[3]${NC} Export local configs only (skip REST API calls)                        ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}    ${WHITE}[4]${NC} Exit and run from different server                                     ${YELLOW}║${NC}"
+  echo -e "${YELLOW}║${NC}                                                                                ${YELLOW}║${NC}"
+  echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+
+  local choice
+  read -p "Enter choice [1-4]: " choice
+
+  case "$choice" in
+    1)
+      info "Continuing with current settings (batch size: $BATCH_SIZE)"
+      return 0
+      ;;
+    2)
+      BATCH_SIZE=25
+      API_TIMEOUT=120
+      RATE_LIMIT_DELAY=1.0
+      info "Reduced batch size to 25, increased timeout to 120s, rate limit to 1s"
+      return 0
+      ;;
+    3)
+      COLLECT_USAGE=false
+      info "Skipping REST API usage analytics (local configs only)"
+      return 0
+      ;;
+    4)
+      echo ""
+      echo -e "${YELLOW}Export cancelled. Run the script from an SHC member or deployment server.${NC}"
+      exit 0
+      ;;
+    *)
+      info "Invalid choice. Continuing with default settings."
+      return 0
+      ;;
+  esac
+}
+
+# Show export scope selection for large environments
+# Usage: select_export_scope
+select_export_scope() {
+  # Only show for large environments or if user requested
+  local show_scope_menu=false
+
+  # Get quick count estimates
+  local dashboard_count=0
+  local alert_count=0
+
+  if [ -n "$AUTH_HEADER" ]; then
+    echo ""
+    echo -ne "  ${BLUE}◐${NC} Counting dashboards across all namespaces..."
+    local count_start=$(date +%s)
+    dashboard_count=$(splunk_api_get_count "/servicesNS/-/-/data/ui/views")
+    local count_elapsed=$(( $(date +%s) - count_start ))
+    echo -e "\r  ${GREEN}✓${NC} Dashboards: ${WHITE}${dashboard_count}${NC} (${count_elapsed}s)          "
+
+    echo -ne "  ${BLUE}◐${NC} Counting saved searches/alerts across all namespaces..."
+    count_start=$(date +%s)
+    alert_count=$(splunk_api_get_count "/servicesNS/-/-/saved/searches")
+    count_elapsed=$(( $(date +%s) - count_start ))
+    echo -e "\r  ${GREEN}✓${NC} Saved searches/alerts: ${WHITE}${alert_count}${NC} (${count_elapsed}s)          "
+  fi
+
+  # Fallback: if REST returned 0 for saved searches (common on large SHC
+  # environments where /saved/searches times out or paging.total is missing),
+  # count stanza headers in savedsearches.conf across all discovered apps.
+  if [ "$alert_count" -eq 0 ] && [ -n "$SPLUNK_HOME" ] && [ -d "$SPLUNK_HOME/etc/apps" ]; then
+    for app_path in "$SPLUNK_HOME/etc/apps"/*; do
+      [ -d "$app_path" ] || continue
+      for conf_dir in "default" "local"; do
+        if [ -f "$app_path/$conf_dir/savedsearches.conf" ]; then
+          local count=$(grep -c '^\[' "$app_path/$conf_dir/savedsearches.conf" 2>/dev/null)
+          [ -n "$count" ] && alert_count=$((alert_count + count))
+        fi
+      done
+    done
+    [ "$alert_count" -gt 0 ] && log "Saved searches count from filesystem fallback: $alert_count"
+  fi
+
+  # Fallback: if REST returned 0 for dashboards too, count from filesystem
+  if [ "$dashboard_count" -eq 0 ] && [ -n "$SPLUNK_HOME" ] && [ -d "$SPLUNK_HOME/etc/apps" ]; then
+    for app_path in "$SPLUNK_HOME/etc/apps"/*; do
+      [ -d "$app_path" ] || continue
+      for view_dir in "default/data/ui/views" "local/data/ui/views"; do
+        if [ -d "$app_path/$view_dir" ]; then
+          local count=$(ls -1 "$app_path/$view_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+          [ -n "$count" ] && dashboard_count=$((dashboard_count + count))
+        fi
+      done
+    done
+    [ "$dashboard_count" -gt 0 ] && log "Dashboard count from filesystem fallback: $dashboard_count"
+  fi
+
+  # Show scope menu for large environments
+  if [ "$dashboard_count" -gt 500 ] || [ "$alert_count" -gt 2000 ]; then
+    show_scope_menu=true
+  fi
+
+  if [ "$show_scope_menu" = false ]; then
+    return 0
+  fi
+
+  echo ""
+  echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║${NC}  ${WHITE}LARGE ENVIRONMENT DETECTED${NC}                                                   ${CYAN}║${NC}"
+  echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  Detected: ${WHITE}${dashboard_count}${NC} dashboards, ${WHITE}${alert_count}${NC} saved searches/alerts                  ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  Choose export scope to optimize for your needs:                               ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${WHITE}[1]${NC} Full export (all dashboards, alerts, configs) ${GREEN}[Recommended]${NC}           ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${WHITE}[2]${NC} Dashboards only (skip alerts/saved searches)                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${WHITE}[3]${NC} Alerts only (skip dashboards)                                           ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${WHITE}[4]${NC} Configs only (skip usage analytics, faster export)                      ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+
+  local choice
+  read -p "Enter choice [1-4] (default: 1): " choice
+  choice=${choice:-1}
+
+  case "$choice" in
+    1)
+      info "Full export selected"
+      ;;
+    2)
+      COLLECT_ALERTS=false
+      info "Dashboards only - alerts/saved searches will be skipped"
+      ;;
+    3)
+      COLLECT_DASHBOARDS=false
+      info "Alerts only - dashboards will be skipped"
+      ;;
+    4)
+      COLLECT_USAGE=false
+      COLLECT_AUDIT=false
+      info "Configs only - usage analytics skipped for faster export"
+      ;;
+    *)
+      info "Full export selected (default)"
+      ;;
+  esac
+
+  echo ""
+}
+
+# =============================================================================
+# PHASE 3: ADVANCED OPTIMIZATION
+# =============================================================================
+# Smart timeouts, memory-efficient processing, and parallel capabilities
+
+# Calculate appropriate timeout based on expected data volume
+# Usage: timeout=$(calculate_smart_timeout 5000 "dashboards")
+calculate_smart_timeout() {
+  local item_count="${1:-0}"
+  local item_type="${2:-items}"
+
+  # Base timeout: 30 seconds minimum
+  local base_timeout=30
+
+  # Per-item timeout factors (some operations are slower than others)
+  local per_item_factor
+  case "$item_type" in
+    dashboards)
+      per_item_factor=0.1   # 0.1s per dashboard
+      ;;
+    alerts|searches)
+      per_item_factor=0.05  # 0.05s per alert (simpler)
+      ;;
+    users|rbac)
+      per_item_factor=0.02  # Very fast
+      ;;
+    *)
+      per_item_factor=0.1   # Default
+      ;;
+  esac
+
+  # Calculate: base + (count * factor)
+  # Use Python for floating point math
+  local calculated=$($PYTHON_CMD -c "
+import math
+base = $base_timeout
+count = $item_count
+factor = $per_item_factor
+result = int(math.ceil(base + (count * factor)))
+# Cap at 10 minutes max
+print(min(result, 600))
+" 2>/dev/null)
+
+  # Fallback if Python fails
+  if [ -z "$calculated" ] || [ "$calculated" -eq 0 ]; then
+    calculated=$API_TIMEOUT
+  fi
+
+  log "Smart timeout for $item_count $item_type: ${calculated}s"
+  echo "$calculated"
+}
+
+# Memory-efficient batch merging using streaming
+# For very large exports (10K+ items), avoids loading entire JSON into memory
+# Usage: merge_batches_streaming "$batch_dir" "dashboards" "$output.json"
+merge_batches_streaming() {
+  local batch_dir="$1"
+  local prefix="$2"
+  local output_file="$3"
+
+  $PYTHON_CMD << PYEOF
+import json
+import os
+import glob
+
+batch_dir = '$batch_dir'
+prefix = '$prefix'
+output_file = '$output_file'
+
+# Find all batch files
+batch_files = sorted(glob.glob(os.path.join(batch_dir, f'{prefix}_batch_*.json')))
+
+if not batch_files:
+    # No batches found, create empty result
+    with open(output_file, 'w') as f:
+        json.dump({'entry': [], 'paging': {'total': 0}}, f)
+    print('0')
+    exit(0)
+
+# Stream write to avoid memory issues
+total_count = 0
+with open(output_file, 'w') as out:
+    out.write('{"entry": [')
+
+    first_entry = True
+    for batch_file in batch_files:
+        try:
+            with open(batch_file, 'r') as f:
+                data = json.load(f)
+
+            entries = data.get('entry', [])
+            for entry in entries:
+                if not first_entry:
+                    out.write(',')
+                out.write(json.dumps(entry))
+                first_entry = False
+                total_count += 1
+
+        except Exception as e:
+            # Log error but continue with other batches
+            print(f'Warning: Error processing {batch_file}: {e}', file=__import__('sys').stderr)
+            continue
+
+    out.write('], "paging": {"total": ' + str(total_count) + ', "merged_from_batches": ' + str(len(batch_files)) + '}}')
+
+print(total_count)
+PYEOF
+}
+
+# Cleanup batch files after successful merge
+# Usage: cleanup_batch_files "$batch_dir" "dashboards"
+cleanup_batch_files() {
+  local batch_dir="$1"
+  local prefix="$2"
+
+  local batch_files=$(ls -1 "$batch_dir/${prefix}_batch_"*.json 2>/dev/null | wc -l | tr -d ' ')
+
+  if [ "$batch_files" -gt 0 ]; then
+    rm -f "$batch_dir/${prefix}_batch_"*.json
+    log "Cleaned up $batch_files batch files for $prefix"
+  fi
+}
+
+# Show export timing statistics
+# Usage: show_export_timing_stats
+show_export_timing_stats() {
+  local end_time=$(date +%s)
+  local total_seconds=$((end_time - EXPORT_START_TIME))
+
+  # Format duration
+  local hours=$((total_seconds / 3600))
+  local minutes=$(((total_seconds % 3600) / 60))
+  local seconds=$((total_seconds % 60))
+
+  local duration_str=""
+  if [ $hours -gt 0 ]; then
+    duration_str="${hours}h ${minutes}m ${seconds}s"
+  elif [ $minutes -gt 0 ]; then
+    duration_str="${minutes}m ${seconds}s"
+  else
+    duration_str="${seconds}s"
+  fi
+
+  echo ""
+  echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║${NC}  ${WHITE}EXPORT STATISTICS${NC}                                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${GREEN}Total Duration:${NC}  ${WHITE}${duration_str}${NC}                                                  ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${GREEN}API Statistics:${NC}                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Total API Calls:     ${WHITE}${STATS_API_CALLS}${NC}                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Retried Requests:    ${WHITE}${STATS_API_RETRIES}${NC}                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Failed Requests:     ${WHITE}${STATS_API_FAILURES}${NC}                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Batches Completed:   ${WHITE}${STATS_BATCHES_COMPLETED}${NC}                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${GREEN}Content Exported:${NC}                                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Applications:        ${WHITE}${STATS_APPS}${NC}                                                 ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Dashboards:          ${WHITE}${STATS_DASHBOARDS}${NC}                                                 ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Alerts:              ${WHITE}${STATS_ALERTS}${NC}                                                 ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Users:               ${WHITE}${STATS_USERS}${NC}                                                 ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    • Indexes:             ${WHITE}${STATS_INDEXES}${NC}                                                 ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+
+  if [ "$STATS_ERRORS" -gt 0 ]; then
+    echo -e "${CYAN}║${NC}  ${YELLOW}⚠ Errors:${NC}                ${WHITE}${STATS_ERRORS}${NC}                                                ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}    See export_errors.log inside the .tar.gz archive                           ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  fi
+
+  echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+}
+
+# =============================================================================
+# BANNER AND WELCOME
+# =============================================================================
+
+show_banner() {
+  # Only clear screen in interactive mode (when running in a terminal)
+  if [ -t 0 ] && [ -t 1 ] && [ "$NON_INTERACTIVE" != "true" ]; then
+    clear
+  fi
+  echo ""
+  echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${WHITE}██████╗ ██╗   ██╗███╗   ██╗ █████╗ ██████╗ ██████╗ ██╗██████╗  ██████╗ ███████╗${NC} ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${WHITE}██╔══██╗╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔══██╗██║██╔══██╗██╔════╝ ██╔════╝${NC} ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${WHITE}██║  ██║ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝██████╔╝██║██║  ██║██║  ███╗█████╗${NC}   ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${WHITE}██║  ██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔══██╗██╔══██╗██║██║  ██║██║   ██║██╔══╝${NC}   ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${WHITE}██████╔╝   ██║   ██║ ╚████║██║  ██║██████╔╝██║  ██║██║██████╔╝╚██████╔╝███████╗${NC} ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${WHITE}╚═════╝    ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝╚═════╝  ╚═════╝ ╚══════╝${NC} ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                 ${BOLD}${MAGENTA}🏢  SPLUNK ENTERPRISE EXPORT SCRIPT  🏢${NC}                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}          ${DIM}Complete Data Collection for Migration to Dynatrace Gen3${NC}            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                        ${DIM}Version $SCRIPT_VERSION${NC}                                    ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}   ${DIM}Developed for Dynatrace One by Enterprise Solutions & Architecture${NC}      ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                  ${DIM}An ACE Services Division of Dynatrace${NC}                        ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+}
+
+show_welcome() {
+  print_info_box "WHAT THIS SCRIPT DOES" \
+    "" \
+    "This script collects data from your ${BOLD}Splunk Enterprise${NC} environment" \
+    "to prepare for migration to Dynatrace Gen3 Grail." \
+    "" \
+    "${BOLD}Data Collected:${NC}" \
+    "  ${GREEN}•${NC} Dashboards (Classic SimpleXML and Dashboard Studio)" \
+    "  ${GREEN}•${NC} Alerts and Saved Searches (with SPL queries)" \
+    "  ${GREEN}•${NC} Users, Roles, and RBAC configurations" \
+    "  ${GREEN}•${NC} Search Macros, Eventtypes, and Tags" \
+    "  ${GREEN}•${NC} Props.conf and Transforms.conf (field extractions)" \
+    "  ${GREEN}•${NC} Index configurations and volume statistics" \
+    "  ${GREEN}•${NC} Usage analytics (who uses what, how often)" \
+    "  ${GREEN}•${NC} Lookup tables and KV Store collections" \
+    "" \
+    "${BOLD}Output:${NC}" \
+    "  A .tar.gz archive compatible with Dynatrace Migration Assistant app"
+
+  print_info_box "IMPORTANT: THIS IS FOR SPLUNK ENTERPRISE ONLY" \
+    "" \
+    "${YELLOW}⚠  This script requires SSH/shell access to your Splunk server${NC}" \
+    "" \
+    "If you have ${BOLD}Splunk Cloud${NC} (Classic or Victoria Experience), please use:" \
+    "  ${GREEN}./dma-splunk-cloud-export.sh${NC}" \
+    "" \
+    "This script reads configuration files directly from \$SPLUNK_HOME"
+
+  echo ""
+  echo -e "  ${WHITE}Documentation:${NC} See README-SPLUNK-ENTERPRISE.md for prerequisites"
+  echo ""
+  print_line "─" 78
+
+  echo ""
+  if ! prompt_yn "Ready to begin?"; then
+    echo ""
+    echo -e "${YELLOW}Export cancelled. Run the script again when ready.${NC}"
+    exit 0
+  fi
+
+  # Show pre-flight checklist after user confirms
+  show_preflight_checklist
+}
+
+# Pre-flight checklist - shows requirements BEFORE proceeding
+show_preflight_checklist() {
+  echo ""
+  echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║${NC}                     ${BOLD}${WHITE}PRE-FLIGHT CHECKLIST${NC}                                    ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}         ${DIM}Please confirm you have the following before continuing${NC}            ${CYAN}║${NC}"
+  echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${GREEN}SHELL ACCESS:${NC}                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  SSH access to Splunk server (or running locally on Splunk server)    ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  User with read access to \$SPLUNK_HOME directory                      ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Root/sudo access (may be needed for some configs)                    ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${GREEN}SPLUNK REST API ACCESS (Optional - for Usage Analytics):${NC}                  ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Splunk username with admin privileges                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Splunk password (for REST API searches)                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Access to _audit and _internal indexes                               ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${GREEN}NETWORK REQUIREMENTS:${NC}                                                      ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Port 8089 accessible (for REST API - optional)                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${GREEN}SYSTEM REQUIREMENTS:${NC}                                                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  bash 4.0+ (Linux default - check with: bash --version)               ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  curl installed                                                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Python 3 (for JSON parsing) - uses Splunk's bundled Python         ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  tar installed                                                        ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  ~500MB disk space for export                                         ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${GREEN}INFORMATION TO GATHER:${NC}                                                     ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  \$SPLUNK_HOME path (default: /opt/splunk)                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Splunk role (indexer, search head, etc.)                             ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    □  Apps to export (or export all)                                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${GREEN}🔒 DATA PRIVACY & SECURITY:${NC}                                                ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}We do NOT collect or export:${NC}                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${RED}✗${NC}  User passwords or password hashes                                    ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${RED}✗${NC}  API tokens or session keys                                           ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${RED}✗${NC}  Private keys or certificates                                         ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${RED}✗${NC}  Your actual log data (only metadata/structure)                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${RED}✗${NC}  SSL certificates or .pem files                                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}We automatically REDACT:${NC}                                                  ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${GREEN}✓${NC}  password = [REDACTED] in all .conf files                             ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${GREEN}✓${NC}  secret = [REDACTED] in outputs.conf                                  ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${GREEN}✓${NC}  pass4SymmKey = [REDACTED] in server.conf                             ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${GREEN}✓${NC}  sslPassword = [REDACTED] in inputs.conf                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}We DO collect (for migration):${NC}                                            ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${CYAN}•${NC}  Usernames and role assignments (NOT passwords)                       ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${CYAN}•${NC}  Dashboard/alert ownership (who created what)                         ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${CYAN}•${NC}  Usage statistics (search counts, not search content)                 ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}    ${CYAN}•${NC}  .conf file structure (props, transforms, inputs, etc.)               ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}                                                                              ${CYAN}║${NC}"
+  echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════════╣${NC}"
+  echo -e "${CYAN}║${NC}  ${BOLD}${MAGENTA}TIP:${NC} If you don't have all items, you can still proceed - the script     ${CYAN}║${NC}"
+  echo -e "${CYAN}║${NC}       will verify each requirement and provide specific guidance.          ${CYAN}║${NC}"
+  echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+
+  # Quick system check
+  echo -e "  ${BOLD}Quick System Check:${NC}"
+
+  # Check bash version
+  local bash_major="${BASH_VERSINFO[0]:-0}"
+  if [ "$bash_major" -ge 4 ]; then
+    echo -e "    ${GREEN}✓${NC} bash: ${BASH_VERSION} (4.0+ required)"
+  else
+    echo -e "    ${RED}✗${NC} bash: ${BASH_VERSION:-unknown} - ${YELLOW}bash 4.0+ REQUIRED${NC}"
+    echo -e "      ${DIM}This script uses associative arrays (declare -A) which require bash 4.0+${NC}"
+  fi
+
+  # Check curl
+  if command -v curl &> /dev/null; then
+    echo -e "    ${GREEN}✓${NC} curl: $(curl --version 2>/dev/null | head -1 | cut -d' ' -f2)"
+  else
+    echo -e "    ${RED}✗${NC} curl: NOT INSTALLED"
+  fi
+
+  # Check Python (for JSON processing)
+  if [ -n "$PYTHON_CMD" ]; then
+    echo -e "    ${GREEN}✓${NC} Python: $($PYTHON_CMD --version 2>&1)"
+  elif [ -n "$SPLUNK_HOME" ] && [ -x "$SPLUNK_HOME/bin/python3" ]; then
+    echo -e "    ${GREEN}✓${NC} Python: $($SPLUNK_HOME/bin/python3 --version 2>&1) (Splunk bundled)"
+  elif command -v python3 &> /dev/null; then
+    echo -e "    ${GREEN}✓${NC} Python: $(python3 --version 2>&1)"
+  else
+    echo -e "    ${YELLOW}!${NC} Python: Using Splunk's bundled Python if available"
+  fi
+
+  # Check tar
+  if command -v tar &> /dev/null; then
+    echo -e "    ${GREEN}✓${NC} tar: available"
+  else
+    echo -e "    ${RED}✗${NC} tar: NOT INSTALLED"
+  fi
+
+  # Check SPLUNK_HOME
+  if [ -n "$SPLUNK_HOME" ] && [ -d "$SPLUNK_HOME" ]; then
+    echo -e "    ${GREEN}✓${NC} SPLUNK_HOME: $SPLUNK_HOME"
+  elif [ -d "/opt/splunk" ]; then
+    echo -e "    ${YELLOW}~${NC} SPLUNK_HOME: Not set, but /opt/splunk exists"
+  else
+    echo -e "    ${YELLOW}~${NC} SPLUNK_HOME: Not set (will prompt later)"
+  fi
+
+  echo ""
+  if ! prompt_yn "Ready to proceed?"; then
+    echo ""
+    echo -e "${YELLOW}Export cancelled. Install missing dependencies and try again.${NC}"
+    exit 0
+  fi
+}
+
+# =============================================================================
+# PREREQUISITES CHECK
+# =============================================================================
+
+check_prerequisites() {
+  print_box_header "CHECKING PREREQUISITES"
+  print_box_line ""
+  print_box_line "${WHITE}We need to verify your system has the required tools.${NC}"
+  print_box_line ""
+  print_box_footer
+
+  echo ""
+  local all_ok=true
+
+  # Check bash version
+  progress "Checking bash version..."
+  if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+    success "Bash version ${BASH_VERSION} (4.0+ required)"
+  else
+    warning "Bash version ${BASH_VERSION} (4.0+ recommended, may work)"
+  fi
+
+  # Check curl
+  progress "Checking for curl (needed for REST API calls)..."
+  if command_exists curl; then
+    success "curl is installed"
+  else
+    error "curl is not installed"
+    echo -e "  ${GRAY}Install with: apt-get install curl  OR  yum install curl${NC}"
+    all_ok=false
+  fi
+
+  # Check tar
+  progress "Checking for tar (needed for archive creation)..."
+  if command_exists tar; then
+    success "tar is installed"
+  else
+    error "tar is not installed"
+    all_ok=false
+  fi
+
+  # Check gzip
+  progress "Checking for gzip (needed for compression)..."
+  if command_exists gzip; then
+    success "gzip is installed"
+  else
+    error "gzip is not installed"
+    all_ok=false
+  fi
+
+  # Check Python (uses Splunk's bundled Python or system Python)
+  progress "Checking for Python 3 (needed for JSON processing)..."
+  PYTHON_CMD=""
+  # First try Splunk's bundled Python (guaranteed to exist on Splunk servers)
+  if [ -n "$SPLUNK_HOME" ] && [ -x "$SPLUNK_HOME/bin/python3" ]; then
+    PYTHON_CMD="$SPLUNK_HOME/bin/python3"
+    local py_version=$("$PYTHON_CMD" --version 2>&1 | head -1)
+    success "Using Splunk's bundled Python: $py_version"
+  elif command_exists python3; then
+    PYTHON_CMD="python3"
+    local py_version=$(python3 --version 2>&1 | head -1)
+    success "Using system Python: $py_version"
+  elif command_exists python; then
+    # Check if python is Python 3
+    local py_ver=$(python --version 2>&1 | grep -oP 'Python \K[0-9]+')
+    if [ "$py_ver" = "3" ]; then
+      PYTHON_CMD="python"
+      local py_version=$(python --version 2>&1 | head -1)
+      success "Using system Python: $py_version"
+    fi
+  fi
+
+  if [ -z "$PYTHON_CMD" ]; then
+    error "Python 3 is not available"
+    echo ""
+    echo -e "  ${YELLOW}╔══════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${YELLOW}║${NC}  ${WHITE}PYTHON NOT FOUND:${NC}                                               ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}                                                                  ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  Splunk's bundled Python was not found at:                       ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}    \$SPLUNK_HOME/bin/python3                                      ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}                                                                  ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  Make sure SPLUNK_HOME is set correctly, or install Python 3:   ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}    ${CYAN}Ubuntu/Debian:${NC}  sudo apt-get install python3                 ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}    ${CYAN}RHEL/CentOS:${NC}    sudo yum install python3                     ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}╚══════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    all_ok=false
+  fi
+
+  # Check disk space
+  progress "Checking available disk space in /tmp..."
+  local free_space=$(df -m /tmp 2>/dev/null | awk 'NR==2 {print $4}')
+  if [ -n "$free_space" ] && [ "$free_space" -ge 500 ]; then
+    success "Sufficient disk space (${free_space}MB available, 500MB required)"
+  else
+    warning "Could not verify disk space. Ensure at least 500MB is free in /tmp"
+  fi
+
+  echo ""
+
+  if [ "$all_ok" = false ]; then
+    error "Some prerequisites are missing. Please install them and try again."
+    exit 1
+  fi
+
+  success "All prerequisites satisfied!"
+  echo ""
+}
+
+# =============================================================================
+# SPLUNK HOME DETECTION
+# =============================================================================
+
+detect_splunk_home() {
+  print_info_box "STEP 1: LOCATE SPLUNK INSTALLATION" \
+    "" \
+    "${WHITE}WHY WE NEED THIS:${NC}" \
+    "We need to know where Splunk is installed to read configuration" \
+    "files and access the Splunk CLI tools." \
+    "" \
+    "${WHITE}WHAT WE'LL DO:${NC}" \
+    "Automatically detect common Splunk installation paths, or ask" \
+    "you to provide the path if we can't find it."
+
+  echo ""
+  progress "Searching for Splunk installation..."
+
+  # Check environment variable first
+  if [ -n "${SPLUNK_HOME:-}" ] && [ -d "$SPLUNK_HOME" ]; then
+    SPLUNK_HOME="${SPLUNK_HOME}"
+    success "Found via \$SPLUNK_HOME environment variable: $SPLUNK_HOME"
+    return 0
+  fi
+
+  # Common installation paths
+  local paths=(
+    "/opt/splunk"
+    "/opt/splunkforwarder"
+    "/Applications/Splunk"
+    "/Applications/SplunkForwarder"
+    "$HOME/splunk"
+    "$HOME/splunkforwarder"
+    "/usr/local/splunk"
+  )
+
+  for path in "${paths[@]}"; do
+    if [ -d "$path/etc" ]; then
+      SPLUNK_HOME="$path"
+      success "Found Splunk installation: $SPLUNK_HOME"
+      return 0
+    fi
+  done
+
+  # Not found - ask user
+  echo ""
+  warning "Could not automatically detect Splunk installation"
+  echo ""
+  print_box_line "${WHITE}Please enter the path to your Splunk installation.${NC}"
+  print_box_line "This is typically /opt/splunk or /opt/splunkforwarder"
+  print_box_footer
+
+  while true; do
+    prompt_input "Enter SPLUNK_HOME path" "/opt/splunk" SPLUNK_HOME
+
+    if [ -d "$SPLUNK_HOME/etc" ]; then
+      success "Valid Splunk installation found: $SPLUNK_HOME"
+      return 0
+    else
+      error "Invalid path: $SPLUNK_HOME/etc does not exist"
+      echo ""
+    fi
+  done
+}
+
+# =============================================================================
+# SPLUNK FLAVOR DETECTION
+# =============================================================================
+
+detect_splunk_flavor() {
+  print_info_box "STEP 2: IDENTIFY SPLUNK DEPLOYMENT TYPE" \
+    "" \
+    "${WHITE}WHY WE NEED THIS:${NC}" \
+    "Different Splunk deployment types (Enterprise, Forwarder, Cloud)" \
+    "have different data available for export. We'll tailor the" \
+    "collection process based on what's available." \
+    "" \
+    "${WHITE}WHAT WE'LL CHECK:${NC}" \
+    "• Product type (Enterprise vs Universal Forwarder)" \
+    "• Architecture (Standalone vs Distributed vs Cloud)" \
+    "• Role (Search Head, Indexer, Forwarder, etc.)" \
+    "• Cluster membership (SHC, Indexer Cluster)"
+
+  echo ""
+  progress "Analyzing Splunk installation..."
+
+  # Check for Universal Forwarder
+  if [ -f "$SPLUNK_HOME/etc/splunk-launch.conf" ]; then
+    if grep -q "SPLUNK_ROLE=universalforwarder" "$SPLUNK_HOME/etc/splunk-launch.conf" 2>/dev/null; then
+      SPLUNK_FLAVOR="uf"
+      SPLUNK_ROLE="universal_forwarder"
+      info "Detected: Universal Forwarder"
+    fi
+  fi
+
+  # Check for splunkforwarder in path
+  if [[ "$SPLUNK_HOME" == *"splunkforwarder"* ]] && [ -z "$SPLUNK_FLAVOR" ]; then
+    SPLUNK_FLAVOR="uf"
+    SPLUNK_ROLE="universal_forwarder"
+    info "Detected: Universal Forwarder (based on path)"
+  fi
+
+  # If not UF, assume Enterprise
+  if [ -z "$SPLUNK_FLAVOR" ]; then
+    SPLUNK_FLAVOR="enterprise"
+    info "Detected: Splunk Enterprise"
+  fi
+
+  # Detect architecture and role
+  if [ "$SPLUNK_FLAVOR" = "enterprise" ]; then
+    local server_conf="$SPLUNK_HOME/etc/system/local/server.conf"
+
+    # Check for Search Head Cluster
+    if [ -f "$server_conf" ] && grep -q "\[shclustering\]" "$server_conf" 2>/dev/null; then
+      IS_SHC_MEMBER=true
+      SPLUNK_ARCHITECTURE="distributed"
+      # Captain is dynamically elected — server.conf always has mode=member
+      # on all SHC nodes. Actual captain detection deferred to REST API
+      # in detect_shc_role() after authentication.
+      SPLUNK_ROLE="shc_member"
+      info "Detected: Search Head Cluster member (captain detection deferred to REST)"
+    fi
+
+    # Check for Indexer Cluster
+    if [ -f "$server_conf" ] && grep -q "\[clustering\]" "$server_conf" 2>/dev/null; then
+      IS_IDX_CLUSTER=true
+      local cluster_mode=$(grep -A5 "\[clustering\]" "$server_conf" | grep "mode" | cut -d= -f2 | tr -d ' ')
+
+      case "$cluster_mode" in
+        master)
+          SPLUNK_ROLE="cluster_master"
+          info "Detected: Indexer Cluster Master/Manager"
+          ;;
+        slave)
+          SPLUNK_ROLE="indexer_peer"
+          info "Detected: Indexer Cluster Peer"
+          ;;
+      esac
+      SPLUNK_ARCHITECTURE="distributed"
+    fi
+
+    # Check for distributed search (search head)
+    if [ -f "$SPLUNK_HOME/etc/system/local/distsearch.conf" ]; then
+      if grep -q "servers" "$SPLUNK_HOME/etc/system/local/distsearch.conf" 2>/dev/null; then
+        SPLUNK_ARCHITECTURE="distributed"
+        if [ -z "$SPLUNK_ROLE" ]; then
+          SPLUNK_ROLE="search_head"
+          info "Detected: Search Head (Distributed)"
+        fi
+      fi
+    fi
+
+    # Check for Heavy Forwarder (no local indexes, has outputs)
+    if [ -f "$SPLUNK_HOME/etc/system/local/outputs.conf" ]; then
+      local has_indexes=$(ls -1 "$SPLUNK_HOME/var/lib/splunk/" 2>/dev/null | grep -v "^kvstore" | grep -v "^modinput" | wc -l)
+      if [ "$has_indexes" -le 2 ]; then
+        SPLUNK_FLAVOR="hf"
+        SPLUNK_ROLE="heavy_forwarder"
+        info "Detected: Heavy Forwarder"
+      fi
+    fi
+
+    # Check for Deployment Server
+    if [ -d "$SPLUNK_HOME/etc/deployment-apps" ]; then
+      local app_count=$(ls -1 "$SPLUNK_HOME/etc/deployment-apps/" 2>/dev/null | wc -l)
+      if [ "$app_count" -gt 0 ]; then
+        SPLUNK_ROLE="deployment_server"
+        info "Detected: Deployment Server (${app_count} deployment apps)"
+      fi
+    fi
+
+    # Check for Splunk Cloud indicators
+    if [ -f "$server_conf" ]; then
+      if grep -qi "splunkcloud.com" "$server_conf" 2>/dev/null; then
+        IS_CLOUD=true
+        SPLUNK_ARCHITECTURE="cloud"
+        warning "Detected: Splunk Cloud connection"
+        echo ""
+        print_info_box "SPLUNK CLOUD DETECTED" \
+          "" \
+          "${RED}This script does NOT support Splunk Cloud.${NC}" \
+          "" \
+          "Splunk Cloud (Classic and Victoria Experience) does not allow" \
+          "SSH access to the infrastructure, which this script requires." \
+          "" \
+          "For Splunk Cloud migrations, please contact the DMA" \
+          "team for a REST API-only export solution." \
+          "" \
+          "If this is a hybrid environment with on-prem Search Heads" \
+          "connected to Splunk Cloud indexers, you may continue."
+
+        echo ""
+        if ! prompt_yn "Continue anyway (hybrid environment)?" "N"; then
+          echo ""
+          echo -e "${YELLOW}Export cancelled. Contact DMA team for Cloud support.${NC}"
+          exit 0
+        fi
+      fi
+    fi
+
+    # Default to standalone if no architecture detected
+    if [ -z "$SPLUNK_ARCHITECTURE" ]; then
+      SPLUNK_ARCHITECTURE="standalone"
+      if [ -z "$SPLUNK_ROLE" ]; then
+        SPLUNK_ROLE="standalone"
+      fi
+      info "Detected: Standalone deployment"
+    fi
+  fi
+
+  # Get Splunk version
+  local version_file="$SPLUNK_HOME/etc/splunk.version"
+  local splunk_version="Unknown"
+  if [ -f "$version_file" ]; then
+    splunk_version=$(grep "VERSION" "$version_file" 2>/dev/null | cut -d= -f2)
+  fi
+
+  echo ""
+  print_box_header "DETECTED ENVIRONMENT"
+  print_box_line ""
+  print_box_line "  ${WHITE}Product:${NC}       Splunk ${SPLUNK_FLAVOR^}"
+  print_box_line "  ${WHITE}Version:${NC}       ${splunk_version}"
+  print_box_line "  ${WHITE}Role:${NC}          ${SPLUNK_ROLE//_/ }"
+  print_box_line "  ${WHITE}Architecture:${NC}  ${SPLUNK_ARCHITECTURE^}"
+  print_box_line "  ${WHITE}SPLUNK_HOME:${NC}   ${SPLUNK_HOME}"
+  print_box_line ""
+
+  if [ "$IS_SHC_MEMBER" = true ]; then
+    print_box_line "  ${CYAN}Search Head Cluster:${NC} Yes"
+    if [ "$IS_SHC_CAPTAIN" = true ]; then
+      print_box_line "  ${CYAN}SHC Role:${NC} Captain ${GREEN}(optimal for export)${NC}"
+    else
+      print_box_line "  ${CYAN}SHC Role:${NC} Detected via filesystem ${DIM}(captain check after auth)${NC}"
+    fi
+  fi
+
+  if [ "$IS_IDX_CLUSTER" = true ]; then
+    print_box_line "  ${CYAN}Indexer Cluster:${NC} Yes"
+  fi
+
+  print_box_line ""
+  print_box_footer
+
+  # Show warnings for limited environments
+  if [ "$SPLUNK_FLAVOR" = "uf" ]; then
+    echo ""
+    print_info_box "LIMITED EXPORT AVAILABLE" \
+      "" \
+      "${YELLOW}This is a Universal Forwarder installation.${NC}" \
+      "" \
+      "Universal Forwarders have limited data available:" \
+      "  ${GREEN}✓${NC} inputs.conf (data sources being collected)" \
+      "  ${GREEN}✓${NC} outputs.conf (forwarding destinations)" \
+      "  ${GREEN}✓${NC} props.conf (local parsing rules, if any)" \
+      "" \
+      "  ${RED}✗${NC} Dashboards (UF has no search capability)" \
+      "  ${RED}✗${NC} Alerts (UF cannot run searches)" \
+      "  ${RED}✗${NC} Users/RBAC (minimal authentication)" \
+      "  ${RED}✗${NC} Usage analytics (no search history)" \
+      "" \
+      "${WHITE}RECOMMENDATION:${NC} For full export, run this script on your" \
+      "Search Head instead."
+
+    echo ""
+    if ! prompt_yn "Continue with limited forwarder export?"; then
+      echo ""
+      echo -e "${YELLOW}Export cancelled.${NC}"
+      exit 0
+    fi
+  fi
+
+  if [ "$IS_SHC_MEMBER" = true ] && [ "$IS_SHC_CAPTAIN" = false ]; then
+    echo ""
+    print_info_box "SEARCH HEAD CLUSTER NOTICE" \
+      "" \
+      "${YELLOW}This is an SHC Member, not the Captain.${NC}" \
+      "" \
+      "While we can export from this member, some shared knowledge" \
+      "objects may be incomplete. For the most complete export," \
+      "we recommend running on the SHC Captain." \
+      "" \
+      "To find the Captain:" \
+      "  ${CYAN}\$SPLUNK_HOME/bin/splunk show shcluster-status${NC}"
+
+    echo ""
+    if ! prompt_yn "Continue exporting from this SHC member?"; then
+      echo ""
+      echo -e "${YELLOW}Export cancelled. Please run on the SHC Captain.${NC}"
+      exit 0
+    fi
+  fi
+
+  echo ""
+  if prompt_yn "Is the detected environment correct?" "Y"; then
+    success "Environment confirmed"
+  else
+    echo ""
+    warning "If the detection is incorrect, the export may be incomplete."
+    if ! prompt_yn "Continue anyway?" "Y"; then
+      exit 0
+    fi
+  fi
+}
+
+# =============================================================================
+# APPLICATION SELECTION
+# =============================================================================
+
+select_applications() {
+  # If apps were pre-selected via --apps flag, skip interactive selection
+  if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    success "Using pre-selected apps from --apps flag: ${SELECTED_APPS[*]}"
+    return 0
+  fi
+
+  print_info_box "STEP 3: SELECT APPLICATIONS TO EXPORT" \
+    "" \
+    "${WHITE}WHY WE ASK:${NC}" \
+    "Splunk organizes content into \"Apps\" - containers that hold" \
+    "dashboards, alerts, saved searches, and configurations. We need" \
+    "to know which apps contain the content you want to migrate." \
+    "" \
+    "${WHITE}WHAT WE COLLECT FROM EACH APP:${NC}" \
+    "  • Dashboards (Classic XML and Dashboard Studio JSON)" \
+    "  • Alerts and Scheduled Searches (savedsearches.conf)" \
+    "  • Field Extractions (props.conf, transforms.conf)" \
+    "  • Lookup Tables (.csv files)" \
+    "  • Search Macros (macros.conf)" \
+    "  • Event Classifications (eventtypes.conf, tags.conf)" \
+    "" \
+    "${WHITE}RECOMMENDATION:${NC}" \
+    "For a complete migration assessment, we recommend exporting" \
+    "${GREEN}ALL apps${NC}. This gives DMA the full picture."
+
+  echo ""
+
+  # Discover apps
+  progress "Discovering installed applications..."
+
+  local apps_dir="$SPLUNK_HOME/etc/apps"
+  declare -a all_apps=()
+  declare -A app_dashboards=()
+  declare -A app_alerts=()
+
+  if [ -d "$apps_dir" ]; then
+    for app_path in "$apps_dir"/*; do
+      if [ -d "$app_path" ]; then
+        local app_name=$(basename "$app_path")
+
+        # Skip internal apps (start with _)
+        if [[ "$app_name" =~ ^_ ]]; then
+          continue
+        fi
+
+        # Skip Splunk's own system apps (splunk_* and Splunk_*)
+        if [[ "$app_name" =~ ^[Ss]plunk_ ]]; then
+          continue
+        fi
+
+        # Skip Splunk Support Add-ons (SA-*)
+        if [[ "$app_name" =~ ^SA- ]]; then
+          continue
+        fi
+
+        # Skip framework/system/default apps that have no user content
+        # NOTE: "search" app is NOT excluded - users commonly create content there
+        if [[ "$app_name" =~ ^(framework|appsbrowser|introspection_generator_addon|legacy|learned|sample_app|gettingstarted|launcher|SplunkForwarder|SplunkLightForwarder|alert_logevent|alert_webhook)$ ]]; then
+          continue
+        fi
+
+        all_apps+=("$app_name")
+
+        # Count dashboards (use ls instead of find for container compatibility)
+        local dash_count=0
+        if [ -d "$app_path/default/data/ui/views" ]; then
+          dash_count=$(ls -1 "$app_path/default/data/ui/views/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+        fi
+        if [ -d "$app_path/local/data/ui/views" ]; then
+          local local_dash=$(ls -1 "$app_path/local/data/ui/views/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+          dash_count=$((dash_count + local_dash))
+        fi
+        app_dashboards[$app_name]=$dash_count
+
+        # Count alerts (from savedsearches.conf)
+        local alert_count=0
+        for conf_dir in "default" "local"; do
+          if [ -f "$app_path/$conf_dir/savedsearches.conf" ]; then
+            local alerts=$(grep -c "alert.track" "$app_path/$conf_dir/savedsearches.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+            [ -z "$alerts" ] || ! [[ "$alerts" =~ ^[0-9]+$ ]] && alerts=0
+            alert_count=$((alert_count + alerts))
+          fi
+        done
+        app_alerts[$app_name]=$alert_count
+      fi
+    done
+  fi
+
+  local app_count=${#all_apps[@]}
+  success "Found ${app_count} applications"
+
+  if [ $app_count -eq 0 ]; then
+    warning "No user applications found. Only system configurations will be exported."
+    return 0
+  fi
+
+  echo ""
+  echo -e "${WHITE}Discovered Applications:${NC}"
+  print_line "─" 72
+  printf "  ${BOLD}%-4s %-30s %12s %12s${NC}\n" "#" "App Name" "Dashboards" "Alerts"
+  print_line "─" 72
+
+  local idx=1
+  for app_name in "${all_apps[@]}"; do
+    local dashes=${app_dashboards[$app_name]:-0}
+    local alerts=${app_alerts[$app_name]:-0}
+    printf "  %-4s %-30s %12s %12s\n" "$idx" "$app_name" "$dashes" "$alerts"
+    ((idx++))
+  done
+
+  print_line "─" 72
+  echo ""
+
+  echo -e "${WHITE}How would you like to select applications?${NC}"
+  echo ""
+  echo -e "  ${GREEN}1.${NC} Export ${GREEN}ALL${NC} applications ${CYAN}(Recommended for full migration)${NC}"
+  echo -e "     → Includes all ${app_count} apps with their complete configurations"
+  echo -e "     → Best for comprehensive migration assessment"
+  echo ""
+  echo -e "  ${GREEN}2.${NC} Enter specific app names ${CYAN}(comma-separated)${NC}"
+  echo -e "     → Example: ${GRAY}security_app, ops_monitoring, compliance${NC}"
+  echo -e "     → Use this if you know exactly which apps to migrate"
+  echo ""
+  echo -e "  ${GREEN}3.${NC} Select from numbered list"
+  echo -e "     → Enter numbers like: ${GRAY}1,2,5,7-10${NC}"
+  echo -e "     → Interactive selection from the list above"
+  echo ""
+  echo -e "  ${GREEN}4.${NC} Export system configurations only ${CYAN}(no apps)${NC}"
+  echo -e "     → Only collects indexes, inputs, system-level configs"
+  echo -e "     → Use for infrastructure-only assessment"
+  echo ""
+
+  local choice
+  prompt_input "Enter your choice" "1" choice
+
+  case "$choice" in
+    1)
+      EXPORT_ALL_APPS=true
+      SELECTED_APPS=("${all_apps[@]}")
+      success "Will export ALL ${app_count} applications"
+      ;;
+
+    2)
+      EXPORT_ALL_APPS=false
+      echo ""
+      echo -e "${WHITE}Enter app names separated by commas:${NC}"
+      echo -e "${GRAY}Example: security_app, ops_monitoring, compliance${NC}"
+      echo ""
+      local app_input
+      prompt_input "App names" "" app_input
+
+      # Parse comma-separated list
+      IFS=',' read -ra input_apps <<< "$app_input"
+
+      echo ""
+      progress "Validating app names..."
+
+      for input_app in "${input_apps[@]}"; do
+        # Trim whitespace
+        # Trim whitespace (pure bash, portable)
+        input_app="${input_app#"${input_app%%[![:space:]]*}"}"
+        input_app="${input_app%"${input_app##*[![:space:]]}"}"
+
+        # Check if app exists
+        local found=false
+        for known_app in "${all_apps[@]}"; do
+          if [ "$known_app" = "$input_app" ]; then
+            SELECTED_APPS+=("$input_app")
+            success "$input_app - Found (${app_dashboards[$input_app]:-0} dashboards, ${app_alerts[$input_app]:-0} alerts)"
+            found=true
+            break
+          fi
+        done
+
+        if [ "$found" = false ]; then
+          error "$input_app - NOT FOUND (skipping)"
+        fi
+      done
+
+      if [ ${#SELECTED_APPS[@]} -eq 0 ]; then
+        error "No valid apps selected!"
+        echo ""
+        if prompt_yn "Would you like to export ALL apps instead?" "Y"; then
+          EXPORT_ALL_APPS=true
+          SELECTED_APPS=("${all_apps[@]}")
+        else
+          exit 1
+        fi
+      fi
+      ;;
+
+    3)
+      EXPORT_ALL_APPS=false
+      echo ""
+      echo -e "${WHITE}Enter app numbers (e.g., 1,2,5 or 1-5,8,10):${NC}"
+      echo ""
+      local num_input
+      prompt_input "App numbers" "" num_input
+
+      # Parse number ranges
+      local selected_nums=()
+      IFS=',' read -ra parts <<< "$num_input"
+      for part in "${parts[@]}"; do
+        # Trim whitespace (pure bash, no xargs needed)
+        part="${part#"${part%%[![:space:]]*}"}"
+        part="${part%"${part##*[![:space:]]}"}"
+        if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+          # Range like 1-5
+          for ((i=${BASH_REMATCH[1]}; i<=${BASH_REMATCH[2]}; i++)); do
+            selected_nums+=($i)
+          done
+        elif [[ "$part" =~ ^[0-9]+$ ]]; then
+          # Single number
+          selected_nums+=($part)
+        fi
+      done
+
+      echo ""
+      progress "Selected apps:"
+      for num in "${selected_nums[@]}"; do
+        if [ $num -ge 1 ] && [ $num -le $app_count ]; then
+          local app_name="${all_apps[$((num-1))]}"
+          SELECTED_APPS+=("$app_name")
+          success "$app_name (${app_dashboards[$app_name]:-0} dashboards, ${app_alerts[$app_name]:-0} alerts)"
+        fi
+      done
+
+      if [ ${#SELECTED_APPS[@]} -eq 0 ]; then
+        error "No valid apps selected!"
+        exit 1
+      fi
+      ;;
+
+    4)
+      EXPORT_ALL_APPS=false
+      SELECTED_APPS=()
+      info "System configurations only - no apps will be exported"
+      ;;
+
+    *)
+      warning "Invalid choice. Defaulting to ALL apps."
+      EXPORT_ALL_APPS=true
+      SELECTED_APPS=("${all_apps[@]}")
+      ;;
+  esac
+
+  echo ""
+  local total_dashes=0
+  local total_alerts=0
+  for app_name in "${SELECTED_APPS[@]}"; do
+    total_dashes=$((total_dashes + ${app_dashboards[$app_name]:-0}))
+    total_alerts=$((total_alerts + ${app_alerts[$app_name]:-0}))
+  done
+
+  print_box_header "APPLICATION SELECTION SUMMARY"
+  print_box_line ""
+  print_box_line "  ${WHITE}Apps Selected:${NC}    ${#SELECTED_APPS[@]}"
+  print_box_line "  ${WHITE}Total Dashboards:${NC} ${total_dashes}"
+  print_box_line "  ${WHITE}Total Alerts:${NC}     ${total_alerts}"
+  print_box_line ""
+  print_box_footer
+
+  STATS_APPS=${#SELECTED_APPS[@]}
+
+  echo ""
+  if ! prompt_yn "Proceed with this selection?" "Y"; then
+    echo ""
+    echo -e "${YELLOW}Export cancelled.${NC}"
+    exit 0
+  fi
+}
+
+# =============================================================================
+# DATA CATEGORY SELECTION
+# =============================================================================
+
+select_data_categories() {
+  print_info_box "STEP 4: SELECT DATA CATEGORIES TO COLLECT" \
+    "" \
+    "${WHITE}WHY WE ASK:${NC}" \
+    "Different migration scenarios require different data. For" \
+    "example, if you only want to migrate dashboards, you might" \
+    "skip user activity data. However, for a complete migration" \
+    "assessment, we recommend collecting everything." \
+    "" \
+    "${WHITE}RECOMMENDATION:${NC}" \
+    "Accept the defaults (options 1-6) for comprehensive analysis."
+
+  echo ""
+  echo -e "${WHITE}Select data categories to collect:${NC}"
+  echo ""
+
+  # Show current state of each toggle (reflects --flags passed on CLI)
+  local chk_configs chk_dash chk_alerts chk_rbac chk_usage chk_indexes chk_lookups chk_audit chk_anon
+  [ "$COLLECT_CONFIGS" = true ]    && chk_configs="${GREEN}[✓]${NC}" || chk_configs="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_DASHBOARDS" = true ] && chk_dash="${GREEN}[✓]${NC}"    || chk_dash="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_ALERTS" = true ]     && chk_alerts="${GREEN}[✓]${NC}"  || chk_alerts="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_RBAC" = true ]       && chk_rbac="${GREEN}[✓]${NC}"   || chk_rbac="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_USAGE" = true ]      && chk_usage="${GREEN}[✓]${NC}"  || chk_usage="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_INDEXES" = true ]    && chk_indexes="${GREEN}[✓]${NC}" || chk_indexes="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_LOOKUPS" = true ]    && chk_lookups="${GREEN}[✓]${NC}" || chk_lookups="${YELLOW}[ ]${NC}"
+  [ "$COLLECT_AUDIT" = true ]      && chk_audit="${GREEN}[✓]${NC}"  || chk_audit="${YELLOW}[ ]${NC}"
+  [ "$ANONYMIZE_DATA" = true ]     && chk_anon="${GREEN}[✓]${NC}"   || chk_anon="${YELLOW}[ ]${NC}"
+
+  echo -e "  ${chk_configs} 1. ${WHITE}Configuration Files${NC} (props, transforms, indexes, inputs)"
+  echo -e "      → ${GRAY}Required for understanding data pipeline${NC}"
+  echo ""
+  echo -e "  ${chk_dash} 2. ${WHITE}Dashboards${NC} (Classic XML + Dashboard Studio JSON)"
+  echo -e "      → ${GRAY}Visual content for conversion to Dynatrace apps${NC}"
+  echo ""
+  echo -e "  ${chk_alerts} 3. ${WHITE}Alerts & Saved Searches${NC} (savedsearches.conf)"
+  echo -e "      → ${GRAY}Critical for operational continuity${NC}"
+  echo ""
+  echo -e "  ${chk_rbac} 4. ${WHITE}Users, Roles & Groups${NC} (RBAC data - NO passwords)"
+  echo -e "      → ${GRAY}Usernames and roles only - passwords are NEVER collected${NC}"
+  if [ "$COLLECT_RBAC" != true ]; then
+    echo -e "      → ${YELLOW}OFF by default - enable with toggle or --rbac flag${NC}"
+  fi
+  echo ""
+  echo -e "  ${chk_usage} 5. ${WHITE}Usage Analytics${NC} (search frequency, dashboard views)"
+  echo -e "      → ${GRAY}Identifies high-value assets worth migrating${NC}"
+  if [ "$COLLECT_USAGE" != true ]; then
+    echo -e "      → ${YELLOW}OFF by default - enable with toggle or --usage flag${NC}"
+  fi
+  echo ""
+  echo -e "  ${chk_indexes} 6. ${WHITE}Index & Data Statistics${NC}"
+  echo -e "      → ${GRAY}Volume metrics for capacity planning${NC}"
+  echo ""
+  echo -e "  ${chk_lookups} 7. ${WHITE}Lookup Tables${NC} (.csv files)"
+  echo -e "      → ${GRAY}Reference data used in searches${NC}"
+  if [ "$COLLECT_LOOKUPS" != true ]; then
+    echo -e "      → ${YELLOW}May contain sensitive data - review before including${NC}"
+  fi
+  echo ""
+  echo -e "  ${chk_audit} 8. ${WHITE}Audit Log Sample${NC} (last 10,000 entries)"
+  echo -e "      → ${GRAY}Detailed search patterns for analysis${NC}"
+  if [ "$COLLECT_AUDIT" != true ]; then
+    echo -e "      → ${YELLOW}May contain sensitive query content${NC}"
+  fi
+  echo ""
+  echo -e "  ${chk_anon} 9. ${WHITE}Anonymize Sensitive Data${NC} (emails, hostnames, IPs)"
+  echo -e "      → ${GRAY}Replaces real data with consistent fake values${NC}"
+  if [ "$ANONYMIZE_DATA" = true ]; then
+    echo -e "      → ${CYAN}ON by default - recommended for security${NC}"
+  fi
+  echo ""
+
+  echo -e "  ${DIM}🔒 Privacy: Passwords are NEVER collected. Secrets in .conf files are auto-redacted.${NC}"
+  echo ""
+  echo -e "${WHITE}Enter numbers to toggle (e.g., 7,8 to add lookups and audit)${NC}"
+  echo -e "${GRAY}Or press Enter to accept current selection:${NC}"
+  echo ""
+
+  local toggle_input
+  prompt_input "Toggle categories" "" toggle_input
+
+  if [ -n "$toggle_input" ]; then
+    IFS=',' read -ra toggles <<< "$toggle_input"
+    for toggle in "${toggles[@]}"; do
+      # Trim whitespace (pure bash, portable)
+      toggle="${toggle#"${toggle%%[![:space:]]*}"}"
+      toggle="${toggle%"${toggle##*[![:space:]]}"}"
+      case "$toggle" in
+        1) [ "$COLLECT_CONFIGS" = true ] && { COLLECT_CONFIGS=false; info "Configurations: OFF"; } || { COLLECT_CONFIGS=true; info "Configurations: ON"; } ;;
+        2) [ "$COLLECT_DASHBOARDS" = true ] && { COLLECT_DASHBOARDS=false; info "Dashboards: OFF"; } || { COLLECT_DASHBOARDS=true; info "Dashboards: ON"; } ;;
+        3) [ "$COLLECT_ALERTS" = true ] && { COLLECT_ALERTS=false; info "Alerts: OFF"; } || { COLLECT_ALERTS=true; info "Alerts: ON"; } ;;
+        4) [ "$COLLECT_RBAC" = true ] && { COLLECT_RBAC=false; info "Users/RBAC: OFF"; } || { COLLECT_RBAC=true; info "Users/RBAC: ON"; } ;;
+        5) [ "$COLLECT_USAGE" = true ] && { COLLECT_USAGE=false; info "Usage Analytics: OFF"; } || { COLLECT_USAGE=true; info "Usage Analytics: ON"; } ;;
+        6) [ "$COLLECT_INDEXES" = true ] && { COLLECT_INDEXES=false; info "Index Stats: OFF"; } || { COLLECT_INDEXES=true; info "Index Stats: ON"; } ;;
+        7) [ "$COLLECT_LOOKUPS" = true ] && { COLLECT_LOOKUPS=false; info "Lookup Tables: OFF"; } || { COLLECT_LOOKUPS=true; info "Lookup Tables: ON"; } ;;
+        8) [ "$COLLECT_AUDIT" = true ] && { COLLECT_AUDIT=false; info "Audit Sample: OFF"; } || { COLLECT_AUDIT=true; info "Audit Sample: ON"; } ;;
+        9) [ "$ANONYMIZE_DATA" = true ] && { ANONYMIZE_DATA=false; info "Data Anonymization: OFF - Real emails, hostnames, and IPs will be preserved"; } || { ANONYMIZE_DATA=true; info "Data Anonymization: ON"; } ;;
+      esac
+    done
+  fi
+
+  echo ""
+  success "Data categories configured"
+}
+
+# =============================================================================
+# SPLUNK AUTHENTICATION
+# =============================================================================
+
+authenticate_splunk() {
+  # Skip for Universal Forwarder
+  if [ "$SPLUNK_FLAVOR" = "uf" ]; then
+    info "Skipping authentication (not required for Universal Forwarder)"
+    return 0
+  fi
+
+  # =========================================================================
+  # TOKEN AUTHENTICATION PATH (--token flag)
+  # Skips all interactive prompts; verifies token against current-context.
+  # =========================================================================
+  if [ "$AUTH_METHOD" = "token" ]; then
+    AUTH_HEADER="Authorization: Bearer $AUTH_TOKEN"
+    progress "Testing token authentication..."
+
+    local auth_response http_code
+    auth_response=$(curl -k -s -w "%{http_code}" \
+      --connect-timeout "$CONNECT_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/current-context?output_mode=json" \
+      -o /tmp/dma_auth_test.json 2>/dev/null)
+    http_code="${auth_response: -3}"
+
+    if [ "$http_code" = "200" ]; then
+      local username
+      username=$(grep -o '"username":"[^"]*"' /tmp/dma_auth_test.json 2>/dev/null | cut -d'"' -f4)
+      success "Token authentication successful (user: ${username:-unknown})"
+      rm -f /tmp/dma_auth_test.json
+      return 0
+    else
+      error "Token authentication failed (HTTP $http_code). Check token value and permissions."
+      rm -f /tmp/dma_auth_test.json
+      return 1
+    fi
+  fi
+
+  # =========================================================================
+  # USERNAME/PASSWORD AUTHENTICATION PATH
+  # =========================================================================
+  print_info_box "STEP 5: SPLUNK AUTHENTICATION" \
+    "" \
+    "${WHITE}WHY WE NEED THIS:${NC}" \
+    "Some data requires accessing Splunk's REST API, including:" \
+    "  • Dashboard Studio dashboards (stored in KV Store)" \
+    "  • User and role information" \
+    "  • Usage analytics from internal indexes" \
+    "  • Distributed environment topology" \
+    "" \
+    "${WHITE}AUTHENTICATION OPTIONS:${NC}" \
+    "  • API token (recommended for automation): use --token TOKEN" \
+    "  • Username/password: enter below or use -u USER -p PASS" \
+    "" \
+    "${WHITE}REQUIRED PERMISSIONS:${NC}" \
+    "The account needs: admin_all_objects, list_users, list_roles" \
+    "" \
+    "${WHITE}SECURITY NOTE:${NC}" \
+    "Credentials are only used locally and are never stored or transmitted."
+
+  echo ""
+
+  # Only prompt if credentials not already provided via CLI / env vars
+  if [ -z "$SPLUNK_USER" ]; then
+    prompt_input "Splunk admin username" "admin" SPLUNK_USER
+  fi
+  if [ -z "$SPLUNK_PASSWORD" ]; then
+    prompt_password "Splunk admin password" SPLUNK_PASSWORD
+  fi
+
+  echo ""
+  progress "Testing authentication..."
+
+  # Detect management port
+  if [ -f "$SPLUNK_HOME/etc/system/local/web.conf" ]; then
+    local mgmt_port
+    mgmt_port=$(grep "^mgmtHostPort" "$SPLUNK_HOME/etc/system/local/web.conf" 2>/dev/null | cut -d= -f2 | tr -d ' ' | cut -d: -f2)
+    if [ -n "$mgmt_port" ]; then
+      SPLUNK_PORT="$mgmt_port"
+    fi
+  fi
+
+  # URL-encode credentials via Python stdin to safely handle special characters
+  # ($, `, ", \) that would be misinterpreted if passed as shell arguments.
+  local encoded_user encoded_pass
+  encoded_user=$(printf '%s' "$SPLUNK_USER" | \
+    $PYTHON_CMD -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read(), safe=''))" 2>/dev/null \
+    || printf '%s' "$SPLUNK_USER")
+  encoded_pass=$(printf '%s' "$SPLUNK_PASSWORD" | \
+    $PYTHON_CMD -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read(), safe=''))" 2>/dev/null \
+    || printf '%s' "$SPLUNK_PASSWORD")
+
+  # Obtain session key from /services/auth/login
+  local login_response http_code
+  local temp_login=$(mktemp)
+  http_code=$(curl -k -s -w "%{http_code}" \
+    --connect-timeout "$CONNECT_TIMEOUT" \
+    $CURL_PROXY_ARGS \
+    -d "username=${encoded_user}&password=${encoded_pass}" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/auth/login?output_mode=json" \
+    -o "$temp_login" 2>/dev/null)
+  login_response=$(cat "$temp_login")
+  rm -f "$temp_login"
+
+  if [ "$http_code" = "200" ] && echo "$login_response" | grep -q "sessionKey"; then
+    SESSION_KEY=$(echo "$login_response" | \
+      $PYTHON_CMD -c "import json,sys; d=json.load(sys.stdin); print(d.get('sessionKey',''))" 2>/dev/null)
+    # Fallback: grep-based extraction
+    if [ -z "$SESSION_KEY" ]; then
+      SESSION_KEY=$(echo "$login_response" | grep -o '"sessionKey":"[^"]*"' | cut -d'"' -f4)
+    fi
+
+    if [ -n "$SESSION_KEY" ]; then
+      AUTH_HEADER="Authorization: Splunk $SESSION_KEY"
+      success "Authentication successful"
+
+      # Check capabilities via current-context
+      progress "Checking account capabilities..."
+      local caps_response
+      caps_response=$(curl -k -s \
+        --connect-timeout "$CONNECT_TIMEOUT" \
+        $CURL_PROXY_ARGS \
+        -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/current-context?output_mode=json" \
+        2>/dev/null)
+
+      for cap in "admin_all_objects" "list_users" "list_roles"; do
+        if echo "$caps_response" | grep -q "$cap"; then
+          success "Capability: $cap"
+        else
+          warning "Missing capability: $cap (some data may not be collected)"
+        fi
+      done
+
+      echo ""
+      return 0
+    fi
+  fi
+
+  # Authentication failed
+  local fail_http="$http_code"
+  if [ "$fail_http" = "401" ]; then
+    error "Authentication failed (invalid credentials)"
+  elif [ "$fail_http" = "000" ]; then
+    error "Could not connect to Splunk REST API (connection refused or timeout)"
+    echo ""
+    echo -e "${GRAY}This could mean:${NC}"
+    echo -e "${GRAY}  • Splunk is not running${NC}"
+    echo -e "${GRAY}  • Management port is different from $SPLUNK_PORT${NC}"
+    echo -e "${GRAY}  • Firewall blocking connections${NC}"
+  else
+    error "Authentication error (HTTP $fail_http)"
+  fi
+  echo ""
+
+  if [ "$AUTO_CONFIRM" = true ]; then
+    warning "Continuing without REST API access (AUTO_CONFIRM mode). Some data will not be collected."
+    SPLUNK_USER=""
+    SPLUNK_PASSWORD=""
+  elif [ "$fail_http" = "401" ] && prompt_yn "Would you like to try again?" "Y"; then
+    SPLUNK_PASSWORD=""  # Clear password to re-prompt
+    authenticate_splunk
+    return $?
+  else
+    if prompt_yn "Continue without REST API access?" "N"; then
+      warning "Some data will not be collected (Dashboard Studio, users, usage analytics)"
+      SPLUNK_USER=""
+      SPLUNK_PASSWORD=""
+    else
+      exit 1
+    fi
+  fi
+
+  echo ""
+}
+
+# =============================================================================
+# USAGE ANALYTICS PERIOD
+# =============================================================================
+
+select_usage_period() {
+  if [ "$COLLECT_USAGE" = false ]; then
+    return 0
+  fi
+
+  if [ -z "$SPLUNK_USER" ] && [ -z "$AUTH_TOKEN" ]; then
+    warning "Skipping usage analytics configuration (no REST API access)"
+    COLLECT_USAGE=false
+    return 0
+  fi
+
+  # Skip interactive prompt if --analytics-period was provided on CLI
+  if [ "$ANALYTICS_PERIOD_SET" = "true" ]; then
+    info "Analytics period: $USAGE_PERIOD (set via --analytics-period)"
+    return 0
+  fi
+
+  print_info_box "STEP 6: USAGE ANALYTICS TIME PERIOD" \
+    "" \
+    "${WHITE}WHY WE ASK:${NC}" \
+    "Usage analytics help identify which dashboards, alerts, and" \
+    "searches are actively used. A longer period gives more accurate" \
+    "data but takes longer to collect." \
+    "" \
+    "${WHITE}RECOMMENDATION:${NC}" \
+    "30 days provides a good balance of accuracy and speed."
+
+  echo ""
+  echo -e "${WHITE}Select usage analytics collection period:${NC}"
+  echo ""
+  echo -e "  1. Last 7 days   ${GRAY}(fastest, limited data)${NC}"
+  echo -e "  2. Last 30 days  ${GREEN}(recommended)${NC}"
+  echo -e "  3. Last 90 days  ${GRAY}(more comprehensive)${NC}"
+  echo -e "  4. Last 365 days ${GRAY}(full year, slowest)${NC}"
+  echo -e "  5. Skip usage analytics"
+  echo ""
+
+  local choice
+  prompt_input "Enter choice" "2" choice
+
+  case "$choice" in
+    1) USAGE_PERIOD="7d"; info "Will collect 7 days of usage data" ;;
+    2) USAGE_PERIOD="30d"; info "Will collect 30 days of usage data" ;;
+    3) USAGE_PERIOD="90d"; info "Will collect 90 days of usage data" ;;
+    4) USAGE_PERIOD="365d"; info "Will collect 365 days of usage data" ;;
+    5) COLLECT_USAGE=false; info "Usage analytics disabled" ;;
+    *) USAGE_PERIOD="30d"; info "Defaulting to 30 days" ;;
+  esac
+
+  echo ""
+}
+
+# =============================================================================
+# CREATE EXPORT DIRECTORY
+# =============================================================================
+
+create_export_directory() {
+  print_info_box "STEP 7: PREPARING EXPORT" \
+    "" \
+    "${WHITE}Creating export directory structure...${NC}"
+
+  echo ""
+
+  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+  local hostname=$(get_hostname short)
+  EXPORT_NAME="dma_export_${hostname}_${TIMESTAMP}"
+  EXPORT_DIR="/tmp/$EXPORT_NAME"
+  LOG_FILE="$EXPORT_DIR/export.log"
+
+  progress "Creating directory: $EXPORT_DIR"
+  rm -rf "$EXPORT_DIR"
+  mkdir -p "$EXPORT_DIR"
+  # DMA analytics - all migration-specific data collected by DMA
+  mkdir -p "$EXPORT_DIR/dma_analytics"
+  mkdir -p "$EXPORT_DIR/dma_analytics/system_info"
+  mkdir -p "$EXPORT_DIR/dma_analytics/rbac"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics"
+  mkdir -p "$EXPORT_DIR/dma_analytics/usage_analytics/ingestion_infrastructure"
+  mkdir -p "$EXPORT_DIR/dma_analytics/indexes"
+  # Splunk configurations
+  mkdir -p "$EXPORT_DIR/_system/local"
+  # NOTE: Dashboards are now stored in app-scoped folders (v2 structure)
+  # $EXPORT_DIR/{AppName}/dashboards/classic/ and /studio/
+  # This prevents name collisions when multiple apps have same-named dashboards
+
+  touch "$LOG_FILE"
+  log "DMA Export Started"
+  log "Script Version: $SCRIPT_VERSION"
+  log "Export Directory: $EXPORT_DIR"
+
+  # Initialize debug logging if enabled
+  init_debug_log
+
+  # Initialize Phase 1 resilience tracking
+  init_resilience_tracking
+  log "Resilience config: BATCH_SIZE=$BATCH_SIZE, MAX_RETRIES=$MAX_RETRIES, API_TIMEOUT=${API_TIMEOUT}s"
+
+  success "Export directory created"
+  echo ""
+}
+
+# =============================================================================
+# COLLECTION FUNCTIONS
+# =============================================================================
+
+collect_system_info() {
+  progress "Collecting system information..."
+
+  # Basic system info
+  {
+    echo "{"
+    echo "  \"hostname\": \"$(get_hostname)\","
+    echo "  \"platform\": \"$(uname -s)\","
+    echo "  \"platformVersion\": \"$(uname -r)\","
+    echo "  \"architecture\": \"$(uname -m)\","
+    echo "  \"splunkHome\": \"$SPLUNK_HOME\","
+    echo "  \"splunkFlavor\": \"$SPLUNK_FLAVOR\","
+    echo "  \"splunkRole\": \"$SPLUNK_ROLE\","
+    echo "  \"splunkArchitecture\": \"$SPLUNK_ARCHITECTURE\","
+    echo "  \"exportTimestamp\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\","
+    echo "  \"exportVersion\": \"$SCRIPT_VERSION\""
+    echo "}"
+  } > "$EXPORT_DIR/dma_analytics/system_info/environment.json"
+
+  # Splunk version
+  if [ -f "$SPLUNK_HOME/etc/splunk.version" ]; then
+    cp "$SPLUNK_HOME/etc/splunk.version" "$EXPORT_DIR/dma_analytics/system_info/"
+  fi
+
+  # REST API system info (use -G to force GET request with query params)
+  if [ -n "$AUTH_HEADER" ]; then
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/info" \
+      -d "output_mode=json" \
+      > "$EXPORT_DIR/dma_analytics/system_info/server_info.json" 2>/dev/null
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/apps/local" \
+      -d "output_mode=json" -d "count=0" \
+      > "$EXPORT_DIR/dma_analytics/system_info/installed_apps.json" 2>/dev/null
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/distributed/peers" \
+      -d "output_mode=json" \
+      > "$EXPORT_DIR/dma_analytics/system_info/search_peers.json" 2>/dev/null
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/licenser/licenses" \
+      -d "output_mode=json" \
+      > "$EXPORT_DIR/dma_analytics/system_info/license_info.json" 2>/dev/null
+  fi
+
+  success "System information collected"
+}
+
+# =============================================================================
+# SYSTEM-LEVEL MACROS COLLECTION
+# =============================================================================
+# Splunk Enterprise stores global macros in multiple locations:
+#
+# 1. $SPLUNK_HOME/etc/system/local/macros.conf - System-level (automatically global)
+# 2. $SPLUNK_HOME/etc/apps/<app>/local/macros.conf with export=system in metadata
+#
+# The configuration precedence order (highest to lowest):
+#   1. etc/users/<user>/<app>/local/macros.conf (private)
+#   2. etc/apps/<app>/local/macros.conf (app-level)
+#   3. etc/apps/<app>/default/macros.conf (app defaults)
+#   4. etc/system/local/macros.conf (GLOBAL - captured here)
+#   5. etc/apps/*/local/macros.conf with export=system
+#   6. etc/apps/*/default/macros.conf with export=system
+#   7. etc/system/default/macros.conf (never modify)
+#
+# This function captures:
+#   - System-level macros (etc/system/local/)
+#   - User-level macros if COLLECT_USER_MACROS is enabled
+#
+# App-level macros and metadata are captured in collect_app_configs()
+# =============================================================================
+collect_system_macros() {
+  progress "Collecting system-level macros..."
+
+  local macros_found=0
+
+  # Create system directory structure in export
+  # Using _system prefix to distinguish from app directories
+  mkdir -p "$EXPORT_DIR/_system/local"
+  mkdir -p "$EXPORT_DIR/_system/default"
+
+  # Capture system/local macros (administrator-created global macros)
+  if [ -f "$SPLUNK_HOME/etc/system/local/macros.conf" ]; then
+    cp "$SPLUNK_HOME/etc/system/local/macros.conf" "$EXPORT_DIR/_system/local/"
+    local count=$(grep -c '^\[' "$SPLUNK_HOME/etc/system/local/macros.conf" 2>/dev/null || echo 0)
+    macros_found=$((macros_found + count))
+    log "Copied system/local/macros.conf ($count macros)"
+  fi
+
+  # Capture system/default macros (Splunk-provided, for reference only)
+  if [ -f "$SPLUNK_HOME/etc/system/default/macros.conf" ]; then
+    cp "$SPLUNK_HOME/etc/system/default/macros.conf" "$EXPORT_DIR/_system/default/"
+    local count=$(grep -c '^\[' "$SPLUNK_HOME/etc/system/default/macros.conf" 2>/dev/null || echo 0)
+    macros_found=$((macros_found + count))
+    log "Copied system/default/macros.conf ($count macros, reference only)"
+  fi
+
+  # Also capture system-level metadata if it exists
+  if [ -d "$SPLUNK_HOME/etc/system/metadata" ]; then
+    mkdir -p "$EXPORT_DIR/_system/metadata"
+    for meta_file in "default.meta" "local.meta"; do
+      if [ -f "$SPLUNK_HOME/etc/system/metadata/$meta_file" ]; then
+        cp "$SPLUNK_HOME/etc/system/metadata/$meta_file" "$EXPORT_DIR/_system/metadata/"
+        log "Copied system/metadata/$meta_file"
+      fi
+    done
+  fi
+
+  # Optionally capture user-level macros (private macros per user)
+  # This is disabled by default as user macros may contain sensitive/private searches
+  if [ "${COLLECT_USER_MACROS:-false}" = true ] && [ -d "$SPLUNK_HOME/etc/users" ]; then
+    info "Collecting user-level macros..."
+    mkdir -p "$EXPORT_DIR/_users"
+
+    local user_macro_count=0
+    for user_dir in "$SPLUNK_HOME/etc/users/"*/; do
+      if [ -d "$user_dir" ]; then
+        local user=$(basename "$user_dir")
+
+        for app_dir in "$user_dir"*/; do
+          if [ -d "$app_dir" ]; then
+            local app=$(basename "$app_dir")
+
+            if [ -f "$app_dir/local/macros.conf" ]; then
+              mkdir -p "$EXPORT_DIR/_users/$user/$app/local"
+              cp "$app_dir/local/macros.conf" "$EXPORT_DIR/_users/$user/$app/local/"
+              local count=$(grep -c '^\[' "$app_dir/local/macros.conf" 2>/dev/null || echo 0)
+              user_macro_count=$((user_macro_count + count))
+            fi
+
+            # Also capture user-level metadata
+            if [ -f "$app_dir/metadata/local.meta" ]; then
+              mkdir -p "$EXPORT_DIR/_users/$user/$app/metadata"
+              cp "$app_dir/metadata/local.meta" "$EXPORT_DIR/_users/$user/$app/metadata/"
+            fi
+          fi
+        done
+      fi
+    done
+
+    if [ "$user_macro_count" -gt 0 ]; then
+      log "Collected $user_macro_count user-level macros"
+      macros_found=$((macros_found + user_macro_count))
+    fi
+  fi
+
+  if [ "$macros_found" -gt 0 ]; then
+    success "System-level macros collected ($macros_found total)"
+  else
+    info "No system-level macros found (macros may be in app directories)"
+  fi
+}
+
+collect_app_configs() {
+  local app=$1
+  local app_path="$SPLUNK_HOME/etc/apps/$app"
+
+  if [ ! -d "$app_path" ]; then
+    warning "App directory not found: $app"
+    return 1
+  fi
+
+  info "Exporting app: $app"
+  mkdir -p "$EXPORT_DIR/$app"
+
+  # Configuration files to export
+  local conf_files=(
+    "props.conf"
+    "transforms.conf"
+    "eventtypes.conf"
+    "tags.conf"
+    "indexes.conf"
+    "macros.conf"
+    "savedsearches.conf"
+    "inputs.conf"
+    "outputs.conf"
+    "collections.conf"
+    "fields.conf"
+    "workflow_actions.conf"
+    "commands.conf"
+  )
+
+  # Export from default/ and local/
+  for conf_dir in "default" "local"; do
+    if [ -d "$app_path/$conf_dir" ]; then
+      mkdir -p "$EXPORT_DIR/$app/$conf_dir"
+
+      for conf_file in "${conf_files[@]}"; do
+        if [ -f "$app_path/$conf_dir/$conf_file" ]; then
+          cp "$app_path/$conf_dir/$conf_file" "$EXPORT_DIR/$app/$conf_dir/"
+          log "Copied: $app/$conf_dir/$conf_file"
+        fi
+      done
+    fi
+  done
+
+  # Export dashboards (XML) - use cp with glob instead of find for container compatibility
+  if [ "$COLLECT_DASHBOARDS" = true ]; then
+    for dash_dir in "default/data/ui/views" "local/data/ui/views"; do
+      if [ -d "$app_path/$dash_dir" ]; then
+        mkdir -p "$EXPORT_DIR/$app/$dash_dir"
+        cp "$app_path/$dash_dir/"*.xml "$EXPORT_DIR/$app/$dash_dir/" 2>/dev/null
+        local dash_count=$(ls -1 "$EXPORT_DIR/$app/$dash_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$dash_count" -gt 0 ]; then
+          log "Copied $dash_count dashboards from $app/$dash_dir"
+          # NOTE: Don't increment STATS_DASHBOARDS here - it will be counted
+          # via REST API in collect_dashboard_studio() to avoid double-counting.
+          # The XML files are the same dashboards retrieved via REST API.
+          STATS_DASHBOARDS_XML=$((STATS_DASHBOARDS_XML + dash_count))
+        fi
+      fi
+    done
+  fi
+
+  # Export lookup tables (use cp with glob instead of find for container compatibility)
+  if [ "$COLLECT_LOOKUPS" = true ] && [ -d "$app_path/lookups" ]; then
+    mkdir -p "$EXPORT_DIR/$app/lookups"
+    cp "$app_path/lookups/"*.csv "$EXPORT_DIR/$app/lookups/" 2>/dev/null
+    log "Copied lookup tables from $app"
+  fi
+
+  # Export datamodels (per-model JSON definitions). Splunk stores datamodel
+  # structural definitions — constraints, parent_dataset, fields, calculations
+  # — at <app>/default/data/models/<ModelName>.json (and local/ for overrides),
+  # NOT in datamodels.conf (which only carries acceleration settings).
+  # Curator's CIM expansion path consumes these to translate `| datamodel X Y`
+  # references; without them, custom customer datamodels fall through to a
+  # generic UNSUPPORTED comment.
+  for models_dir in "default/data/models" "local/data/models"; do
+    if [ -d "$app_path/$models_dir" ]; then
+      mkdir -p "$EXPORT_DIR/$app/$models_dir"
+      cp "$app_path/$models_dir/"*.json "$EXPORT_DIR/$app/$models_dir/" 2>/dev/null
+      local model_count
+      model_count=$(ls -1 "$EXPORT_DIR/$app/$models_dir/"*.json 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$model_count" -gt 0 ]; then
+        log "Copied $model_count datamodels from $app/$models_dir"
+      fi
+    fi
+  done
+
+  # Export metadata files (essential for determining macro export scope)
+  # The local.meta file contains [macros/<name>] export = system for globally shared macros
+  if [ -d "$app_path/metadata" ]; then
+    mkdir -p "$EXPORT_DIR/$app/metadata"
+    for meta_file in "default.meta" "local.meta"; do
+      if [ -f "$app_path/metadata/$meta_file" ]; then
+        cp "$app_path/metadata/$meta_file" "$EXPORT_DIR/$app/metadata/"
+        log "Copied metadata: $app/metadata/$meta_file"
+      fi
+    done
+  fi
+
+  # Count alerts
+  local alert_count=0
+  for conf_dir in "default" "local"; do
+    if [ -f "$EXPORT_DIR/$app/$conf_dir/savedsearches.conf" ]; then
+      local alerts=$(grep -c "alert.track" "$EXPORT_DIR/$app/$conf_dir/savedsearches.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+      [ -z "$alerts" ] || ! [[ "$alerts" =~ ^[0-9]+$ ]] && alerts=0
+      alert_count=$((alert_count + alerts))
+    fi
+  done
+  STATS_ALERTS=$((STATS_ALERTS + alert_count))
+
+  return 0
+}
+
+collect_dashboard_studio() {
+  if [ -z "$AUTH_HEADER" ]; then
+    warning "Skipping dashboards (no REST API access)"
+    return 0
+  fi
+
+  if [ "$COLLECT_DASHBOARDS" = false ]; then
+    return 0
+  fi
+
+  progress "Collecting dashboards via REST API..."
+
+  # Determine which apps to collect dashboards from
+  local apps_to_query=()
+  if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    # Use selected apps - query per-app for efficiency
+    apps_to_query=("${SELECTED_APPS[@]}")
+    info "Collecting dashboards from ${#apps_to_query[@]} selected app(s): ${apps_to_query[*]}"
+  else
+    # No app filter - query all dashboards globally
+    apps_to_query=("-")  # "-" means all apps in Splunk REST API
+  fi
+
+  # First pass: count total dashboards across selected apps for progress bar.
+  #
+  # IMPORTANT: Splunk's /servicesNS/-/-/data/ui/views endpoint returns ONE
+  # entry per (user-namespace × dashboard) combination. With ~24 active users
+  # and most dashboards globally shared, a 5,000-dashboard environment came
+  # back as ~124,000 entries — each global dashboard duplicated once per
+  # user namespace.
+  #
+  # The previous regex extraction (`grep -o '"name":"[^"]*"'`) had no dedup,
+  # so total_dashboards inflated by ~24× and the per-dashboard fetch loop
+  # below tried to GET each dashboard ~24× — turning a few-minute export
+  # into a 17-hour ETA.
+  #
+  # Fix: parse the JSON properly with Python and dedupe by (acl.app, name).
+  # That gives us EXACTLY ONE entry per real dashboard, and we capture the
+  # dashboard's true owning app instead of the query wildcard "-".
+  local total_dashboards=0
+  local dashboard_data=()  # Array of "owning_app|name" pairs (deduped)
+
+  local dedupe_tmpfile="$EXPORT_DIR/dma_analytics/system_info/.dashboards_deduped.list"
+  : > "$dedupe_tmpfile"
+
+  for app in "${apps_to_query[@]}"; do
+    local api_path
+    if [ "$app" = "-" ]; then
+      api_path="/servicesNS/-/-/data/ui/views"
+    else
+      api_path="/servicesNS/-/${app}/data/ui/views"
+    fi
+
+    local temp_list="$EXPORT_DIR/dma_analytics/system_info/.dashboards_${app//\//_}.json"
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}${api_path}" \
+      -H "Accept: application/json" \
+      -d "output_mode=json" -d "count=0" \
+      > "$temp_list" 2>/dev/null
+
+    if [ -s "$temp_list" ]; then
+      # Pull (acl.app, name) per entry — Splunk's namespace listing surfaces
+      # the same dashboard once per user, but acl.app + name uniquely
+      # identify each REAL dashboard. Dedupe by appending to a list and
+      # we'll sort -u once after the per-app loop completes.
+      "$PYTHON_CMD" -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+seen = set()
+for entry in data.get('entry', []) or []:
+    name = entry.get('name')
+    acl = entry.get('acl') or {}
+    owning_app = acl.get('app') or '$app'
+    if not name or not owning_app:
+        continue
+    key = (owning_app, name)
+    if key in seen:
+        continue
+    seen.add(key)
+    print(f'{owning_app}|{name}')
+" "$temp_list" >> "$dedupe_tmpfile" 2>/dev/null
+    fi
+    rm -f "$temp_list" 2>/dev/null
+  done
+
+  # Final cross-app dedupe — same (owning_app, name) might surface from
+  # multiple per-app iterations if SELECTED_APPS overlaps with another app's
+  # cross-namespace visibility. sort -u handles it cheaply.
+  if [ -s "$dedupe_tmpfile" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && dashboard_data+=("$line")
+    done < <(sort -u "$dedupe_tmpfile")
+    total_dashboards=${#dashboard_data[@]}
+  fi
+  rm -f "$dedupe_tmpfile" 2>/dev/null
+
+  if [ $total_dashboards -eq 0 ]; then
+    warning "No dashboards found in selected apps"
+    return 0
+  fi
+
+  log "Dashboards: deduped to $total_dashboards unique (acl.app, name) pairs across ${#apps_to_query[@]} app namespace(s)"
+
+  # Show scale warning for large environments
+  show_scale_warning "dashboards" "$total_dashboards" 200
+
+  # Initialize progress bar
+  progress_init "Exporting Dashboards (Classic & Studio)" "$total_dashboards"
+
+  # Parse and export each dashboard with progress
+  local classic_count=0
+  local studio_count=0
+  local failed_count=0
+  local batch_count=0
+  local batch_size=10
+
+  for entry in "${dashboard_data[@]}"; do
+    local query_app="${entry%%|*}"
+    local dashboard_name="${entry#*|}"
+
+    # Rate limit API calls
+    sleep "$API_DELAY_SECONDS"
+
+    # Fetch dashboard to temp file - use app-specific endpoint for accuracy
+    local temp_file="$EXPORT_DIR/dma_analytics/system_info/.dashboard_temp.json"
+    local fetch_path
+    if [ "$query_app" = "-" ]; then
+      fetch_path="/servicesNS/-/-/data/ui/views/$dashboard_name"
+    else
+      fetch_path="/servicesNS/-/${query_app}/data/ui/views/$dashboard_name"
+    fi
+
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}${fetch_path}" \
+      -H "Accept: application/json" \
+      -d "output_mode=json" \
+      > "$temp_file" 2>/dev/null
+
+    if [ -s "$temp_file" ]; then
+      # Extract the owning app from the dashboard's ACL (v2 structure)
+      local dashboard_app=""
+      dashboard_app=$(grep -oP '"app"\s*:\s*"\K[^"]+' "$temp_file" 2>/dev/null | head -1)
+      if [ -z "$dashboard_app" ]; then
+        dashboard_app="${query_app}"
+        [ "$dashboard_app" = "-" ] && dashboard_app="unknown_app"
+      fi
+
+      # Create app-scoped dashboard folders (v2 structure)
+      mkdir -p "$EXPORT_DIR/$dashboard_app/dashboards/classic"
+      mkdir -p "$EXPORT_DIR/$dashboard_app/dashboards/studio"
+
+      # Determine dashboard type by examining content
+      # Dashboard Studio v2 dashboards can be identified by:
+      # 1. eai:data contains "splunk-dashboard-studio" template reference (example dashboards)
+      # 2. eai:data contains '<dashboard version="2"' (user-created Studio dashboards)
+      # 3. eai:data contains '<definition>' element (contains actual JSON definition)
+      # 4. eai:data starts with { (direct JSON format - rare)
+      # Classic dashboards have <dashboard> or <form> without version="2"
+
+      local is_studio=false
+      local has_json_definition=false
+      local is_template_reference=false
+
+      # Check for Dashboard Studio v2 format (user-created dashboards)
+      # These have <dashboard version="2"> and <definition><![CDATA[{JSON}]]></definition>
+      if grep -q 'version=\\"2\\"' "$temp_file" 2>/dev/null || grep -q 'version=\"2\"' "$temp_file" 2>/dev/null; then
+        is_studio=true
+        # Check if it has actual JSON definition embedded
+        if grep -q '<definition>' "$temp_file" 2>/dev/null || grep -q '\\u003cdefinition\\u003e' "$temp_file" 2>/dev/null; then
+          has_json_definition=true
+          log "Dashboard Studio v2 with JSON definition: $dashboard_name"
+        fi
+      fi
+
+      # Check for Dashboard Studio template reference (example dashboards)
+      if grep -q "splunk-dashboard-studio" "$temp_file" 2>/dev/null; then
+        is_studio=true
+        is_template_reference=true
+        log "Dashboard Studio template reference: $dashboard_name"
+      fi
+
+      # Also check if eai:data starts with { (direct JSON format - some Studio dashboards)
+      local eai_data_start=""
+      eai_data_start=$(grep -oP '"eai:data"\s*:\s*"\K.' "$temp_file" 2>/dev/null | head -1)
+      if [ "$eai_data_start" = "{" ]; then
+        is_studio=true
+        has_json_definition=true
+      fi
+
+      if [ "$is_studio" = true ]; then
+        # Dashboard Studio - save to app-scoped studio folder (v2 structure)
+        mv "$temp_file" "$EXPORT_DIR/$dashboard_app/dashboards/studio/${dashboard_name}.json"
+        ((studio_count++))
+
+        # Extract JSON definition if present and save separately for easier processing
+        if [ "$has_json_definition" = true ]; then
+          # Try to extract the definition JSON from CDATA
+          # The JSON is inside: <definition><![CDATA[{...}]]></definition>
+          # In the JSON response, this is escaped as: \\u003cdefinition\\u003e\\u003c![CDATA[{...}]]\\u003e
+          local definition_file="$EXPORT_DIR/$dashboard_app/dashboards/studio/${dashboard_name}_definition.json"
+
+          # Extract definition content using Python for reliable JSON/CDATA parsing
+          python3 -c "
+import json
+import re
+import sys
+
+try:
+    with open('$EXPORT_DIR/$dashboard_app/dashboards/studio/${dashboard_name}.json') as f:
+        data = json.load(f)
+
+    eai_data = data.get('entry', [{}])[0].get('content', {}).get('eai:data', '')
+
+    # Look for definition CDATA block
+    # Pattern: <definition><![CDATA[{...}]]></definition>
+    match = re.search(r'<definition><!\\[CDATA\\[(.+?)\\]\\]></definition>', eai_data, re.DOTALL)
+    if match:
+        json_content = match.group(1)
+        # Validate it's valid JSON
+        parsed = json.loads(json_content)
+        # Save the extracted JSON
+        with open('$definition_file', 'w') as out:
+            json.dump(parsed, out, indent=2)
+        print('extracted')
+    else:
+        print('no-definition')
+except Exception as e:
+    print(f'error: {e}')
+" 2>/dev/null 1>/dev/null
+
+          if [ -f "$definition_file" ]; then
+            log "  → Extracted JSON definition to ${dashboard_name}_definition.json"
+          fi
+        elif [ "$is_template_reference" = true ]; then
+          # Try to extract definition from splunk-dashboard-studio app's compiled JS
+          local studio_js_path="$SPLUNK_HOME/etc/apps/splunk-dashboard-studio/appserver/static/build/examples/${dashboard_name}.js"
+          if [ -f "$studio_js_path" ]; then
+            local definition_file="$EXPORT_DIR/$dashboard_app/dashboards/studio/${dashboard_name}_definition.json"
+            # Extract JSON definition from compiled JS using Python
+            python3 -c "
+import re
+import json
+import sys
+
+try:
+    with open('$studio_js_path', 'r') as f:
+        js_content = f.read()
+
+    # Dashboard Studio embeds JSON as: var e={visualizations:{...},dataSources:{...},...}
+    # or: const e={...};
+    # The definition ends with ,title:\"...\"}; followed by render code
+
+    # Look for the dashboard definition pattern - it starts after '={' and contains layout:
+    # Pattern: ={visualizations:...,dataSources:...,layout:...,title:\"...\"}
+    # We need to find the balanced braces
+
+    # Find potential start points (after '={' that contain 'visualizations')
+    matches = list(re.finditer(r'[=,]\s*(\{[^}]*visualizations[^}]*\{)', js_content))
+
+    for match in matches:
+        start_idx = match.start() + 1  # Skip the '=' or ','
+        while js_content[start_idx] in ' \t\n':
+            start_idx += 1
+
+        # Count braces to find matching close
+        brace_count = 0
+        idx = start_idx
+        in_string = False
+        escape_next = False
+
+        while idx < len(js_content):
+            char = js_content[idx]
+
+            if escape_next:
+                escape_next = False
+                idx += 1
+                continue
+
+            if char == '\\\\':
+                escape_next = True
+                idx += 1
+                continue
+
+            if char == '\"' and not escape_next:
+                in_string = not in_string
+
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        # Found the end
+                        js_obj = js_content[start_idx:idx+1]
+
+                        # Check if this looks like a dashboard definition
+                        if 'layout' in js_obj and 'dataSources' in js_obj:
+                            # Convert JS object notation to JSON
+                            # Replace unquoted keys with quoted keys
+                            json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1\"\2\":', js_obj)
+                            # Replace single quotes with double quotes
+                            json_str = json_str.replace(\"'\", '\"')
+
+                            try:
+                                # Try to parse and re-serialize for valid JSON
+                                # This is a simplified approach - may need refinement
+                                with open('$definition_file', 'w') as out:
+                                    out.write(js_obj)  # Write raw JS object for now
+                                print('extracted')
+                                sys.exit(0)
+                            except:
+                                pass
+                        break
+            idx += 1
+
+    print('not_found')
+except Exception as e:
+    print(f'error: {e}')
+" 2>/dev/null 1>/dev/null
+
+            if [ -f "$definition_file" ]; then
+              log "  → Extracted JSON definition from Studio JS: ${dashboard_name}_definition.json"
+            else
+              log "  → Template reference (JS file found but could not extract definition)"
+            fi
+          else
+            log "  → Template reference (JS file not found: $studio_js_path)"
+          fi
+        fi
+
+        log "Exported Dashboard Studio: $dashboard_app/$dashboard_name"
+      else
+        # Classic dashboard - save to app-scoped classic folder (v2 structure)
+        mv "$temp_file" "$EXPORT_DIR/$dashboard_app/dashboards/classic/${dashboard_name}.json"
+        ((classic_count++))
+        log "Exported Classic Dashboard: $dashboard_app/$dashboard_name"
+      fi
+    else
+      ((failed_count++))
+      log "Failed to export: $dashboard_name"
+      rm -f "$temp_file" 2>/dev/null
+    fi
+
+    ((batch_count++))
+
+    # Update progress every batch_size items (reduces terminal I/O overhead)
+    if [ $((batch_count % batch_size)) -eq 0 ] || [ "$batch_count" -eq "$total_dashboards" ]; then
+      progress_update "$batch_count"
+    fi
+  done
+
+  # Clean up temp file
+  rm -f "$EXPORT_DIR/dma_analytics/system_info/.dashboard_temp.json" 2>/dev/null
+
+  progress_complete
+
+  if [ "$failed_count" -gt 0 ]; then
+    warning "Failed to export $failed_count dashboards (see log for details)"
+  fi
+
+  success "Exported $classic_count Classic + $studio_count Dashboard Studio dashboards"
+  STATS_DASHBOARDS=$((STATS_DASHBOARDS + classic_count + studio_count))
+
+  # Also collect Dashboard Studio example JS files if available
+  collect_dashboard_studio_examples
+}
+
+# Collect Dashboard Studio example definitions from compiled JS files
+collect_dashboard_studio_examples() {
+  local studio_examples_dir="$SPLUNK_HOME/etc/apps/splunk-dashboard-studio/appserver/static/build/examples"
+
+  if [ ! -d "$studio_examples_dir" ]; then
+    log "Dashboard Studio examples directory not found - skipping"
+    return 0
+  fi
+
+  progress "Collecting Dashboard Studio example definitions..."
+
+  # Create directory for studio example JS files
+  mkdir -p "$EXPORT_DIR/dashboards_studio_examples"
+
+  # Count and copy all example JS files
+  local example_count=0
+  for js_file in "$studio_examples_dir"/*.js; do
+    if [ -f "$js_file" ]; then
+      local basename=$(basename "$js_file")
+      cp "$js_file" "$EXPORT_DIR/dashboards_studio_examples/"
+      ((example_count++))
+    fi
+  done
+
+  if [ "$example_count" -gt 0 ]; then
+    success "Collected $example_count Dashboard Studio example JS files"
+    log "  → These contain the actual JSON definitions for example dashboards"
+  fi
+}
+
+collect_rbac() {
+  if [ -z "$AUTH_HEADER" ]; then
+    warning "Skipping RBAC collection (no REST API access)"
+    return 0
+  fi
+
+  if [ "$COLLECT_RBAC" = false ]; then
+    return 0
+  fi
+
+  progress "Collecting users, roles, and groups..."
+
+  # =========================================================================
+  # APP-SCOPED RBAC COLLECTION
+  # When scoped mode is enabled, only collect users who have accessed the
+  # selected apps. This dramatically reduces the user list in large environments.
+  # =========================================================================
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    info "App-scoped mode: Collecting users who accessed selected apps only"
+
+    # Build app filter for audit search
+    local app_filter=$(get_app_filter "app")
+
+    # Get users who have activity in the selected apps (via _audit)
+    # This searches audit logs for search activity within the selected apps
+    local user_search="search index=_audit action=search ${app_filter} earliest=-${USAGE_PERIOD} | stats count as activity, latest(_time) as last_active by user | sort -activity"
+
+    # Create a temporary search job to get active users in these apps
+    local temp_file=$(mktemp)
+    local http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" \
+      -d "earliest_time=-${USAGE_PERIOD}" \
+      -d "latest_time=now" \
+      --data-urlencode "search=$user_search" \
+      2>/dev/null)
+
+    if [ "$http_code" = "201" ]; then
+      local sid=$(grep -o '"sid":"[^"]*"' "$temp_file" | cut -d'"' -f4)
+      if [ -n "$sid" ]; then
+        # Wait for search to complete (max 60 seconds)
+        local waited=0
+        local is_done="false"
+        while [ "$is_done" != "true" ] && [ $waited -lt 60 ]; do
+          sleep 2
+          waited=$((waited + 2))
+          local status=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+            "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid" \
+            -d "output_mode=json" 2>/dev/null)
+          is_done=$(echo "$status" | grep -o '"isDone":[^,}]*' | cut -d: -f2 | tr -d ' ')
+        done
+
+        if [ "$is_done" = "true" ]; then
+          curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+            "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results" \
+            -d "output_mode=json" -d "count=0" \
+            > "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" 2>/dev/null
+
+          local active_users=$(grep -c '"user"' "$EXPORT_DIR/dma_analytics/rbac/users_active_in_apps.json" 2>/dev/null | tr -d ' ')
+          success "Found $active_users users with activity in selected apps"
+        fi
+      fi
+    fi
+    rm -f "$temp_file"
+  fi
+
+  # Always collect full user list from REST API (for reference)
+  # Users (use -G to force GET request)
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/users" \
+    -d "output_mode=json" -d "count=0" \
+    > "$EXPORT_DIR/dma_analytics/rbac/users.json" 2>/dev/null
+
+  local user_count=$(grep -o '"name"' "$EXPORT_DIR/dma_analytics/rbac/users.json" 2>/dev/null | wc -l | tr -d ' ')
+  STATS_USERS=$user_count
+
+  # Roles (use -G to force GET request)
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authorization/roles" \
+    -d "output_mode=json" -d "count=0" \
+    > "$EXPORT_DIR/dma_analytics/rbac/roles.json" 2>/dev/null
+
+  # Capabilities inventory (full list of capabilities this Splunk knows about)
+  local caps_response http_code_caps entry_count
+  caps_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authorization/capabilities" \
+    -d "output_mode=json" 2>/dev/null)
+  if echo "$caps_response" | grep -q '"entry"'; then
+    echo "$caps_response" > "$EXPORT_DIR/dma_analytics/rbac/capabilities.json"
+    log "Collected system capabilities"
+  else
+    echo '{"note": "Capabilities endpoint not available or access denied"}' \
+      > "$EXPORT_DIR/dma_analytics/rbac/capabilities.json"
+  fi
+
+  # SAML group mappings (graceful when SAML not configured)
+  local saml_groups_response
+  saml_groups_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/admin/SAML-groups" \
+    -d "output_mode=json" 2>/dev/null)
+  entry_count=$(echo "$saml_groups_response" | grep -c '"name"' 2>/dev/null || echo 0)
+  if [ "${entry_count:-0}" -gt 0 ] 2>/dev/null; then
+    echo "$saml_groups_response" > "$EXPORT_DIR/dma_analytics/rbac/saml_groups.json"
+    log "Collected $entry_count SAML group mappings"
+  else
+    echo '{"configured": false, "note": "SAML not configured or no group mappings defined"}' \
+      > "$EXPORT_DIR/dma_analytics/rbac/saml_groups.json"
+  fi
+
+  # SAML provider configuration
+  local saml_config_response
+  saml_config_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/providers/SAML" \
+    -d "output_mode=json" 2>/dev/null)
+  if echo "$saml_config_response" | grep -q '"entry"'; then
+    echo "$saml_config_response" > "$EXPORT_DIR/dma_analytics/rbac/saml_config.json"
+  else
+    echo '{"configured": false, "note": "SAML authentication not configured"}' \
+      > "$EXPORT_DIR/dma_analytics/rbac/saml_config.json"
+  fi
+
+  # LDAP group mappings (graceful when LDAP not configured)
+  local ldap_groups_response
+  ldap_groups_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/admin/LDAP-groups" \
+    -d "output_mode=json" 2>/dev/null)
+  entry_count=$(echo "$ldap_groups_response" | grep -c '"name"' 2>/dev/null || echo 0)
+  if [ "${entry_count:-0}" -gt 0 ] 2>/dev/null; then
+    echo "$ldap_groups_response" > "$EXPORT_DIR/dma_analytics/rbac/ldap_groups.json"
+    log "Collected $entry_count LDAP group mappings"
+  else
+    echo '{"configured": false, "note": "LDAP not configured or no group mappings defined"}' \
+      > "$EXPORT_DIR/dma_analytics/rbac/ldap_groups.json"
+  fi
+
+  # LDAP provider configuration
+  local ldap_config_response
+  ldap_config_response=$(curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/providers/LDAP" \
+    -d "output_mode=json" 2>/dev/null)
+  if echo "$ldap_config_response" | grep -q '"entry"'; then
+    echo "$ldap_config_response" > "$EXPORT_DIR/dma_analytics/rbac/ldap_config.json"
+    log "Collected LDAP provider configuration"
+  else
+    echo '{"configured": false, "note": "LDAP authentication not configured"}' \
+      > "$EXPORT_DIR/dma_analytics/rbac/ldap_config.json"
+  fi
+
+  # Auth config (with password redaction)
+  if [ -f "$SPLUNK_HOME/etc/system/local/authentication.conf" ]; then
+    sed 's/password\s*=.*/password = [REDACTED]/gi' \
+      "$SPLUNK_HOME/etc/system/local/authentication.conf" \
+      > "$EXPORT_DIR/dma_analytics/rbac/authentication.conf" 2>/dev/null
+  fi
+
+  # Authorization config
+  if [ -f "$SPLUNK_HOME/etc/system/local/authorize.conf" ]; then
+    cp "$SPLUNK_HOME/etc/system/local/authorize.conf" "$EXPORT_DIR/dma_analytics/rbac/"
+  fi
+
+  success "Collected $user_count users, roles, capabilities, LDAP/SAML config"
+}
+
+# =============================================================================
+# APP-SCOPED FILTER HELPERS
+# =============================================================================
+
+# Build SPL filter for selected apps
+# Usage: get_app_filter "app" -> (app="app1" OR app="app2")
+# Usage: get_app_filter "eai:acl.app" -> (eai:acl.app="app1" OR eai:acl.app="app2")
+get_app_filter() {
+  local field="${1:-app}"
+
+  if [ "$SCOPE_TO_APPS" != "true" ] || [ ${#SELECTED_APPS[@]} -eq 0 ]; then
+    # No filtering - return empty string
+    echo ""
+    return
+  fi
+
+  # Build OR clause: (app="app1" OR app="app2" OR ...)
+  local filter="("
+  local first=true
+  for app in "${SELECTED_APPS[@]}"; do
+    if [ "$first" = "true" ]; then
+      filter+="${field}=\"${app}\""
+      first=false
+    else
+      filter+=" OR ${field}=\"${app}\""
+    fi
+  done
+  filter+=")"
+
+  echo "$filter"
+}
+
+# Build SPL IN clause for selected apps
+# Usage: get_app_in_clause "app" -> app IN ("app1", "app2")
+get_app_in_clause() {
+  local field="${1:-app}"
+
+  if [ "$SCOPE_TO_APPS" != "true" ] || [ ${#SELECTED_APPS[@]} -eq 0 ]; then
+    echo ""
+    return
+  fi
+
+  # Splunk's `where` parser rejects unquoted field names that contain
+  # `:` or `.` (e.g. `eai:acl.app`) because the colon / dot are
+  # interpreted as operator characters mid-token, producing
+  #   "Error in 'where' command: The operator at ':acl.app IN (\"...\") '
+  #    is invalid."
+  # Splunk accepts the same field name when wrapped in SINGLE quotes:
+  #   | where 'eai:acl.app' IN (...)
+  # Wrap defensively whenever the field has any non-alphanumeric_
+  # character; plain names like `app` stay unquoted to keep diffs minimal.
+  local quoted_field="$field"
+  case "$field" in
+    *[!a-zA-Z0-9_]*) quoted_field="'${field}'" ;;
+  esac
+
+  # Build IN clause: 'eai:acl.app' IN ("app1", "app2", ...)
+  local apps_quoted=""
+  local first=true
+  for app in "${SELECTED_APPS[@]}"; do
+    if [ "$first" = "true" ]; then
+      apps_quoted+="\"${app}\""
+      first=false
+    else
+      apps_quoted+=", \"${app}\""
+    fi
+  done
+
+  echo "${quoted_field} IN (${apps_quoted})"
+}
+
+# Build where clause for pipe filtering
+# Usage: get_app_where_clause "app" -> | where app IN ("app1", "app2")
+get_app_where_clause() {
+  local field="${1:-app}"
+  local in_clause=$(get_app_in_clause "$field")
+
+  if [ -n "$in_clause" ]; then
+    echo "| where $in_clause"
+  else
+    echo ""
+  fi
+}
+
+# =============================================================================
+# ASYNC SEARCH HELPER — used by both collect_app_analytics and collect_usage_analytics
+# =============================================================================
+# Dispatches a Splunk search asynchronously (exec_mode=normal), polls for
+# completion with adaptive interval, and fetches results. Returns detailed
+# error info for remote debugging.
+# =============================================================================
+run_usage_search() {
+  local search_query="$1"
+  local output_file="$2"
+  local description="$3"
+  local max_wait="${4:-3600}"  # Default 1 hour max wait
+
+  debug_log "SEARCH" "Dispatching: $description"
+  debug_log "SEARCH" "Query: $(echo "$search_query" | head -c 200)..."
+
+  local search_start_time=$(date +%s)
+
+  # Rate limiting: pause before making API call
+  sleep "$API_DELAY_SECONDS"
+
+  # Step 1: Dispatch search asynchronously
+  local http_code job_response temp_file
+  temp_file=$(mktemp)
+
+  http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+    --connect-timeout "$CONNECT_TIMEOUT" \
+    --max-time "$API_TIMEOUT" \
+    $CURL_PROXY_ARGS \
+    -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+    -d "output_mode=json" \
+    -d "exec_mode=normal" \
+    -d "earliest_time=-${USAGE_PERIOD}" \
+    -d "latest_time=now" \
+    --data-urlencode "search=$search_query" \
+    2>/dev/null)
+
+  job_response=$(cat "$temp_file")
+  rm -f "$temp_file"
+
+  # Detailed error handling based on HTTP status
+  case "$http_code" in
+    000)
+      log "NETWORK ERROR for '$description': Could not connect to ${SPLUNK_HOST}:${SPLUNK_PORT}"
+      echo "{\"error\": \"network_error\", \"description\": \"$description\", \"message\": \"Could not connect to Splunk REST API at ${SPLUNK_HOST}:${SPLUNK_PORT}.\", \"http_code\": \"$http_code\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+      ;;
+    401)
+      log "AUTH ERROR for '$description': Invalid credentials or expired token"
+      echo "{\"error\": \"auth_error\", \"description\": \"$description\", \"message\": \"Authentication failed.\", \"http_code\": \"$http_code\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+      ;;
+    403)
+      log "PERMISSION ERROR for '$description': User lacks required capabilities"
+      echo "{\"error\": \"permission_error\", \"description\": \"$description\", \"message\": \"User lacks permission.\", \"http_code\": \"$http_code\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+      ;;
+    404)
+      log "ENDPOINT ERROR for '$description': REST endpoint not found"
+      echo "{\"error\": \"endpoint_not_found\", \"description\": \"$description\", \"http_code\": \"$http_code\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+      ;;
+    500|502|503)
+      log "SERVER ERROR for '$description': Splunk server error ($http_code)"
+      local escaped_response
+      escaped_response=$(echo "$job_response" | head -c 500 | \
+        $PYTHON_CMD -c "import json,sys; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '"truncated"')
+      echo "{\"error\": \"server_error\", \"description\": \"$description\", \"http_code\": \"$http_code\", \"response\": $escaped_response}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+      ;;
+  esac
+
+  # Step 2: Extract SID
+  local sid
+  sid=$(echo "$job_response" | \
+    $PYTHON_CMD -c "import json,sys; d=json.load(sys.stdin); print(d.get('sid',''))" 2>/dev/null)
+  if [ -z "$sid" ]; then
+    sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
+  fi
+
+  if [ -z "$sid" ]; then
+    local error_msg
+    error_msg=$(echo "$job_response" | grep -o '"message":"[^"]*"' | head -1 | cut -d'"' -f4)
+    [ -z "$error_msg" ] && error_msg="Unknown error creating search job"
+    debug_log "ERROR" "Search job creation failed for '$description': $error_msg"
+    echo "{\"error\": \"search_create_failed\", \"description\": \"$description\", \"message\": \"$error_msg\", \"http_code\": \"$http_code\"}" > "$output_file"
+    ((STATS_ERRORS++))
+    return 1
+  fi
+
+  debug_log "SEARCH" "Dispatched SID=${sid:0:24} for '$description'"
+
+  # Show initial dispatch to terminal
+  echo -ne "    ${BLUE}◐${NC} ${description} — dispatched (SID: ${sid:0:12}...)  \r"
+
+  # Step 3: Poll dispatchState until DONE or FAILED (adaptive interval: 5s → 30s)
+  local poll_interval=5
+  local elapsed=0
+  local scan_count=""
+  local event_count=""
+
+  while true; do
+    sleep "$poll_interval"
+    elapsed=$(( $(date +%s) - search_start_time ))
+
+    if [ "$elapsed" -gt "$max_wait" ]; then
+      echo -e "\r    ${RED}✗${NC} ${description} — TIMEOUT after ${max_wait}s                                          "
+      debug_log "SEARCH" "TIMEOUT SID=$sid after ${elapsed}s"
+      log "TIMEOUT for '$description': Search did not complete in ${max_wait}s"
+      curl -k -s -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/control" \
+        -d "action=cancel" >/dev/null 2>&1
+      echo "{\"error\": \"timeout\", \"description\": \"$description\", \"message\": \"Search timed out after ${max_wait} seconds.\", \"search_id\": \"$sid\"}" > "$output_file"
+      ((STATS_ERRORS++))
+      return 1
+    fi
+
+    local status_response
+    status_response=$(curl -k -s -G \
+      --connect-timeout "$CONNECT_TIMEOUT" \
+      $CURL_PROXY_ARGS \
+      -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid" \
+      -d "output_mode=json" 2>/dev/null)
+
+    local dispatch_state
+    dispatch_state=$(echo "$status_response" | \
+      $PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    c = d['entry'][0]['content']
+    print(c.get('dispatchState',''))
+except:
+    print('')
+" 2>/dev/null)
+
+    # Extract progress metrics for display
+    local done_progress
+    done_progress=$(echo "$status_response" | \
+      $PYTHON_CMD -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    c = d['entry'][0]['content']
+    pct = c.get('doneProgress', 0)
+    scanned = c.get('scanCount', 0)
+    results = c.get('resultCount', 0)
+    print(f'{pct:.0%}|{scanned}|{results}')
+except:
+    print('|0|0')
+" 2>/dev/null)
+    local pct_display="${done_progress%%|*}"
+    local rest="${done_progress#*|}"
+    scan_count="${rest%%|*}"
+    local result_count="${rest#*|}"
+
+    if [ -z "$dispatch_state" ]; then
+      local is_done
+      is_done=$(echo "$status_response" | grep -o '"isDone":[^,}]*' | cut -d: -f2 | tr -d ' ')
+      [ "$is_done" = "true" ] && dispatch_state="DONE"
+    fi
+
+    # Format elapsed as m:ss
+    local mins=$(( elapsed / 60 ))
+    local secs=$(( elapsed % 60 ))
+    local elapsed_fmt
+    if [ "$mins" -gt 0 ]; then
+      elapsed_fmt="${mins}m$(printf '%02d' $secs)s"
+    else
+      elapsed_fmt="${secs}s"
+    fi
+
+    # Live spinner update on terminal
+    local spinner=$(get_spinner)
+
+    case "$dispatch_state" in
+      DONE)
+        echo -e "\r    ${GREEN}✓${NC} ${description} — done (${elapsed_fmt}, ${result_count} results)                                          "
+        log "Search completed (${elapsed}s): $description"
+        break
+        ;;
+      FAILED)
+        echo -e "\r    ${RED}✗${NC} ${description} — FAILED (${elapsed_fmt})                                          "
+        local err_msg
+        err_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
+        log "SEARCH FAILED for '$description': $err_msg"
+        echo "{\"error\": \"search_failed\", \"description\": \"$description\", \"search_id\": \"$sid\", \"details\": \"$err_msg\"}" > "$output_file"
+        ((STATS_ERRORS++))
+        return 1
+        ;;
+      QUEUED|PARSING|RUNNING|FINALIZING)
+        # Show live progress: spinner, state, elapsed, scan count
+        local scan_display=""
+        if [ -n "$scan_count" ] && [ "$scan_count" != "0" ]; then
+          if [ "$scan_count" -ge 1000000 ]; then
+            scan_display=" | $(( scan_count / 1000000 ))M events scanned"
+          elif [ "$scan_count" -ge 1000 ]; then
+            scan_display=" | $(( scan_count / 1000 ))K events scanned"
+          else
+            scan_display=" | ${scan_count} events scanned"
+          fi
+        fi
+        echo -ne "\r    ${spinner} ${description} — ${dispatch_state,,} ${pct_display} (${elapsed_fmt}${scan_display})          \r"
+
+        if [ "$poll_interval" -lt 30 ]; then
+          poll_interval=$(( poll_interval + 5 ))
+        fi
+        if [ $(( elapsed % 60 )) -lt "$poll_interval" ]; then
+          log "  Still running (${elapsed}s, state=$dispatch_state): $description"
+        fi
+        ;;
+      *)
+        echo -ne "\r    ${spinner} ${description} — polling (${elapsed_fmt})          \r"
+        if echo "$status_response" | grep -q '"isFailed":true'; then
+          echo -e "\r    ${RED}✗${NC} ${description} — FAILED (${elapsed_fmt})                                          "
+          local fail_msg
+          fail_msg=$(echo "$status_response" | grep -o '"messages":\[.*\]' | head -1)
+          log "SEARCH FAILED for '$description': $fail_msg"
+          echo "{\"error\": \"search_failed\", \"description\": \"$description\", \"search_id\": \"$sid\", \"details\": \"$fail_msg\"}" > "$output_file"
+          ((STATS_ERRORS++))
+          return 1
+        fi
+        ;;
+    esac
+  done
+
+  # Step 4: Fetch results
+  http_code=$(curl -k -s -w "%{http_code}" -o "$output_file" \
+    --connect-timeout "$CONNECT_TIMEOUT" \
+    --max-time "$API_TIMEOUT" \
+    $CURL_PROXY_ARGS \
+    -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
+    2>/dev/null)
+
+  if [ "$http_code" != "200" ]; then
+    debug_log "ERROR" "Results fetch failed for sid=$sid: HTTP $http_code"
+    log "RESULTS FETCH FAILED for '$description': HTTP $http_code"
+    echo "{\"error\": \"results_fetch_failed\", \"description\": \"$description\", \"http_code\": \"$http_code\"}" > "$output_file"
+    ((STATS_ERRORS++))
+    return 1
+  fi
+
+  local search_duration=$(( $(date +%s) - search_start_time ))
+  debug_log "SEARCH" "COMPLETED SID=$sid in ${search_duration}s"
+  debug_timing "Search: $description" "$search_duration"
+  log "Completed search: $description (${search_duration}s)"
+  return 0
+}
+
+# =============================================================================
+# APP-SCOPED ANALYTICS COLLECTION (v4.6.0 — matches Cloud architecture)
+# =============================================================================
+# Runs GLOBAL aggregate queries (grouped by app) instead of per-app loops,
+# storing results in dma_analytics/usage_analytics/ — the same location and
+# format as the Cloud export script. The DMA Server's stageUsageAnalytics()
+# picks these up and stages them to splunk-resources/analytics/usage/.
+#
+# This reduces ~500+ search jobs to ~6, cutting collection time from 18+ hours
+# to under 1 hour even on very large Splunk environments.
+#
+# Per-app REST queries (alerts inventory) still run individually since | rest
+# requires per-app namespace.
+# =============================================================================
+
+collect_app_analytics() {
+  # v4.6.0: This function no longer takes an $app argument.
+  # It runs GLOBAL aggregate queries (by app) instead of per-app loops.
+  # The DMA Server splits global results into per-app data after import.
+
+  if [ -z "$AUTH_HEADER" ]; then
+    return 0
+  fi
+
+  if [ "$COLLECT_USAGE" != "true" ]; then
+    return 0
+  fi
+
+  local analytics_dir="$EXPORT_DIR/dma_analytics/usage_analytics"
+  mkdir -p "$analytics_dir"
+
+  # Build app filter for scoped mode (empty string when not scoped)
+  local app_filter=""
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    app_filter=$(get_app_filter "app")
+    log "  App-scoped analytics: filtering to ${#SELECTED_APPS[@]} apps"
+  fi
+
+  # Compute numeric days from USAGE_PERIOD for daily average calculations
+  local usage_days
+  usage_days=$(echo "$USAGE_PERIOD" | sed 's/d$//')
+  [ -z "$usage_days" ] || ! [[ "$usage_days" =~ ^[0-9]+$ ]] && usage_days=30
+
+  local analytics_start=$(date +%s)
+  info "Running global analytics queries (v4.6.0 — async dispatch)..."
+  echo ""
+  echo -e "    ${DIM}Analytics period: ${USAGE_PERIOD} | Dispatch: async (max 1h per query)${NC}"
+  echo -e "    ${DIM}Queries use verified field names: provenance, sourcetype=audittrail${NC}"
+  echo ""
+
+  # =========================================================================
+  # QUERY 1: DASHBOARD VIEWS (MOST CRITICAL)
+  # Uses provenance field to identify dashboard-triggered searches.
+  # De-duplicates using view_session (30s window per user = 1 page load).
+  # sourcetype=audittrail narrows at tsidx level for massive environments.
+  # =========================================================================
+  if has_analytics_checkpoint "dashboard_views"; then
+    echo -e "    ${DIM}[1/6] Dashboard views — skipped (checkpoint exists)${NC}"
+  else
+    local q1_file="$analytics_dir/dashboard_views_global.json"
+    run_usage_search \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count" \
+      "$q1_file" \
+      "[1/6] Dashboard views (provenance-based)" \
+      3600
+    save_analytics_checkpoint "dashboard_views" "$q1_file"
+  fi
+
+  # =========================================================================
+  # QUERY 2: USER ACTIVITY
+  # Counts searches per user per app for migration team planning.
+  # sourcetype=audittrail + info=granted narrow at tsidx level.
+  # =========================================================================
+  if has_analytics_checkpoint "user_activity"; then
+    echo -e "    ${DIM}[2/6] User activity — skipped (checkpoint exists)${NC}"
+  else
+    local q2_file="$analytics_dir/user_activity_global.json"
+    run_usage_search \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" user!=\"nobody\" earliest=-${USAGE_PERIOD} | stats count as searches, dc(search_id) as unique_searches, latest(_time) as last_active by app, user | sort -searches" \
+      "$q2_file" \
+      "[2/6] User activity" \
+      3600
+    save_analytics_checkpoint "user_activity" "$q2_file"
+  fi
+
+  # =========================================================================
+  # QUERY 3: SEARCH TYPE BREAKDOWN
+  # Derives search_type from provenance/search_id (since search_type is NOT
+  # a native _audit field — it's computed by Monitoring Console eval case()).
+  # sourcetype=audittrail + info=granted narrow at tsidx level.
+  # =========================================================================
+  if has_analytics_checkpoint "search_patterns"; then
+    echo -e "    ${DIM}[3/6] Search patterns — skipped (checkpoint exists)${NC}"
+  else
+    local q3_file="$analytics_dir/search_patterns_global.json"
+    run_usage_search \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | eval search_type=case(match(provenance, \"^UI:[Dd]ashboard:\"), \"dashboard\", match(search_id, \"^(rt_)?scheduler__\"), \"scheduled\", match(savedsearch_name, \"^_ACCELERATE_\"), \"acceleration\", match(search_id, \"^SummaryDirector_\"), \"summarization\", isnotnull(provenance) AND match(provenance, \"^UI:\"), \"interactive\", 1=1, \"other\") | stats count as total_searches, dc(user) as unique_users, dc(search_id) as unique_searches by app, search_type | sort -total_searches" \
+      "$q3_file" \
+      "[3/6] Search type breakdown" \
+      1800
+    save_analytics_checkpoint "search_patterns" "$q3_file"
+  fi
+
+  # =========================================================================
+  # QUERY 4: DAILY INGESTION VOLUME (from _internal license_usage.log)
+  # Critical for Dynatrace Grail storage planning and cost estimation.
+  # =========================================================================
+  if has_analytics_checkpoint "index_volume"; then
+    echo -e "    ${DIM}[4/6] Index volume — skipped (checkpoint exists)${NC}"
+  else
+    local q4_file="$analytics_dir/index_volume_summary.json"
+    if [ "$SKIP_INTERNAL" != "true" ]; then
+      run_usage_search \
+        "search index=_internal source=*license_usage.log type=Usage earliest=-${USAGE_PERIOD} | eval index_name=idx | stats sum(b) as total_bytes, dc(st) as sourcetype_count, dc(h) as host_count, min(_time) as earliest_event, max(_time) as latest_event by index_name | eval total_gb=round(total_bytes/1024/1024/1024, 2), daily_avg_gb=round(total_gb/${usage_days}, 2) | sort -total_gb | fields index_name, total_bytes, total_gb, daily_avg_gb, sourcetype_count, host_count, earliest_event, latest_event" \
+        "$q4_file" \
+        "[4/6] Index volume (license_usage.log)" \
+        600
+      save_analytics_checkpoint "index_volume" "$q4_file"
+    else
+      echo '{"skipped": true, "reason": "_internal index not accessible (--skip-internal)."}' > "$q4_file"
+      save_analytics_checkpoint "index_volume" "$q4_file"
+    fi
+  fi
+
+  # =========================================================================
+  # QUERY 5: ALERT FIRING STATS (from _internal scheduler)
+  # Shows which saved searches/alerts are actively running and their status.
+  # =========================================================================
+  if has_analytics_checkpoint "alert_firing"; then
+    echo -e "    ${DIM}[5/6] Alert firing — skipped (checkpoint exists)${NC}"
+  else
+    local q5_file="$analytics_dir/alert_firing_global.json"
+    if [ "$SKIP_INTERNAL" != "true" ]; then
+      run_usage_search \
+        "search index=_internal sourcetype=scheduler ${app_filter} earliest=-${USAGE_PERIOD} | fields _time, app, savedsearch_name, status | stats count as total_runs, sum(eval(if(status=\"success\",1,0))) as successful, sum(eval(if(status=\"skipped\",1,0))) as skipped, sum(eval(if(status!=\"success\" AND status!=\"skipped\",1,0))) as failed, latest(_time) as last_run by app, savedsearch_name | sort -total_runs" \
+        "$q5_file" \
+        "[5/6] Alert firing stats" \
+        3600
+      save_analytics_checkpoint "alert_firing" "$q5_file"
+    else
+      echo '{"skipped": true, "reason": "_internal index not accessible (--skip-internal)."}' > "$q5_file"
+      save_analytics_checkpoint "alert_firing" "$q5_file"
+    fi
+  fi
+
+  # =========================================================================
+  # QUERY 6: ALERTS INVENTORY via REST (per-app, uses blocking since | rest is fast)
+  # This is the only per-app query remaining — it uses | rest which is quick.
+  # =========================================================================
+  if has_analytics_checkpoint "alerts_inventory"; then
+    echo -e "    ${DIM}[6/6] Alerts inventory — skipped (checkpoint exists)${NC}"
+  else
+    local q6_count=0
+    for app in "${SELECTED_APPS[@]}"; do
+      local app_analysis_dir="$EXPORT_DIR/$app/splunk-analysis"
+      mkdir -p "$app_analysis_dir"
+
+      # Quick blocking search for per-app REST data
+      sleep "$API_DELAY_SECONDS"
+      local temp_file=$(mktemp)
+      local http_code
+      http_code=$(curl -k -s -w "%{http_code}" -o "$temp_file" \
+        -H "$AUTH_HEADER" \
+        "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+        -d "output_mode=json" \
+        -d "exec_mode=blocking" \
+        -d "timeout=120" \
+        --data-urlencode "search=| rest /servicesNS/-/$app/saved/searches | search (is_scheduled=1 OR alert.track=1) | table title, cron_schedule, alert.severity, alert.track, actions, disabled | rename title as alert_name" \
+        2>/dev/null)
+      local job_response=$(cat "$temp_file")
+      rm -f "$temp_file"
+      if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        local sid=$(echo "$job_response" | grep -o '"sid":"[^"]*"' | cut -d'"' -f4)
+        if [ -n "$sid" ]; then
+          curl -k -s -o "$app_analysis_dir/alerts_inventory.json" \
+            -H "$AUTH_HEADER" \
+            "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs/$sid/results?output_mode=json&count=0" \
+            2>/dev/null
+        fi
+      fi
+      ((q6_count++))
+    done
+    echo "{\"completed\": true, \"apps_processed\": $q6_count}" > "$analytics_dir/.alerts_inventory_done"
+    save_analytics_checkpoint "alerts_inventory" "$analytics_dir/.alerts_inventory_done"
+  fi
+
+  local analytics_elapsed=$(($(date +%s) - analytics_start))
+  success "Global analytics completed in ${analytics_elapsed}s (6 queries vs ${#SELECTED_APPS[@]}×8 = $((${#SELECTED_APPS[@]} * 8)) in previous versions)"
+}
+
+# =============================================================================
+# GLOBAL USAGE ANALYTICS (Infrastructure-level)
+# =============================================================================
+# Collects system-wide analytics that don't make sense at app level:
+#   - Index sizes and volume (infrastructure)
+#   - Ingestion infrastructure (how data arrives)
+#   - RBAC/user mapping (org-level)
+#   - License consumption (org-level)
+# =============================================================================
+
+collect_usage_analytics() {
+  if [ -z "$AUTH_HEADER" ]; then
+    warning "Skipping usage analytics (no REST API access)"
+    return 0
+  fi
+
+  if [ "$COLLECT_USAGE" = false ]; then
+    return 0
+  fi
+
+  if [ "$SKIP_INTERNAL" = "true" ]; then
+    warning "Skipping usage analytics (--skip-internal: index=_audit/_internal not accessible)"
+    return 0
+  fi
+
+  # =========================================================================
+  # v4.6.0: Stripped to ownership + REST metadata + summary.
+  # Detailed per-category usage queries removed — the 6 global aggregate
+  # queries in collect_app_analytics() produce everything the Explorer needs.
+  # =========================================================================
+
+  # Build REST app filter for | rest queries (filters by eai:acl.app)
+  local app_rest_filter=""
+  if [ "$SCOPE_TO_APPS" = "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+    app_rest_filter=$(get_app_where_clause "eai:acl.app")
+  fi
+
+  local tasks=(
+    "ownership:Ownership mapping (REST)"
+    "rest_metadata:REST supplementary metadata"
+  )
+  progress_init "Collecting Usage Intelligence" "${#tasks[@]}"
+  local task_num=0
+
+  # ==========================================================================
+  # 1. OWNERSHIP MAPPING (For user-centric migration)
+  # ==========================================================================
+  ((task_num++))
+  if ! has_analytics_checkpoint "usage_ownership"; then
+    info "Collecting ownership information..."
+
+    # Dashboard ownership - maps each dashboard to its owner
+    run_usage_search \
+      '| rest /servicesNS/-/-/data/ui/views '"${app_rest_filter}"' | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing | rename title as dashboard, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" \
+      "Dashboard ownership mapping"
+
+    # Alert/Saved search ownership - maps each alert to its owner
+    run_usage_search \
+      '| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | table title, eai:acl.app, eai:acl.owner, eai:acl.sharing, is_scheduled, alert.track | rename title as alert_name, eai:acl.app as app, eai:acl.owner as owner, eai:acl.sharing as sharing' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/alert_ownership.json" \
+      "Alert/saved search ownership mapping"
+
+    # Ownership summary by user (how many dashboards and alerts each user owns)
+    run_usage_search \
+      '| rest /servicesNS/-/-/data/ui/views '"${app_rest_filter}"' | stats count as dashboards by eai:acl.owner | rename eai:acl.owner as owner | append [| rest /servicesNS/-/-/saved/searches '"${app_rest_filter}"' | stats count as alerts by eai:acl.owner | rename eai:acl.owner as owner] | stats sum(dashboards) as dashboards, sum(alerts) as alerts by owner | sort - dashboards' \
+      "$EXPORT_DIR/dma_analytics/usage_analytics/ownership_summary.json" \
+      "Ownership summary by user"
+
+    save_analytics_checkpoint "usage_ownership"
+  else
+    info "Skipping ownership mapping (checkpoint)"
+  fi
+  progress_update "$task_num"
+  task_complete "Ownership mapping"
+
+  # ==========================================================================
+  # 2. REST SUPPLEMENTARY METADATA (no search jobs)
+  # ==========================================================================
+  ((task_num++))
+  info "Collecting REST-based supplementary metadata..."
+
+  # FIXED v4.6.0: Use f= to request only metadata fields, NOT the full search SPL.
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/saved/searches" \
+    -d "output_mode=json" -d "count=0" \
+    -d "f=title" -d "f=eai:acl" -d "f=is_scheduled" -d "f=disabled" \
+    -d "f=cron_schedule" -d "f=alert.track" -d "f=alert.severity" \
+    -d "f=actions" -d "f=next_scheduled_time" -d "f=dispatch.earliest_time" \
+    -d "f=dispatch.latest_time" \
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/saved_searches_all.json" 2>/dev/null
+
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+    -d "output_mode=json" -d "count=1000" \
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/recent_searches.json" 2>/dev/null
+
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/introspection/kvstore" \
+    -d "output_mode=json" \
+    > "$EXPORT_DIR/dma_analytics/usage_analytics/kvstore_stats.json" 2>/dev/null
+
+  success "REST-based supplementary metadata collected"
+  progress_update "$task_num"
+  task_complete "REST supplementary metadata"
+
+  progress_complete
+
+  # ==========================================================================
+  # GENERATE USAGE INTELLIGENCE SUMMARY
+  # ==========================================================================
+
+  info "Generating usage intelligence summary..."
+
+  local summary_file="$EXPORT_DIR/dma_analytics/usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md"
+
+  cat > "$summary_file" << 'USAGE_EOF'
+# Usage Intelligence Summary (v4.6.0)
+
+## Migration Prioritization Framework
+
+This export includes comprehensive usage analytics to help prioritize your migration to Dynatrace.
+
+### What's Collected (v4.6.0 Global Queries)
+
+| File | Purpose | Use For |
+|------|---------|---------|
+| `dashboard_views_global.json` | Dashboard views by app (provenance-based) | Prioritize migration order |
+| `user_activity_global.json` | User activity per app | Training priorities, team planning |
+| `search_patterns_global.json` | Search type breakdown (dashboard/scheduled/ad-hoc) | Workload characterization |
+| `index_volume_summary.json` | Per-index daily ingestion (GB) | Grail storage planning |
+| `index_event_counts_daily.json` | Event counts per index per day | Volume trending |
+| `alert_firing_global.json` | Alert execution stats | Critical alerts to migrate |
+
+### Key Improvements in v4.6.0
+
+- **Dashboard views now use the `provenance` field** (not `search_type=dashboard` which was broken)
+- **View session de-duplication**: Counts page loads, not individual panel searches
+- **Global aggregate queries**: 6 queries total instead of N×7 per-app queries
+- **Async search dispatch**: Searches can run up to 1 hour (was limited to 5 minutes)
+- **Never-viewed dashboards**: Computed by Curator from dashboard list + view data (no slow `| rest + | join`)
+
+### Decision Matrix
+
+| Category | High Usage | Low/No Usage |
+|----------|------------|--------------|
+| **Dashboards** | Migrate first - users depend on these | Review with stakeholders |
+| **Alerts** | Critical - ensure Dynatrace equivalents | Consider not migrating |
+| **Users** | Key stakeholders for training | May not need Dynatrace access |
+| **Data Sources** | Must ingest into Dynatrace | May not need migration |
+
+### Recommended Migration Order
+
+1. **Phase 1**: Top 10 dashboards + their dependent alerts
+2. **Phase 2**: Data sources used by Phase 1
+3. **Phase 3**: Remaining active dashboards/alerts
+4. **Phase 4**: Review never-used items with stakeholders
+
+---
+*Generated by DMA Splunk Enterprise Export v4.6.0*
+USAGE_EOF
+
+  success "Usage intelligence collected (see _usage_analytics/USAGE_INTELLIGENCE_SUMMARY.md)"
+}
+
+collect_index_stats() {
+  if [ "$COLLECT_INDEXES" = false ]; then
+    return 0
+  fi
+
+  # Define collection tasks
+  local tasks=(
+    "indexes_conf:Index configuration files"
+    "index_details:Index details via REST API"
+    "data_inputs:Data input configurations"
+    "system_configs:System-level configs"
+  )
+
+  progress_init "Collecting Index & Data Statistics" "${#tasks[@]}"
+
+  local task_num=0
+
+  # 1. System indexes.conf
+  ((task_num++))
+  if [ -f "$SPLUNK_HOME/etc/system/local/indexes.conf" ]; then
+    cp "$SPLUNK_HOME/etc/system/local/indexes.conf" "$EXPORT_DIR/dma_analytics/indexes/"
+  fi
+  progress_update "$task_num"
+  task_complete "System indexes.conf"
+
+  # 2. REST API index details (use -G to force GET request)
+  ((task_num++))
+  if [ -n "$AUTH_HEADER" ]; then
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/data/indexes" \
+      -d "output_mode=json" -d "count=0" \
+      > "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" 2>/dev/null
+
+    local index_count=$(grep -o '"title"' "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" 2>/dev/null | wc -l | tr -d ' ')
+    STATS_INDEXES=$index_count
+  fi
+  progress_update "$task_num"
+  task_complete "Index details (REST API)"
+
+  # 3. Data inputs (use -G to force GET request)
+  ((task_num++))
+  if [ -n "$AUTH_HEADER" ]; then
+    curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/data/inputs/all" \
+      -d "output_mode=json" -d "count=0" \
+      > "$EXPORT_DIR/dma_analytics/indexes/data_inputs.json" 2>/dev/null
+  fi
+  progress_update "$task_num"
+  task_complete "Data inputs"
+
+  # 4. System-level inputs/outputs
+  ((task_num++))
+  for conf_file in "inputs.conf" "outputs.conf" "server.conf"; do
+    if [ -f "$SPLUNK_HOME/etc/system/local/$conf_file" ]; then
+      cp "$SPLUNK_HOME/etc/system/local/$conf_file" "$EXPORT_DIR/_system/local/"
+    fi
+  done
+  progress_update "$task_num"
+  task_complete "System configs"
+
+  progress_complete
+
+  # Show index histogram if we have data
+  if [ -f "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" ] && [ -n "$SPLUNK_USER" ]; then
+    # Try to extract index sizes for histogram using Python (no jq dependency)
+    local index_sizes=()
+    while IFS= read -r line; do
+      # Parse each JSON line using Python inline
+      local parsed=$($PYTHON_CMD -c "
+import json
+import sys
+try:
+    item = json.loads('''$line''')
+    name = item.get('name', '')
+    size = item.get('content', {}).get('currentDBSizeMB', 0)
+    if name and size and size != 'null':
+        print(f'{name}:{int(float(size))}')
+except:
+    pass
+" 2>/dev/null)
+      if [ -n "$parsed" ]; then
+        index_sizes+=("$parsed")
+      fi
+    done < <(json_iterate "$EXPORT_DIR/dma_analytics/indexes/indexes_detailed.json" ".entry" 2>/dev/null | head -20)
+
+    if [ ${#index_sizes[@]} -gt 0 ]; then
+      show_histogram "Index Sizes (MB) - Top 20" "${index_sizes[@]}"
+    fi
+  fi
+
+  success "Index statistics collected (${STATS_INDEXES} indexes)"
+}
+
+collect_audit_sample() {
+  if [ "$COLLECT_AUDIT" = false ]; then
+    return 0
+  fi
+
+  progress "Collecting audit log sample..."
+
+  local audit_log="$SPLUNK_HOME/var/log/splunk/audit.log"
+
+  if [ -f "$audit_log" ] && [ -r "$audit_log" ]; then
+    mkdir -p "$EXPORT_DIR/_audit_sample"
+    tail -10000 "$audit_log" > "$EXPORT_DIR/_audit_sample/audit_sample.log" 2>/dev/null
+    success "Collected 10,000 most recent audit entries"
+  else
+    warning "Could not read audit log (permission denied or not found)"
+  fi
+}
+
+# =============================================================================
+# SUMMARY GENERATION
+# =============================================================================
+
+generate_summary() {
+  progress "Generating environment summary..."
+
+  local summary_file="$EXPORT_DIR/dma-env-summary.md"
+
+  cat > "$summary_file" << EOF
+# DMA Environment Summary
+
+**Export Date**: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+**Hostname**: $(get_hostname)
+**Export Tool Version**: $SCRIPT_VERSION
+
+---
+
+## Environment Overview
+
+| Attribute | Value |
+|-----------|-------|
+| **Product** | Splunk ${SPLUNK_FLAVOR^} |
+| **Role** | ${SPLUNK_ROLE//_/ } |
+| **Architecture** | ${SPLUNK_ARCHITECTURE^} |
+| **SPLUNK_HOME** | $SPLUNK_HOME |
+
+---
+
+## Export Statistics
+
+| Category | Count |
+|----------|-------|
+| **Applications Exported** | $STATS_APPS |
+| **Dashboards** | $STATS_DASHBOARDS |
+| **Alerts** | $STATS_ALERTS |
+| **Users** | $STATS_USERS |
+| **Indexes** | $STATS_INDEXES |
+| **Errors** | $STATS_ERRORS |
+
+---
+
+## Applications Included
+
+EOF
+
+  for app in "${SELECTED_APPS[@]}"; do
+    echo "- $app" >> "$summary_file"
+  done
+
+  cat >> "$summary_file" << EOF
+
+---
+
+## Data Categories Collected
+
+| Category | Collected |
+|----------|-----------|
+| Configuration Files | $([ "$COLLECT_CONFIGS" = true ] && echo "Yes" || echo "No") |
+| Dashboards | $([ "$COLLECT_DASHBOARDS" = true ] && echo "Yes" || echo "No") |
+| Alerts & Saved Searches | $([ "$COLLECT_ALERTS" = true ] && echo "Yes" || echo "No") |
+| Users & RBAC | $([ "$COLLECT_RBAC" = true ] && echo "Yes" || echo "No") |
+| Usage Analytics | $([ "$COLLECT_USAGE" = true ] && echo "Yes (${USAGE_PERIOD})" || echo "No") |
+| Index Statistics | $([ "$COLLECT_INDEXES" = true ] && echo "Yes" || echo "No") |
+| Lookup Tables | $([ "$COLLECT_LOOKUPS" = true ] && echo "Yes" || echo "No") |
+| Audit Log Sample | $([ "$COLLECT_AUDIT" = true ] && echo "Yes" || echo "No") |
+
+---
+
+## Next Steps
+
+1. Download the export file from this server
+2. Open Dynatrace Migration Assistant in Dynatrace
+3. Navigate to: Migration Workspace → Project Initialization
+4. Upload the .tar.gz file
+5. DMA will analyze your environment and show:
+   - Migration readiness assessment
+   - Dashboard conversion preview
+   - Alert conversion checklist
+   - Data pipeline requirements
+
+---
+
+*Generated by DMA Splunk Export Tool v$SCRIPT_VERSION*
+EOF
+
+  success "Summary generated: dma-env-summary.md"
+}
+
+# =============================================================================
+# ─────────────────────────── ITSI BLOCK BEGIN ───────────────────────────
+# ITSI Comprehensive Cataloging — Phase 1 (collection only)
+# =============================================================================
+#
+# Three principles drive this block:
+#   1. Existing per-app collection stays exactly the same. The `itsi` app
+#      continues to flow through the dashboard/savedsearches/.conf
+#      collectors unchanged. The DMA Server importer doesn't need to
+#      learn "this app is special" — it just sees normal app shape.
+#   2. Per-app additions only: <App>/dashboards/glasstable/ and
+#      <App>/dashboards/deepdive/ — new subdirs alongside classic/studio/.
+#   3. KV-store-only data (services, KPIs, entities, NEAPs, correlation-
+#      search metadata, etc.) lives in a NEW top-level `itsi_assets/`
+#      directory. Non-ITSI archives never have this directory.
+#
+# Endpoints (all verified against Splunk ITSI 4.18–4.21 REST docs):
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/glass_table
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/deep_dive
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/service
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/kpi_base_search
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/base_service_template
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/entity
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/entity_type
+#   /servicesNS/nobody/SA-ITOA/itoa_interface/kpi_threshold_template
+#   /servicesNS/nobody/SA-ITOA/event_management_interface/notable_event_aggregation_policy
+#   /servicesNS/nobody/SA-ITOA/event_management_interface/correlation_search
+#   /servicesNS/nobody/SA-ITOA/maintenance_services_interface/maintenance_calendar
+#   /servicesNS/nobody/SA-ITOA/storage/collections/data/SA-ITOA_files
+#
+# Per ITSI REST docs (verified verbatim):
+#   - itoa_interface returns a BARE JSON ARRAY (NOT the entry[]-wrapped
+#     shape that core Splunk REST uses).
+#   - Pagination is `limit` (not `count`) + `offset`.
+#     "The maximum number of entries to return. If limit isn't set,
+#      all entries are returned." We paginate defensively at
+#      $ITSI_BATCH_SIZE per page; end-of-list when page < batch size.
+#
+# Per community sources (the docs are silent here — verify on pilot):
+#   - SA-ITOA_files KV records typically hold the binary as a data-URL
+#     (`data:image/png;base64,...`) in a `content_base64` field. We try
+#     multiple field names and strip the data-URL prefix if present.
+#     On failure: log the record's field names to inventory.errors[]
+#     and continue. The glass table JSON is still preserved on disk
+#     regardless of image decode outcome.
+
+# Append a structured trace entry — one line per HTTP call, for pilot
+# diagnostics. Format: ISO8601 method endpoint http_code bytes duration_ms note
+itsi_trace() {
+  local method="$1" endpoint="$2" http_code="$3" bytes="$4" duration_ms="$5" note="${6:-}"
+  local trace_file="$EXPORT_DIR/itsi_assets/_collection_trace.log"
+  [ ! -d "$EXPORT_DIR/itsi_assets" ] && return 0
+  printf '%s %s %s %s %s %s %s\n' \
+    "$(date -u +%FT%TZ)" "$method" "$endpoint" "$http_code" "$bytes" "$duration_ms" "$note" \
+    >> "$trace_file" 2>/dev/null || true
+}
+
+# Append a structured error to the inventory's errors[] in-memory accumulator.
+# Format: JSON object string, one per element. Flushed by itsi_write_inventory.
+itsi_record_error() {
+  local context="$1" http_code="$2" message="$3"
+  # Escape double-quotes and newlines in message so the resulting JSON object stays valid.
+  local safe_msg
+  safe_msg=$(printf '%s' "$message" | $PYTHON_CMD -c 'import json,sys;print(json.dumps(sys.stdin.read())[1:-1])' 2>/dev/null || echo "(unprintable)")
+  ITSI_ERRORS_JSON_ARRAY+=("{\"context\":\"$context\",\"http_code\":\"$http_code\",\"message\":\"$safe_msg\"}")
+  debug_log "ITSI" "error captured: $context http=$http_code msg=$message"
+}
+
+# Decode field names from a JSON record for diagnostic logging.
+# Returns a comma-separated list. Used when image decoding fails so we
+# can see what shape the customer's SA-ITOA_files records have.
+itsi_record_keys() {
+  local json_file="$1"
+  $PYTHON_CMD -c "
+import json,sys
+try:
+    with open('$json_file','r') as f: d = json.load(f)
+    if isinstance(d, dict):
+        print(','.join(sorted(d.keys())))
+    elif isinstance(d, list) and len(d) > 0 and isinstance(d[0], dict):
+        print(','.join(sorted(d[0].keys())))
+    else:
+        print('(non-object)')
+except Exception as e:
+    print('(read-failed)')
+" 2>/dev/null
+}
+
+# Paginated lister for ITSI REST endpoints.
+# Args:
+#   $1 endpoint   — e.g. /servicesNS/nobody/SA-ITOA/itoa_interface/glass_table
+#   $2 output_var — name of a bash array variable; lister appends each item's
+#                   raw JSON (as a single line) to this array
+# Returns: 0 on success, 1 on hard failure (any non-200 from any page).
+# Side-effects: appends to itsi_assets/_collection_trace.log; writes errors
+#               via itsi_record_error on failure.
+#
+# Implementation notes:
+#   - Per Splunk ITSI 4.19 docs, itoa_interface returns a bare JSON array.
+#   - First successful call sets ITSI_RESPONSE_WRAPPER to "array" (bare) or
+#     "entry" (wrapped) so subsequent diagnostic code knows the shape.
+#   - End-of-list: any page that returns fewer than $ITSI_BATCH_SIZE items.
+itsi_list_endpoint() {
+  local endpoint="$1"
+  local -n out_array="$2"   # nameref to caller's array
+  local offset=0
+  local total_fetched=0
+  local page_count=0
+  local max_pages=200       # safety limit: 200 pages * 500 = 100,000 items
+  out_array=()
+
+  while [ $page_count -lt $max_pages ]; do
+    local tmp_file
+    tmp_file=$(mktemp)
+    local start_ms=$(date +%s%N 2>/dev/null | head -c 13)
+    [ -z "$start_ms" ] && start_ms=0
+
+    if ! splunk_api_call "$endpoint" "$tmp_file" "-G" \
+         "-d" "output_mode=json" \
+         "-d" "limit=$ITSI_BATCH_SIZE" \
+         "-d" "offset=$offset"; then
+      local fsize=0
+      [ -f "$tmp_file" ] && fsize=$(wc -c < "$tmp_file" 2>/dev/null || echo 0)
+      itsi_trace "GET" "$endpoint?limit=$ITSI_BATCH_SIZE&offset=$offset" "ERR" "$fsize" "0" "splunk_api_call failed"
+      itsi_record_error "$endpoint" "ERR" "splunk_api_call failed at offset=$offset"
+      rm -f "$tmp_file"
+      return 1
+    fi
+
+    local end_ms=$(date +%s%N 2>/dev/null | head -c 13)
+    [ -z "$end_ms" ] && end_ms="$start_ms"
+    local duration_ms=$((end_ms - start_ms))
+    local fsize
+    fsize=$(wc -c < "$tmp_file" 2>/dev/null || echo 0)
+    itsi_trace "GET" "$endpoint?limit=$ITSI_BATCH_SIZE&offset=$offset" "200" "$fsize" "$duration_ms" ""
+
+    # Parse the response. Try bare-array first (the documented shape),
+    # fall back to entry[]-wrapped if a custom Splunk build returns that.
+    # Emits one record per line as compact JSON.
+    local page_items=()
+    while IFS= read -r line; do
+      [ -n "$line" ] && page_items+=("$line")
+    done < <($PYTHON_CMD -c "
+import json, sys
+try:
+    with open('$tmp_file','r') as f: data = json.load(f)
+    if isinstance(data, list):
+        if not '$ITSI_RESPONSE_WRAPPER': sys.stderr.write('WRAPPER:array\n')
+        for item in data:
+            print(json.dumps(item, separators=(',',':')))
+    elif isinstance(data, dict) and 'entry' in data and isinstance(data['entry'], list):
+        if not '$ITSI_RESPONSE_WRAPPER': sys.stderr.write('WRAPPER:entry\n')
+        for entry in data['entry']:
+            # Most core-Splunk shape has content[] dict; preserve as-is.
+            print(json.dumps(entry, separators=(',',':')))
+    elif isinstance(data, dict) and 'items' in data and isinstance(data['items'], list):
+        if not '$ITSI_RESPONSE_WRAPPER': sys.stderr.write('WRAPPER:items\n')
+        for entry in data['items']:
+            print(json.dumps(entry, separators=(',',':')))
+    else:
+        sys.stderr.write('SHAPE:unknown\n')
+except Exception as e:
+    sys.stderr.write('PARSE_ERROR:'+str(e)+'\n')
+" 2> /tmp/itsi_parse_err.$$)
+
+    # Capture the wrapper-shape detection from stderr on the first call.
+    if [ -z "$ITSI_RESPONSE_WRAPPER" ]; then
+      local detected
+      detected=$(grep -oE '^WRAPPER:(array|entry|items)' /tmp/itsi_parse_err.$$ 2>/dev/null | head -1 | sed 's/WRAPPER://')
+      if [ -n "$detected" ]; then
+        ITSI_RESPONSE_WRAPPER="$detected"
+        info "ITSI: detected response wrapper = $ITSI_RESPONSE_WRAPPER (first call)"
+      fi
+    fi
+    rm -f "/tmp/itsi_parse_err.$$" "$tmp_file"
+
+    local page_size=${#page_items[@]}
+    [ $page_size -eq 0 ] && break
+
+    out_array+=("${page_items[@]}")
+    total_fetched=$((total_fetched + page_size))
+
+    # End-of-list: any page that returns fewer than the requested batch size.
+    if [ $page_size -lt $ITSI_BATCH_SIZE ]; then
+      break
+    fi
+
+    offset=$((offset + ITSI_BATCH_SIZE))
+    page_count=$((page_count + 1))
+    sleep "$RATE_LIMIT_DELAY"
+  done
+
+  if [ $page_count -ge $max_pages ]; then
+    warning "ITSI lister hit safety limit ($max_pages pages, ${total_fetched} items) for endpoint: $endpoint"
+    itsi_record_error "$endpoint" "LIMIT" "Hit safety limit of $max_pages pages"
+  fi
+
+  debug_log "ITSI" "list complete: $endpoint → $total_fetched items"
+  return 0
+}
+
+# Extract a stable per-record identifier from a record's JSON.
+# Tries common ID fields in order. Returns "unknown_$RANDOM" on miss
+# (so we never write to the same path twice or skip a record entirely).
+itsi_record_id() {
+  local record_json="$1"
+  local key
+  key=$(printf '%s' "$record_json" | $PYTHON_CMD -c "
+import json, sys
+try:
+    r = json.loads(sys.stdin.read())
+    # If entry-wrapped (defensive fallback for non-bare-array Splunk
+    # builds), unwrap before checking ID fields — content._key is the
+    # real KV-store identifier; top-level name is just the URI-encoded
+    # title and would inconsistently differ from the bare-array shape.
+    if 'content' in r and isinstance(r['content'], dict):
+        for f in ['_key', 'id', 'identifying_name', 'name', 'title']:
+            if f in r['content'] and r['content'][f]:
+                print(str(r['content'][f])); sys.exit(0)
+    # Bare-array shape (documented ITSI behavior): IDs live at top level.
+    for f in ['_key', 'id', 'identifying_name', 'name', 'title']:
+        if f in r and r[f]:
+            print(str(r[f])); sys.exit(0)
+    print('')
+except Exception:
+    print('')
+" 2>/dev/null)
+  if [ -z "$key" ]; then
+    key="unknown_$$_$RANDOM"
+  fi
+  # Sanitize for filesystem use: keep alnum, dash, underscore, dot. Replace rest with _.
+  printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '_' | cut -c 1-128
+}
+
+# Extract the app name (acl.app) from a record's JSON. Defaults to $ITSI_DEFAULT_APP.
+itsi_record_app() {
+  local record_json="$1"
+  local app
+  app=$(printf '%s' "$record_json" | $PYTHON_CMD -c "
+import json, sys
+try:
+    r = json.loads(sys.stdin.read())
+    if 'acl' in r and isinstance(r['acl'], dict) and 'app' in r['acl']:
+        print(str(r['acl']['app'])); sys.exit(0)
+    if 'app' in r and r['app']:
+        print(str(r['app'])); sys.exit(0)
+    print('')
+except Exception:
+    print('')
+" 2>/dev/null)
+  [ -z "$app" ] && app="$ITSI_DEFAULT_APP"
+  # Same sanitization as record_id
+  printf '%s' "$app" | tr -c 'A-Za-z0-9._-' '_' | cut -c 1-128
+}
+
+# Write one record's raw JSON to disk. Respects $RESUME_MODE — file-exists guard.
+# Args: $1=record_json $2=target_dir $3=key $4=counter_var_name (nameref)
+# Returns: 0 written, 1 skipped (resume), 2 error
+itsi_write_record() {
+  local record_json="$1"
+  local target_dir="$2"
+  local key="$3"
+  local -n counter="$4"
+
+  local target_file="$target_dir/${key}.json"
+  if [ "$RESUME_MODE" = true ] && [ -f "$target_file" ] && [ -s "$target_file" ]; then
+    debug_log "ITSI" "resume: skipping $target_file (already on disk)"
+    return 1
+  fi
+
+  mkdir -p "$target_dir" 2>/dev/null
+  # Pretty-print for human review; if formatting fails, dump raw.
+  if printf '%s' "$record_json" | $PYTHON_CMD -m json.tool > "$target_file" 2>/dev/null; then
+    counter=$((counter + 1))
+    return 0
+  else
+    printf '%s\n' "$record_json" > "$target_file"
+    counter=$((counter + 1))
+    debug_log "ITSI" "wrote $target_file (raw, json.tool failed)"
+    return 0
+  fi
+}
+
+# Defensive image extractor. Tries multiple field names + strips data-URL
+# prefix. Writes the binary to itsi_assets/images/<key>.<ext>.
+# Returns 0 on success, 1 on failure (logs to inventory.errors[]).
+itsi_decode_image() {
+  local record_json_file="$1"   # path to JSON file containing the SA-ITOA_files record
+  local file_key="$2"
+
+  local target_dir="$EXPORT_DIR/itsi_assets/images"
+  mkdir -p "$target_dir" 2>/dev/null
+
+  # Resume guard: any existing image at any extension wins.
+  if [ "$RESUME_MODE" = true ]; then
+    for existing in "$target_dir/${file_key}".*; do
+      if [ -f "$existing" ] && [ -s "$existing" ]; then
+        debug_log "ITSI" "resume: skipping image $file_key (already on disk: $existing)"
+        return 0
+      fi
+    done
+  fi
+
+  # Try a sequence of likely field names, handle data-URL prefix, base64-decode.
+  $PYTHON_CMD -c "
+import json, sys, base64, re
+
+target_dir = '$target_dir'
+file_key = '$file_key'
+
+CANDIDATE_FIELDS = ['content_base64', 'content', 'data', 'payload', 'file', 'file_content', 'binary']
+MIME_FIELDS = ['mime_type', 'content_type', 'file_type', 'type']
+EXT_BY_MIME = {
+    'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg',
+    'image/gif': 'gif', 'image/svg+xml': 'svg', 'image/webp': 'webp',
+}
+
+try:
+    with open('$record_json_file', 'r') as f:
+        record = json.load(f)
+except Exception as e:
+    sys.stderr.write('READ_FAIL: '+str(e)+'\n')
+    sys.exit(2)
+
+# Hunt for the binary payload — check top-level + nested 'content' dict.
+def get_field(rec, name):
+    if isinstance(rec, dict):
+        if name in rec: return rec[name]
+        if 'content' in rec and isinstance(rec['content'], dict) and name in rec['content']:
+            return rec['content'][name]
+    return None
+
+payload = None
+payload_field = None
+for f in CANDIDATE_FIELDS:
+    v = get_field(record, f)
+    if v and isinstance(v, str) and len(v) > 24:
+        payload = v
+        payload_field = f
+        break
+
+if payload is None:
+    sys.stderr.write('NO_PAYLOAD_FIELD: tried '+','.join(CANDIDATE_FIELDS)+'\n')
+    sys.exit(3)
+
+# Extract mime type if present.
+mime_type = None
+ext = 'bin'
+for f in MIME_FIELDS:
+    v = get_field(record, f)
+    if v and isinstance(v, str):
+        mime_type = v.strip()
+        break
+
+# Handle data-URL prefix: 'data:image/png;base64,XXXX'
+m = re.match(r'^data:([^;]+);base64,(.+)$', payload, re.DOTALL)
+if m:
+    if not mime_type: mime_type = m.group(1)
+    payload = m.group(2)
+
+if mime_type and mime_type in EXT_BY_MIME:
+    ext = EXT_BY_MIME[mime_type]
+elif mime_type and '/' in mime_type:
+    # Generic: image/foo → foo
+    ext = mime_type.split('/',1)[1].split('+')[0]
+    if not ext.isalnum() or len(ext) > 8: ext = 'bin'
+
+# base64 decode (strip whitespace defensively)
+try:
+    binary = base64.b64decode(re.sub(r'\s+', '', payload), validate=False)
+except Exception as e:
+    sys.stderr.write('B64_DECODE_FAIL: field='+payload_field+' err='+str(e)+'\n')
+    sys.exit(4)
+
+out_path = '%s/%s.%s' % (target_dir, file_key, ext)
+try:
+    with open(out_path, 'wb') as f: f.write(binary)
+except Exception as e:
+    sys.stderr.write('WRITE_FAIL: '+str(e)+'\n')
+    sys.exit(5)
+
+sys.stdout.write('OK: field=%s ext=%s bytes=%d\n' % (payload_field, ext, len(binary)))
+" > "/tmp/itsi_img_out.$$" 2> "/tmp/itsi_img_err.$$"
+
+  local rc=$?
+  if [ $rc -eq 0 ]; then
+    STATS_ITSI_IMAGES=$((STATS_ITSI_IMAGES + 1))
+    debug_log "ITSI" "image decoded: $file_key — $(cat /tmp/itsi_img_out.$$ 2>/dev/null)"
+    rm -f "/tmp/itsi_img_out.$$" "/tmp/itsi_img_err.$$"
+    return 0
+  else
+    local err_msg
+    err_msg=$(cat /tmp/itsi_img_err.$$ 2>/dev/null | head -3 | tr '\n' '|')
+    local field_dump
+    field_dump=$(itsi_record_keys "$record_json_file")
+    itsi_record_error "image:$file_key" "$rc" "decode failed; record top-level keys=[$field_dump]; err=$err_msg"
+    rm -f "/tmp/itsi_img_out.$$" "/tmp/itsi_img_err.$$"
+    return 1
+  fi
+}
+
+# Auto-detect whether ITSI is installed and accessible. Sets:
+#   COLLECT_ITSI       — true | false
+#   ITSI_SKIP_REASON   — set when COLLECT_ITSI=false; one of:
+#                         itsi_not_installed | sa_itoa_missing |
+#                         opt_out | auth_rejected | missing_capability |
+#                         namespace_unreachable | rest_unreachable |
+#                         probe_unexpected_<http_code>
+#
+# Strategy (per plan §10.4.2):
+#   1. Honor --no-itsi opt-out immediately.
+#   2. Fetch /services/apps/local once and write installed_apps.json
+#      (does not exist on disk in the current pipeline — we create it).
+#   3. Verify SA-ITOA app presence. Only canonical signal is SA-ITOA
+#      (REST host); `itsi` is just the UI-facing app.
+#   4. Endpoint-probe: one cheap GET against itoa_interface/glass_table
+#      to check capability access. We probe behavior, not role names,
+#      because real customer deployments customize sc_admin/admin to
+#      include ITSI capabilities — role-name checks would miss those.
+detect_itsi() {
+  ITSI_ERRORS_JSON_ARRAY=()
+  ITSI_MODULES_JSON_ARRAY=()
+
+  if [ "$COLLECT_ITSI_OPTOUT" = "true" ]; then
+    info "ITSI: opted out via --no-itsi — KV-store layer will be skipped."
+    COLLECT_ITSI=false
+    ITSI_SKIP_REASON="opt_out"
+    return 0
+  fi
+
+  # Always make sure the analytics dir exists before we write into it.
+  mkdir -p "$EXPORT_DIR/dma_analytics/system_info" 2>/dev/null
+
+  local apps_json="$EXPORT_DIR/dma_analytics/system_info/installed_apps.json"
+
+  # The existing pipeline doesn't materialize installed_apps.json — but the
+  # plan needs it for module detection AND the inventory. Fetch the
+  # UNFILTERED apps list once; this is independent of any --apps selection
+  # the customer made for the rest of the export.
+  if [ ! -f "$apps_json" ] || [ ! -s "$apps_json" ]; then
+    info "ITSI: fetching installed apps list for detection..."
+    if ! splunk_api_call "/services/apps/local" "$apps_json" "-G" \
+         "-d" "output_mode=json" \
+         "-d" "count=0"; then
+      warning "ITSI detection: failed to fetch /services/apps/local — skipping ITSI collection."
+      COLLECT_ITSI=false
+      ITSI_SKIP_REASON="apps_list_fetch_failed"
+      return 0
+    fi
+  fi
+
+  # Detect SA-ITOA presence + companion modules. Two presence forms for the
+  # `disabled` flag in Splunk app responses: int (0/1) AND boolean (false/true).
+  local presence_summary
+  presence_summary=$($PYTHON_CMD -c "
+import json, sys, re
+try:
+    with open('$apps_json','r') as f: data = json.load(f)
+    entries = data.get('entry', [])
+    sa_itoa_present = False
+    itsi_ui_present = False
+    modules = []
+    for e in entries:
+        name = e.get('name','')
+        content = e.get('content',{})
+        disabled = content.get('disabled')
+        # Normalize: 0/false → enabled; 1/true → disabled.
+        is_enabled = (disabled == 0 or disabled is False or disabled == '0')
+        if name == 'SA-ITOA' and is_enabled: sa_itoa_present = True
+        if name == 'itsi' and is_enabled: itsi_ui_present = True
+        if is_enabled and re.match(r'^(itsi|SA-ITOA|SA-IndexCreation|SA-UserAccess|SA-ITSI-[A-Za-z]+|DA-ITSI-[A-Za-z]+)$', name):
+            modules.append({
+                'app': name,
+                'label': content.get('label', name),
+                'version': content.get('version', 'unknown'),
+                'disabled': not is_enabled,
+            })
+    print(json.dumps({
+        'sa_itoa_present': sa_itoa_present,
+        'itsi_ui_present': itsi_ui_present,
+        'modules': modules,
+    }))
+except Exception as e:
+    print(json.dumps({'error': str(e)}))
+" 2>/dev/null)
+
+  local sa_itoa_present
+  sa_itoa_present=$(printf '%s' "$presence_summary" | $PYTHON_CMD -c "import json,sys;print(json.loads(sys.stdin.read()).get('sa_itoa_present',False))" 2>/dev/null || echo "False")
+  local itsi_ui_present
+  itsi_ui_present=$(printf '%s' "$presence_summary" | $PYTHON_CMD -c "import json,sys;print(json.loads(sys.stdin.read()).get('itsi_ui_present',False))" 2>/dev/null || echo "False")
+
+  # Stash the modules array for the inventory file later.
+  ITSI_MODULES_JSON_ARRAY=("$(printf '%s' "$presence_summary" | $PYTHON_CMD -c "import json,sys;print(json.dumps(json.loads(sys.stdin.read()).get('modules',[]),separators=(',',':')))" 2>/dev/null)")
+  STATS_ITSI_MODULES=$(printf '%s' "$presence_summary" | $PYTHON_CMD -c "import json,sys;print(len(json.loads(sys.stdin.read()).get('modules',[])))" 2>/dev/null || echo 0)
+
+  if [ "$sa_itoa_present" != "True" ] && [ "$itsi_ui_present" != "True" ]; then
+    info "ITSI: not detected on this Splunk instance — skipping ITSI collection."
+    COLLECT_ITSI=false
+    ITSI_SKIP_REASON="itsi_not_installed"
+    return 0
+  fi
+
+  if [ "$sa_itoa_present" != "True" ]; then
+    warning "ITSI: 'itsi' UI app detected but 'SA-ITOA' is missing/disabled — REST endpoints unreachable. KV-store layer skipped."
+    COLLECT_ITSI=false
+    ITSI_SKIP_REASON="sa_itoa_missing"
+    return 0
+  fi
+
+  # Endpoint probe — single cheap GET to test actual access.
+  local probe_file
+  probe_file=$(mktemp)
+  local probe_http
+  # We need just the HTTP code from this probe, NOT to go through retry-on-401
+  # logic (auth failures here are diagnostic info, not retry candidates).
+  # So bypass splunk_api_call and do a direct curl.
+  probe_http=$(curl -k -s -o "$probe_file" -w '%{http_code}' --max-time 30 \
+    -H "$AUTH_HEADER" \
+    $CURL_PROXY_ARGS \
+    "${SPLUNK_URL}/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1&output_mode=json" 2>/dev/null)
+
+  local probe_size=0
+  [ -f "$probe_file" ] && probe_size=$(wc -c < "$probe_file" 2>/dev/null || echo 0)
+  itsi_trace "GET" "/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1" "$probe_http" "$probe_size" "0" "probe"
+  rm -f "$probe_file"
+
+  case "$probe_http" in
+    200)
+      success "ITSI detected and accessible (probe returned 200) — will collect KV-store inventory."
+      COLLECT_ITSI=true
+      # Extract version from the apps list — cheaper than another round-trip.
+      ITSI_VERSION=$($PYTHON_CMD -c "
+import json
+try:
+    with open('$apps_json','r') as f: d = json.load(f)
+    for e in d.get('entry',[]):
+        if e.get('name') == 'SA-ITOA':
+            print(e.get('content',{}).get('version','unknown')); break
+    else:
+        print('unknown')
+except Exception:
+    print('unknown')
+" 2>/dev/null)
+      info "ITSI version: $ITSI_VERSION (from SA-ITOA app)"
+      ;;
+    401)
+      warning "ITSI probe got 401 — auth token rejected on SA-ITOA namespace. Token may be expired/scoped too narrowly. Skipping ITSI collection."
+      COLLECT_ITSI=false
+      ITSI_SKIP_REASON="auth_rejected"
+      ;;
+    403)
+      warning "ITSI probe got 403 — auth user lacks read_itsi_* capabilities."
+      info "  Remediation: have your Splunk admin (a) assign an itoa_* role to this user, OR"
+      info "  (b) grant read_itsi_* capabilities directly to the user's current role (sc_admin / admin / custom)."
+      info "  The classic surface of the itsi app (dashboards, savedsearches, .conf) is still collected by the standard collectors."
+      COLLECT_ITSI=false
+      ITSI_SKIP_REASON="missing_capability"
+      ;;
+    404)
+      info "ITSI probe got 404 — SA-ITOA namespace not reachable despite app being listed. Skipping ITSI collection."
+      COLLECT_ITSI=false
+      ITSI_SKIP_REASON="namespace_unreachable"
+      ;;
+    000|"")
+      error "ITSI probe failed — no HTTP response (connection refused or timeout). Skipping ITSI collection."
+      info "  On Splunk Cloud this often means REST API port 8089 isn't enabled (requires a Splunk Support case)."
+      COLLECT_ITSI=false
+      ITSI_SKIP_REASON="rest_unreachable"
+      ;;
+    *)
+      warning "ITSI probe returned unexpected HTTP $probe_http — skipping ITSI collection."
+      info "  Inspect manually: curl -k -H '\$AUTH_HEADER' '${SPLUNK_URL}/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1'"
+      COLLECT_ITSI=false
+      ITSI_SKIP_REASON="probe_unexpected_$probe_http"
+      ;;
+  esac
+}
+
+# Write _itsi_inventory.json — single source of truth for what was collected.
+# Always called at the end of detect_itsi (even on skip) AND at the end of
+# collect_itsi_assets (with full counts).
+itsi_write_inventory() {
+  local collected_flag="$1"   # true | false (string)
+  local inventory_file="$EXPORT_DIR/itsi_assets/_itsi_inventory.json"
+  mkdir -p "$EXPORT_DIR/itsi_assets" 2>/dev/null
+
+  # Build errors[] from accumulator
+  local errors_json="[]"
+  if [ ${#ITSI_ERRORS_JSON_ARRAY[@]} -gt 0 ]; then
+    errors_json="["
+    local first=1
+    for e in "${ITSI_ERRORS_JSON_ARRAY[@]}"; do
+      [ $first -eq 1 ] && first=0 || errors_json="${errors_json},"
+      errors_json="${errors_json}${e}"
+    done
+    errors_json="${errors_json}]"
+  fi
+
+  # Modules[] from accumulator (single JSON-array entry per detect call)
+  local modules_json="[]"
+  if [ ${#ITSI_MODULES_JSON_ARRAY[@]} -gt 0 ] && [ -n "${ITSI_MODULES_JSON_ARRAY[0]}" ]; then
+    modules_json="${ITSI_MODULES_JSON_ARRAY[0]}"
+  fi
+
+  local reason_json="null"
+  [ -n "$ITSI_SKIP_REASON" ] && reason_json="\"$ITSI_SKIP_REASON\""
+
+  cat > "$inventory_file" <<EOF
+{
+  "collected": $collected_flag,
+  "reason": $reason_json,
+  "detected_at": "$(date -u +%FT%TZ)",
+  "itsi_version": "$ITSI_VERSION",
+  "rest_namespace": "SA-ITOA",
+  "response_wrapper": "${ITSI_RESPONSE_WRAPPER:-unknown}",
+  "counts": {
+    "glass_tables": $STATS_ITSI_GLASSTABLES,
+    "deep_dives": $STATS_ITSI_DEEPDIVES,
+    "services": $STATS_ITSI_SERVICES,
+    "kpis": $STATS_ITSI_KPIS,
+    "kpi_base_searches": $STATS_ITSI_KPI_BASE_SEARCHES,
+    "service_templates": $STATS_ITSI_SERVICE_TEMPLATES,
+    "entities": $STATS_ITSI_ENTITIES,
+    "entity_types": $STATS_ITSI_ENTITY_TYPES,
+    "notable_event_aggregation_policies": $STATS_ITSI_NEAPS,
+    "correlation_searches": $STATS_ITSI_CORRELATION_SEARCHES,
+    "correlation_searches_by_type": {
+      "multi_kpi_alert": $STATS_ITSI_CORR_MULTI_KPI,
+      "single_kpi_alert": $STATS_ITSI_CORR_SINGLE_KPI,
+      "ad_hoc": $STATS_ITSI_CORR_ADHOC
+    },
+    "maintenance_calendars": $STATS_ITSI_MAINT_CALENDARS,
+    "threshold_templates": $STATS_ITSI_THRESHOLD_TEMPLATES,
+    "images": $STATS_ITSI_IMAGES,
+    "modules_detected": $STATS_ITSI_MODULES
+  },
+  "modules_detected": $modules_json,
+  "errors": $errors_json
+}
+EOF
+
+  debug_log "ITSI" "wrote inventory: $inventory_file (collected=$collected_flag, errors=${#ITSI_ERRORS_JSON_ARRAY[@]})"
+}
+
+# Collect a single ITSI object type. Driver function — used by the
+# orchestrator for each endpoint. Args:
+#   $1 endpoint
+#   $2 target_dir (or "PER_APP_DASHBOARD:glasstable" / "PER_APP_DASHBOARD:deepdive" for app-scoped)
+#   $3 counter_var_name (nameref)
+#   $4 label (for logging)
+itsi_collect_endpoint() {
+  local endpoint="$1"
+  local target_spec="$2"
+  local counter_var="$3"
+  local label="$4"
+
+  info "ITSI ${label}: listing from ${endpoint}..."
+  local -a records=()
+  if ! itsi_list_endpoint "$endpoint" records; then
+    error "ITSI ${label}: list failed — see inventory.errors[]"
+    return 1
+  fi
+
+  local total=${#records[@]}
+  if [ $total -eq 0 ]; then
+    info "ITSI ${label}: zero records returned (endpoint may not apply to this ITSI install)."
+    return 0
+  fi
+
+  local written=0
+  local skipped=0
+  for rec_json in "${records[@]}"; do
+    local key
+    key=$(itsi_record_id "$rec_json")
+    local dir
+    case "$target_spec" in
+      PER_APP_DASHBOARD:*)
+        local subtype="${target_spec#PER_APP_DASHBOARD:}"
+        local app
+        app=$(itsi_record_app "$rec_json")
+        dir="$EXPORT_DIR/$app/dashboards/$subtype"
+        ;;
+      *)
+        dir="$target_spec"
+        ;;
+    esac
+    local rc
+    itsi_write_record "$rec_json" "$dir" "$key" "$counter_var"
+    rc=$?
+    case $rc in
+      0) written=$((written + 1)) ;;
+      1) skipped=$((skipped + 1)) ;;
+      *) itsi_record_error "$label:$key" "WRITE" "itsi_write_record returned $rc" ;;
+    esac
+  done
+
+  success "ITSI ${label}: ${total} listed, ${skipped} on-disk (resume), ${written} newly written"
+}
+
+# Walk services/*.json and extract every service.kpis[] entry into a
+# flat-file view at itsi_assets/kpis/<kpi_key>.json. Adds a
+# _source_service_id field for traceability.
+itsi_extract_kpis_from_services() {
+  local services_dir="$EXPORT_DIR/itsi_assets/services"
+  local kpis_dir="$EXPORT_DIR/itsi_assets/kpis"
+  [ ! -d "$services_dir" ] && return 0
+  mkdir -p "$kpis_dir" 2>/dev/null
+
+  local total=0
+  for svc_file in "$services_dir"/*.json; do
+    [ -f "$svc_file" ] || continue
+    local svc_id
+    svc_id=$(basename "$svc_file" .json)
+
+    local extracted
+    extracted=$($PYTHON_CMD -c "
+import json, sys, os, re
+try:
+    with open('$svc_file','r') as f: svc = json.load(f)
+    kpis = svc.get('kpis', [])
+    if not isinstance(kpis, list):
+        sys.exit(0)
+    out = '$kpis_dir'
+    written = 0
+    for kpi in kpis:
+        if not isinstance(kpi, dict): continue
+        kpi_key = kpi.get('_key') or kpi.get('id') or kpi.get('title') or 'kpi_unknown'
+        kpi_key = re.sub(r'[^A-Za-z0-9._-]', '_', str(kpi_key))[:128]
+        kpi_out = dict(kpi)
+        kpi_out['_source_service_id'] = '$svc_id'
+        target = os.path.join(out, kpi_key + '.json')
+        # Resume guard: skip if exists in resume mode
+        if '$RESUME_MODE' == 'true' and os.path.exists(target) and os.path.getsize(target) > 0:
+            continue
+        with open(target, 'w') as f: json.dump(kpi_out, f, indent=2)
+        written += 1
+    print(written)
+except Exception as e:
+    sys.stderr.write('ERR: '+str(e)+'\n')
+    print(0)
+" 2>/dev/null)
+    total=$((total + ${extracted:-0}))
+  done
+
+  STATS_ITSI_KPIS=$total
+  info "ITSI kpis: extracted $total KPIs from services into $kpis_dir"
+}
+
+# Classify correlation_searches[].search_type into the three subtype counters.
+itsi_classify_correlation_searches() {
+  local cs_dir="$EXPORT_DIR/itsi_assets/correlation_searches"
+  [ ! -d "$cs_dir" ] && return 0
+
+  local counts
+  counts=$($PYTHON_CMD -c "
+import json, os
+multi = single = adhoc = 0
+for fn in os.listdir('$cs_dir'):
+    if not fn.endswith('.json') or fn.startswith('_'): continue
+    try:
+        with open(os.path.join('$cs_dir', fn),'r') as f: rec = json.load(f)
+        st = (rec.get('search_type') or '').lower()
+        if 'multi' in st: multi += 1
+        elif 'single' in st: single += 1
+        else: adhoc += 1
+    except Exception:
+        adhoc += 1
+print(f'{multi} {single} {adhoc}')
+" 2>/dev/null)
+  if [ -n "$counts" ]; then
+    set -- $counts
+    STATS_ITSI_CORR_MULTI_KPI="${1:-0}"
+    STATS_ITSI_CORR_SINGLE_KPI="${2:-0}"
+    STATS_ITSI_CORR_ADHOC="${3:-0}"
+  fi
+}
+
+# Walk Glass Tables and fetch each referenced image asset from the
+# SA-ITOA_files KV collection. Best-effort: glass tables are preserved
+# regardless of image outcome.
+itsi_collect_glass_table_images() {
+  local gt_root="$EXPORT_DIR"
+  local files_endpoint="/servicesNS/nobody/SA-ITOA/storage/collections/data/SA-ITOA_files"
+
+  # Walk every glass_table JSON in any per-app dir and collect referenced file keys.
+  # File-key references in GTs commonly appear in content/svg_coordinates as
+  # `kvstore://SA-ITOA_files/<key>` or as the bare key with adjacent type marker.
+  # We scan the raw JSON text for any `SA-ITOA_files/<key>` pattern.
+  local -A wanted_keys
+  while IFS= read -r gt_file; do
+    [ -f "$gt_file" ] || continue
+    while IFS= read -r ref_key; do
+      [ -n "$ref_key" ] && wanted_keys["$ref_key"]=1
+    done < <(grep -oE 'SA-ITOA_files/[A-Za-z0-9._-]+' "$gt_file" 2>/dev/null | sed 's|SA-ITOA_files/||' | sort -u)
+  done < <(find "$EXPORT_DIR" -path '*/dashboards/glasstable/*.json' 2>/dev/null)
+
+  local img_count=${#wanted_keys[@]}
+  if [ $img_count -eq 0 ]; then
+    info "ITSI images: no SA-ITOA_files references found in collected Glass Tables — skipping image fetch."
+    return 0
+  fi
+
+  info "ITSI images: $img_count unique file keys referenced — fetching..."
+  for fk in "${!wanted_keys[@]}"; do
+    local rec_file
+    rec_file=$(mktemp)
+    if ! splunk_api_call "${files_endpoint}/${fk}" "$rec_file" "-G" "-d" "output_mode=json"; then
+      itsi_record_error "image:$fk" "FETCH" "splunk_api_call failed for SA-ITOA_files/$fk"
+      rm -f "$rec_file"
+      continue
+    fi
+    itsi_decode_image "$rec_file" "$fk"
+    rm -f "$rec_file"
+  done
+}
+
+# ────────────────────────────────────────────────────────────────────────
+# Orchestrator. Called from the main collection loop only when
+# detect_itsi() set COLLECT_ITSI=true. Never aborts the export: every
+# error path logs to inventory and continues.
+# ────────────────────────────────────────────────────────────────────────
+collect_itsi_assets() {
+  progress "Collecting ITSI KV-store inventory..."
+
+  # Ensure subdirs exist (safe no-op if already created).
+  mkdir -p "$EXPORT_DIR/itsi_assets"
+  mkdir -p "$EXPORT_DIR/itsi_assets/services"
+  mkdir -p "$EXPORT_DIR/itsi_assets/kpis"
+  mkdir -p "$EXPORT_DIR/itsi_assets/kpi_base_searches"
+  mkdir -p "$EXPORT_DIR/itsi_assets/service_templates"
+  mkdir -p "$EXPORT_DIR/itsi_assets/entities"
+  mkdir -p "$EXPORT_DIR/itsi_assets/entity_types"
+  mkdir -p "$EXPORT_DIR/itsi_assets/notable_event_aggregation_policies"
+  mkdir -p "$EXPORT_DIR/itsi_assets/correlation_searches"
+  mkdir -p "$EXPORT_DIR/itsi_assets/maintenance_calendars"
+  mkdir -p "$EXPORT_DIR/itsi_assets/threshold_templates"
+  mkdir -p "$EXPORT_DIR/itsi_assets/images"
+  mkdir -p "$EXPORT_DIR/itsi_assets/modules"
+
+  # Per-plan §10.4.5: collect dashboard-class first, then reference data,
+  # then alerts-class, then images, then derived KPIs + classification.
+
+  # 1. Dashboard-class: Glass Tables + Deep Dives (per-app)
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table" \
+    "PER_APP_DASHBOARD:glasstable" \
+    STATS_ITSI_GLASSTABLES \
+    "glass_tables"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/deep_dive" \
+    "PER_APP_DASHBOARD:deepdive" \
+    STATS_ITSI_DEEPDIVES \
+    "deep_dives"
+
+  # 2. Reference data — workspace-wide (not app-scoped)
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/service" \
+    "$EXPORT_DIR/itsi_assets/services" \
+    STATS_ITSI_SERVICES \
+    "services"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/kpi_base_search" \
+    "$EXPORT_DIR/itsi_assets/kpi_base_searches" \
+    STATS_ITSI_KPI_BASE_SEARCHES \
+    "kpi_base_searches"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/base_service_template" \
+    "$EXPORT_DIR/itsi_assets/service_templates" \
+    STATS_ITSI_SERVICE_TEMPLATES \
+    "service_templates"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/entity" \
+    "$EXPORT_DIR/itsi_assets/entities" \
+    STATS_ITSI_ENTITIES \
+    "entities"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/entity_type" \
+    "$EXPORT_DIR/itsi_assets/entity_types" \
+    STATS_ITSI_ENTITY_TYPES \
+    "entity_types"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/itoa_interface/kpi_threshold_template" \
+    "$EXPORT_DIR/itsi_assets/threshold_templates" \
+    STATS_ITSI_THRESHOLD_TEMPLATES \
+    "threshold_templates"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/maintenance_services_interface/maintenance_calendar" \
+    "$EXPORT_DIR/itsi_assets/maintenance_calendars" \
+    STATS_ITSI_MAINT_CALENDARS \
+    "maintenance_calendars"
+
+  # 3. Alert-class — under event_management_interface
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/event_management_interface/notable_event_aggregation_policy" \
+    "$EXPORT_DIR/itsi_assets/notable_event_aggregation_policies" \
+    STATS_ITSI_NEAPS \
+    "notable_event_aggregation_policies"
+
+  itsi_collect_endpoint \
+    "/servicesNS/nobody/SA-ITOA/event_management_interface/correlation_search" \
+    "$EXPORT_DIR/itsi_assets/correlation_searches" \
+    STATS_ITSI_CORRELATION_SEARCHES \
+    "correlation_searches"
+
+  # 4. Glass-table images via the SA-ITOA_files KV collection
+  itsi_collect_glass_table_images
+
+  # 5. Derived: extract embedded KPIs from services into a flat-file view
+  itsi_extract_kpis_from_services
+
+  # 6. Classify correlation_searches by search_type
+  itsi_classify_correlation_searches
+
+  # 7. Modules detection summary
+  if [ ${#ITSI_MODULES_JSON_ARRAY[@]} -gt 0 ] && [ -n "${ITSI_MODULES_JSON_ARRAY[0]}" ]; then
+    printf '%s\n' "${ITSI_MODULES_JSON_ARRAY[0]}" \
+      | $PYTHON_CMD -m json.tool > "$EXPORT_DIR/itsi_assets/modules/_detected_modules.json" 2>/dev/null \
+      || printf '%s\n' "${ITSI_MODULES_JSON_ARRAY[0]}" > "$EXPORT_DIR/itsi_assets/modules/_detected_modules.json"
+    info "ITSI modules: ${STATS_ITSI_MODULES} ITSI-related apps catalogued"
+  fi
+
+  # 8. Final inventory write — full counts + accumulated errors
+  itsi_write_inventory "true"
+
+  success "ITSI collection complete:"
+  success "  Glass Tables: $STATS_ITSI_GLASSTABLES   Deep Dives: $STATS_ITSI_DEEPDIVES"
+  success "  Services: $STATS_ITSI_SERVICES   KPIs: $STATS_ITSI_KPIS   KPI base searches: $STATS_ITSI_KPI_BASE_SEARCHES"
+  success "  Entities: $STATS_ITSI_ENTITIES   Entity types: $STATS_ITSI_ENTITY_TYPES   Service templates: $STATS_ITSI_SERVICE_TEMPLATES"
+  success "  NEAPs: $STATS_ITSI_NEAPS   Correlation searches: $STATS_ITSI_CORRELATION_SEARCHES (multi-KPI=$STATS_ITSI_CORR_MULTI_KPI, single=$STATS_ITSI_CORR_SINGLE_KPI, ad-hoc=$STATS_ITSI_CORR_ADHOC)"
+  success "  Maintenance calendars: $STATS_ITSI_MAINT_CALENDARS   Threshold templates: $STATS_ITSI_THRESHOLD_TEMPLATES   Images: $STATS_ITSI_IMAGES"
+  [ ${#ITSI_ERRORS_JSON_ARRAY[@]} -gt 0 ] && warning "ITSI: ${#ITSI_ERRORS_JSON_ARRAY[@]} non-fatal error(s) recorded in inventory.errors[]"
+}
+
+# ──────────────────────────── ITSI BLOCK END ────────────────────────────
+
+# =============================================================================
+# MANIFEST GENERATION (Guaranteed Schema for DMA)
+# =============================================================================
+
+generate_manifest() {
+  progress "Generating manifest.json (standardized schema)..."
+
+  local manifest_file="$EXPORT_DIR/dma_analytics/manifest.json"
+
+  # Get Splunk version
+  local splunk_version="unknown"
+  local splunk_build="unknown"
+  if [ -f "$SPLUNK_HOME/etc/splunk.version" ]; then
+    splunk_version=$(grep "^VERSION" "$SPLUNK_HOME/etc/splunk.version" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+    splunk_build=$(grep "^BUILD" "$SPLUNK_HOME/etc/splunk.version" 2>/dev/null | cut -d= -f2 | tr -d ' ')
+  fi
+
+  # Get IP addresses using Python helper (no jq dependency)
+  local ip_addresses=$(get_host_ips_json 2>/dev/null || echo "[]")
+  [ -z "$ip_addresses" ] && ip_addresses="[]"
+
+  # Calculate export duration
+  local export_duration=$(($(date +%s) - EXPORT_START_TIME))
+
+  # Count saved searches (separate from alerts)
+  local saved_search_count=0
+  for app in "${SELECTED_APPS[@]}"; do
+    for conf_dir in "default" "local"; do
+      if [ -f "$EXPORT_DIR/$app/$conf_dir/savedsearches.conf" ]; then
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/savedsearches.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+        [ -z "$count" ] || ! [[ "$count" =~ ^[0-9]+$ ]] && count=0
+        saved_search_count=$((saved_search_count + count))
+      fi
+    done
+  done
+
+  # Count macros
+  local macro_count=0
+  for app in "${SELECTED_APPS[@]}"; do
+    for conf_dir in "default" "local"; do
+      if [ -f "$EXPORT_DIR/$app/$conf_dir/macros.conf" ]; then
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/macros.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+        [ -z "$count" ] || ! [[ "$count" =~ ^[0-9]+$ ]] && count=0
+        macro_count=$((macro_count + count))
+      fi
+    done
+  done
+
+  # Count props stanzas
+  local props_count=0
+  for app in "${SELECTED_APPS[@]}"; do
+    for conf_dir in "default" "local"; do
+      if [ -f "$EXPORT_DIR/$app/$conf_dir/props.conf" ]; then
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/props.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+        [ -z "$count" ] || ! [[ "$count" =~ ^[0-9]+$ ]] && count=0
+        props_count=$((props_count + count))
+      fi
+    done
+  done
+
+  # Count transforms stanzas
+  local transforms_count=0
+  for app in "${SELECTED_APPS[@]}"; do
+    for conf_dir in "default" "local"; do
+      if [ -f "$EXPORT_DIR/$app/$conf_dir/transforms.conf" ]; then
+        local count=$(grep -c '^\[' "$EXPORT_DIR/$app/$conf_dir/transforms.conf" 2>/dev/null | head -1 | tr -d '[:space:]')
+        [ -z "$count" ] || ! [[ "$count" =~ ^[0-9]+$ ]] && count=0
+        transforms_count=$((transforms_count + count))
+      fi
+    done
+  done
+
+  # Count dashboards from app-scoped folders (v2 structure)
+  # NOTE: Only count .json files that are NOT _definition.json (those are extracted definitions, not separate dashboards)
+  local studio_count=0
+  local classic_count=0
+  for dir in "$EXPORT_DIR"/*/dashboards/studio; do
+    if [ -d "$dir" ]; then
+      local count=$(ls -1 "$dir"/*.json 2>/dev/null | grep -v '_definition\.json$' | wc -l | tr -d ' ')
+      studio_count=$((studio_count + count))
+    fi
+  done
+  for dir in "$EXPORT_DIR"/*/dashboards/classic; do
+    if [ -d "$dir" ]; then
+      local count=$(ls -1 "$dir"/*.json 2>/dev/null | wc -l | tr -d ' ')
+      classic_count=$((classic_count + count))
+    fi
+  done
+
+  # Use REST API count if available, otherwise fall back to XML file count
+  local dashboard_total=$STATS_DASHBOARDS
+  if [ "$dashboard_total" -eq 0 ] && [ "$STATS_DASHBOARDS_XML" -gt 0 ]; then
+    dashboard_total=$STATS_DASHBOARDS_XML
+    log "Using XML file count for dashboards (REST API unavailable): $dashboard_total"
+  fi
+
+  # Count classic dashboards (total minus studio)
+  local classic_count=$((dashboard_total - studio_count))
+  if [ "$classic_count" -lt 0 ]; then classic_count=0; fi
+
+  # Build apps array using Python helper (replaces jq)
+  local apps_json=$(build_apps_json "$EXPORT_DIR" "${SELECTED_APPS[@]}")
+  # Ensure we have valid JSON (fallback to empty array if empty or invalid)
+  if [ -z "$apps_json" ] || [ "$apps_json" = "null" ]; then
+    apps_json="[]"
+  fi
+
+  # Count total files (use ls -lR instead of find for container compatibility)
+  local total_files=$(ls -lR "$EXPORT_DIR" 2>/dev/null | grep -c "^-" | tr -d ' ')
+  local total_size=$(du -sb "$EXPORT_DIR" 2>/dev/null | cut -f1)
+
+  # Build usage intelligence summary using Python helper (replaces jq)
+  local usage_intel_json="{}"
+  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
+    progress "Extracting usage intelligence for manifest..."
+    usage_intel_json=$(build_usage_intel_json "$EXPORT_DIR")
+    # Ensure we have valid JSON (fallback to empty object if empty or invalid)
+    if [ -z "$usage_intel_json" ] || [ "$usage_intel_json" = "null" ]; then
+      usage_intel_json="{}"
+    fi
+  fi
+
+  # Generate manifest
+  cat > "$manifest_file" << MANIFEST_EOF
+{
+  "schema_version": "4.0",
+  "archive_structure_version": "v2",
+  "export_tool": "dma-splunk-export",
+  "export_tool_version": "$SCRIPT_VERSION",
+  "export_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "export_duration_seconds": $export_duration,
+
+  "archive_structure": {
+    "version": "v2",
+    "description": "App-centric dashboard organization prevents name collisions",
+    "dashboard_location": "{AppName}/dashboards/classic/ and {AppName}/dashboards/studio/"
+  },
+
+  "source": {
+    "hostname": "$(get_hostname short)",
+    "fqdn": "$(get_hostname fqdn)",
+    "platform": "$(uname -s)",
+    "platform_version": "$(uname -r)",
+    "architecture": "$(uname -m)"
+  },
+
+  "splunk": {
+    "home": "$SPLUNK_HOME",
+    "version": "$splunk_version",
+    "build": "$splunk_build",
+    "flavor": "$SPLUNK_FLAVOR",
+    "role": "$SPLUNK_ROLE",
+    "architecture": "$SPLUNK_ARCHITECTURE",
+    "is_shc_member": $IS_SHC_MEMBER,
+    "is_shc_captain": $IS_SHC_CAPTAIN,
+    "is_idx_cluster": $IS_IDX_CLUSTER,
+    "is_cloud": $IS_CLOUD
+  },
+
+  "collection": {
+    "configs": $COLLECT_CONFIGS,
+    "dashboards": $COLLECT_DASHBOARDS,
+    "alerts": $COLLECT_ALERTS,
+    "rbac": $COLLECT_RBAC,
+    "usage_analytics": $COLLECT_USAGE,
+    "usage_period": "$USAGE_PERIOD",
+    "indexes": $COLLECT_INDEXES,
+    "lookups": $COLLECT_LOOKUPS,
+    "audit_sample": $COLLECT_AUDIT,
+    "data_anonymized": $ANONYMIZE_DATA,
+    "itsi": $([ "$COLLECT_ITSI" = "true" ] && echo true || echo false)
+  },
+
+  "statistics": {
+    "apps_exported": $STATS_APPS,
+    "dashboards_classic": $classic_count,
+    "dashboards_studio": $studio_count,
+    "dashboards_total": $dashboard_total,
+    "alerts": $STATS_ALERTS,
+    "saved_searches": $saved_search_count,
+    "users": $STATS_USERS,
+    "roles": 0,
+    "indexes": $STATS_INDEXES,
+    "macros": $macro_count,
+    "props_stanzas": $props_count,
+    "transforms_stanzas": $transforms_count,
+    "errors": $STATS_ERRORS,
+    "total_files": $total_files,
+    "total_size_bytes": ${total_size:-0},
+    "itsi": {
+      "collected": $([ "$COLLECT_ITSI" = "true" ] && echo true || echo false),
+      "reason": $([ -n "$ITSI_SKIP_REASON" ] && echo "\"$ITSI_SKIP_REASON\"" || echo "null"),
+      "version": "$ITSI_VERSION",
+      "glass_tables": $STATS_ITSI_GLASSTABLES,
+      "deep_dives": $STATS_ITSI_DEEPDIVES,
+      "services": $STATS_ITSI_SERVICES,
+      "kpis": $STATS_ITSI_KPIS,
+      "kpi_base_searches": $STATS_ITSI_KPI_BASE_SEARCHES,
+      "service_templates": $STATS_ITSI_SERVICE_TEMPLATES,
+      "entities": $STATS_ITSI_ENTITIES,
+      "entity_types": $STATS_ITSI_ENTITY_TYPES,
+      "notable_event_aggregation_policies": $STATS_ITSI_NEAPS,
+      "correlation_searches": $STATS_ITSI_CORRELATION_SEARCHES,
+      "correlation_searches_by_type": {
+        "multi_kpi_alert": $STATS_ITSI_CORR_MULTI_KPI,
+        "single_kpi_alert": $STATS_ITSI_CORR_SINGLE_KPI,
+        "ad_hoc": $STATS_ITSI_CORR_ADHOC
+      },
+      "maintenance_calendars": $STATS_ITSI_MAINT_CALENDARS,
+      "threshold_templates": $STATS_ITSI_THRESHOLD_TEMPLATES,
+      "images": $STATS_ITSI_IMAGES,
+      "modules_detected": $STATS_ITSI_MODULES
+    }
+  },
+
+  "apps": $apps_json,
+
+  "usage_intelligence": $usage_intel_json
+}
+MANIFEST_EOF
+
+  # Validate and format JSON using Python
+  local validation_result=$(json_format "$manifest_file")
+  if [ "$validation_result" = "valid" ]; then
+    success "manifest.json generated and validated"
+  else
+    warning "manifest.json generated but may have JSON errors: $validation_result"
+  fi
+
+  # Update global STATS_DASHBOARDS with corrected total (for subsequent summaries)
+  STATS_DASHBOARDS=$dashboard_total
+}
+
+# =============================================================================
+# DATA ANONYMIZATION FUNCTIONS
+# =============================================================================
+
+# Generate a consistent hash-based ID for anonymization
+# This ensures the same input always produces the same output
+generate_anon_id() {
+  local input="$1"
+  local prefix="$2"
+  local length="${3:-8}"
+
+  # Use SHA256 and take first N characters (lowercase hex)
+  local hash=""
+  if command_exists sha256sum; then
+    hash=$(echo -n "$input" | sha256sum | cut -c1-"$length")
+  elif command_exists shasum; then
+    hash=$(echo -n "$input" | shasum -a 256 | cut -c1-"$length")
+  elif command_exists md5sum; then
+    hash=$(echo -n "$input" | md5sum | cut -c1-"$length")
+  elif command_exists md5; then
+    hash=$(echo -n "$input" | md5 | cut -c1-"$length")
+  else
+    # Fallback: use base64 encoding of input
+    hash=$(echo -n "$input" | base64 | tr -d '=' | tr '+/' 'ab' | cut -c1-"$length" | tr '[:upper:]' '[:lower:]')
+  fi
+
+  echo "${prefix}${hash}"
+}
+
+# Get or create anonymized email for a given real email
+get_anon_email() {
+  local real_email="$1"
+
+  # Skip if empty or already anonymized
+  if [ -z "$real_email" ] || [[ "$real_email" == *"@anon.dma.local"* ]]; then
+    echo "$real_email"
+    return
+  fi
+
+  # Check if we already have a mapping
+  if [ -n "${EMAIL_MAP[$real_email]:-}" ]; then
+    echo "${EMAIL_MAP[$real_email]}"
+    return
+  fi
+
+  # Generate new anonymized email
+  local anon_id=$(generate_anon_id "$real_email" "user" 6)
+  local anon_email="${anon_id}@anon.dma.local"
+
+  # Store mapping
+  EMAIL_MAP["$real_email"]="$anon_email"
+  ((ANON_EMAIL_COUNTER++))
+
+  echo "$anon_email"
+}
+
+# Get or create anonymized hostname for a given real hostname
+get_anon_hostname() {
+  local real_host="$1"
+
+  # Skip if empty or already anonymized
+  if [ -z "$real_host" ] || [[ "$real_host" == "host-"* && "$real_host" == *".anon.local" ]]; then
+    echo "$real_host"
+    return
+  fi
+
+  # Skip common non-sensitive hostnames
+  if [[ "$real_host" == "localhost" || "$real_host" == "127.0.0.1" ]]; then
+    echo "$real_host"
+    return
+  fi
+
+  # Check if we already have a mapping
+  if [ -n "${HOST_MAP[$real_host]:-}" ]; then
+    echo "${HOST_MAP[$real_host]}"
+    return
+  fi
+
+  # Generate new anonymized hostname
+  local anon_id=$(generate_anon_id "$real_host" "" 8)
+  local anon_host="host-${anon_id}.anon.local"
+
+  # Store mapping
+  HOST_MAP["$real_host"]="$anon_host"
+  ((ANON_HOST_COUNTER++))
+
+  echo "$anon_host"
+}
+
+# Get or create anonymized webhook URL for a given real webhook URL
+get_anon_webhook_url() {
+  local real_url="$1"
+
+  # Skip if empty or already anonymized
+  if [ -z "$real_url" ] || [[ "$real_url" == *"webhook.anon.dma.local"* ]]; then
+    echo "$real_url"
+    return
+  fi
+
+  # Check if we already have a mapping
+  if [ -n "${WEBHOOK_MAP[$real_url]:-}" ]; then
+    echo "${WEBHOOK_MAP[$real_url]}"
+    return
+  fi
+
+  # Generate new anonymized webhook URL
+  local anon_id=$(generate_anon_id "$real_url" "" 12)
+  local anon_url="https://webhook.anon.dma.local/hook-${anon_id}"
+
+  # Store mapping
+  WEBHOOK_MAP["$real_url"]="$anon_url"
+  ((ANON_WEBHOOK_COUNTER++))
+
+  echo "$anon_url"
+}
+
+# Get or create anonymized API key/token for a given real key
+get_anon_api_key() {
+  local real_key="$1"
+  local key_type="${2:-API}"  # Type prefix: API, PAGERDUTY, SLACK, etc.
+
+  # Skip if empty or already anonymized
+  if [ -z "$real_key" ] || [[ "$real_key" == "[${key_type}-KEY-"*"]" ]]; then
+    echo "$real_key"
+    return
+  fi
+
+  # Check if we already have a mapping
+  if [ -n "${APIKEY_MAP[$real_key]:-}" ]; then
+    echo "${APIKEY_MAP[$real_key]}"
+    return
+  fi
+
+  # Generate new anonymized key (preserve uniqueness for correlation)
+  local anon_id=$(generate_anon_id "$real_key" "" 8)
+  local anon_key="[${key_type}-KEY-${anon_id}]"
+
+  # Store mapping
+  APIKEY_MAP["$real_key"]="$anon_key"
+  ((ANON_APIKEY_COUNTER++))
+
+  echo "$anon_key"
+}
+
+# Get or create anonymized Slack channel for a given real channel
+get_anon_slack_channel() {
+  local real_channel="$1"
+
+  # Skip if empty or already anonymized
+  if [ -z "$real_channel" ] || [[ "$real_channel" == "#anon-channel-"* ]]; then
+    echo "$real_channel"
+    return
+  fi
+
+  # Check if we already have a mapping
+  if [ -n "${SLACK_CHANNEL_MAP[$real_channel]:-}" ]; then
+    echo "${SLACK_CHANNEL_MAP[$real_channel]}"
+    return
+  fi
+
+  # Generate new anonymized channel name
+  local anon_id=$(generate_anon_id "$real_channel" "" 6)
+  local anon_channel="#anon-channel-${anon_id}"
+
+  # Store mapping
+  SLACK_CHANNEL_MAP["$real_channel"]="$anon_channel"
+  ((ANON_SLACK_COUNTER++))
+
+  echo "$anon_channel"
+}
+
+# Get or create anonymized username for a given real username
+get_anon_username() {
+  local real_user="$1"
+
+  # Skip if empty or already anonymized
+  if [ -z "$real_user" ] || [[ "$real_user" == "anon-user-"* ]]; then
+    echo "$real_user"
+    return
+  fi
+
+  # Skip system/generic users
+  if [[ "$real_user" == "nobody" || "$real_user" == "admin" || "$real_user" == "system" || \
+        "$real_user" == "splunk-system-user" || "$real_user" == "root" ]]; then
+    echo "$real_user"
+    return
+  fi
+
+  # Check if we already have a mapping
+  if [ -n "${USERNAME_MAP[$real_user]:-}" ]; then
+    echo "${USERNAME_MAP[$real_user]}"
+    return
+  fi
+
+  # Generate new anonymized username
+  local anon_id=$(generate_anon_id "$real_user" "" 6)
+  local anon_user="anon-user-${anon_id}"
+
+  # Store mapping
+  USERNAME_MAP["$real_user"]="$anon_user"
+  ((ANON_USERNAME_COUNTER++))
+
+  echo "$anon_user"
+}
+
+# Collect files recursively with specific extensions (container-compatible alternative to find)
+# Usage: collect_files_recursive <directory> <extensions_array_name>
+# Extensions should be space-separated, e.g., "json conf xml csv txt meta"
+collect_files_recursive() {
+  local dir="$1"
+  local extensions="$2"  # Space-separated list: "json conf xml csv txt meta"
+
+  # Process files in current directory
+  for ext in $extensions; do
+    for file in "$dir"/*."$ext"; do
+      [ -f "$file" ] && echo "$file"
+    done
+  done
+
+  # Recurse into subdirectories
+  for subdir in "$dir"/*/; do
+    [ -d "$subdir" ] && collect_files_recursive "$subdir" "$extensions"
+  done
+}
+
+# Anonymize a single file
+# =============================================================================
+# PYTHON-BASED ANONYMIZATION (Reliable streaming for large files)
+# =============================================================================
+# This uses Python for file processing to avoid bash memory issues and
+# regex catastrophic backtracking. Works with Splunk's bundled Python.
+
+# Generate the Python anonymization script inline
+generate_python_anonymizer() {
+  local script_file="$1"
+  cat > "$script_file" << 'PYTHON_SCRIPT'
+#!/usr/bin/env python3
+"""
+DMA Anonymizer - Streaming file anonymization
+Handles large files without memory issues or regex backtracking
+
+v2.0 - Fixed JSON corruption issues:
+- Removed overly aggressive public IP pattern that matched version numbers
+- Improved JSON escape fixing to handle all invalid escape sequences
+- Added JSON validation before saving to prevent corrupt output
+- Use surrogateescape encoding to preserve bytes that can't decode as UTF-8
+"""
+import sys
+import re
+import os
+import json
+import hashlib
+
+# Anonymization mappings (consistent across files)
+email_map = {}
+host_map = {}
+webhook_map = {}
+apikey_map = {}
+slack_map = {}
+username_map = {}
+
+def get_hash_id(value, prefix=""):
+    """Generate consistent short hash for a value"""
+    h = hashlib.md5(value.encode()).hexdigest()[:8]
+    return f"{prefix}{h}"
+
+def anonymize_email(email):
+    """Anonymize email address consistently"""
+    if email in email_map:
+        return email_map[email]
+    # Skip already anonymized or safe emails
+    if '@anon.dma.local' in email or '@example.com' in email or '@localhost' in email:
+        return email
+    # Use 'anon' prefix instead of 'user' to avoid creating \u sequences
+    # (e.g., \user becomes invalid JSON unicode escape)
+    anon = f"anon{get_hash_id(email)}@anon.dma.local"
+    email_map[email] = anon
+    return anon
+
+def anonymize_hostname(hostname):
+    """Anonymize hostname consistently"""
+    if hostname in host_map:
+        return host_map[hostname]
+    # Skip safe values
+    if hostname in ('localhost', '127.0.0.1', 'null', 'none', '*', ''):
+        return hostname
+    if hostname.startswith('host-') and '.anon.local' in hostname:
+        return hostname
+    anon = f"host-{get_hash_id(hostname)}.anon.local"
+    host_map[hostname] = anon
+    return anon
+
+def anonymize_webhook(url):
+    """Anonymize webhook URL consistently"""
+    if url in webhook_map:
+        return webhook_map[url]
+    if 'webhook.anon.dma.local' in url:
+        return url
+    anon = f"https://webhook.anon.dma.local/hook-{get_hash_id(url)}"
+    webhook_map[url] = anon
+    return anon
+
+def anonymize_apikey(key, key_type="API"):
+    """Anonymize API key consistently"""
+    if key in apikey_map:
+        return apikey_map[key]
+    anon = f"[{key_type}-KEY-{get_hash_id(key)}]"
+    apikey_map[key] = anon
+    return anon
+
+def anonymize_slack_channel(channel):
+    """Anonymize Slack channel consistently"""
+    if channel in slack_map:
+        return slack_map[channel]
+    if channel.startswith('#anon-channel-'):
+        return channel
+    anon = f"#anon-channel-{get_hash_id(channel)}"
+    slack_map[channel] = anon
+    return anon
+
+def anonymize_username(username):
+    """Anonymize username consistently"""
+    if username in username_map:
+        return username_map[username]
+    # Skip system users
+    if username in ('nobody', 'admin', 'system', 'splunk-system-user', 'root', 'null', 'none', ''):
+        return username
+    if username.startswith('anon-user-'):
+        return username
+    anon = f"anon-user-{get_hash_id(username)}"
+    username_map[username] = anon
+    return anon
+
+def process_line(line):
+    """Process a single line, applying all anonymization rules"""
+    result = line
+
+    # 1. Anonymize email addresses (simple pattern, non-greedy)
+    email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}'
+    for match in re.findall(email_pattern, result):
+        anon = anonymize_email(match)
+        if anon != match:
+            result = result.replace(match, anon)
+
+    # 2. Redact private IP addresses ONLY (RFC 1918)
+    # These patterns are safe - they only match private ranges
+    # 10.x.x.x
+    result = re.sub(r'\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    # 172.16-31.x.x
+    result = re.sub(r'\b172\.(1[6-9]|2[0-9]|3[01])\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    # 192.168.x.x
+    result = re.sub(r'\b192\.168\.\d{1,3}\.\d{1,3}\b', '[IP-REDACTED]', result)
+    # NOTE: Removed the overly broad public IP pattern that was matching version numbers
+    # and other legitimate dot-separated values like "1.2.3.4" in SPL queries
+
+    # 3. Anonymize hostnames in JSON format: "host": "value"
+    host_json_pattern = r'"(host|hostname|splunk_server|server|serverName)"\s*:\s*"([^"]+)"'
+    for match in re.finditer(host_json_pattern, result, re.IGNORECASE):
+        key, hostname = match.groups()
+        anon = anonymize_hostname(hostname)
+        if anon != hostname:
+            result = result.replace(f'"{key}": "{hostname}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{hostname}"', f'"{key}":"{anon}"')
+
+    # 4. Anonymize hostnames in conf format: host = value
+    host_conf_pattern = r'\b(host|hostname|splunk_server|server)\s*=\s*([^\s,\]"]+)'
+    for match in re.finditer(host_conf_pattern, result, re.IGNORECASE):
+        key, hostname = match.groups()
+        anon = anonymize_hostname(hostname)
+        if anon != hostname:
+            result = result.replace(f'{key}={hostname}', f'{key}={anon}')
+            result = result.replace(f'{key} = {hostname}', f'{key} = {anon}')
+
+    # 5. Anonymize webhook URLs
+    webhook_full_pattern = r'https?://[^\s"\'<>]+(?:slack\.com|pagerduty\.com|opsgenie\.com|webhook\.office\.com|hooks\.zapier\.com)[^\s"\'<>]*'
+    for match in re.findall(webhook_full_pattern, result):
+        anon = anonymize_webhook(match)
+        if anon != match:
+            result = result.replace(match, anon)
+
+    # 6. Anonymize API keys in JSON: "api_key": "value"
+    apikey_json_pattern = r'"(api_key|apikey|api_token|apiToken|token|secret|auth_token|access_token|integration_key|routing_key|pagerduty_key)"\s*:\s*"([^"]{16,})"'
+    for match in re.finditer(apikey_json_pattern, result, re.IGNORECASE):
+        key, value = match.groups()
+        key_type = "PAGERDUTY" if "pagerduty" in key.lower() or "integration" in key.lower() or "routing" in key.lower() else "API"
+        anon = anonymize_apikey(value, key_type)
+        if anon != value:
+            result = result.replace(f'"{key}": "{value}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{value}"', f'"{key}":"{anon}"')
+
+    # 7. Anonymize Slack channels
+    slack_pattern = r'"(action\.slack\.channel|slack_channel|channel)"\s*:\s*"(#[^"]+)"'
+    for match in re.finditer(slack_pattern, result, re.IGNORECASE):
+        key, channel = match.groups()
+        anon = anonymize_slack_channel(channel)
+        if anon != channel:
+            result = result.replace(f'"{key}": "{channel}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{channel}"', f'"{key}":"{anon}"')
+
+    # 8. Anonymize usernames in JSON: "owner": "value"
+    username_json_pattern = r'"(owner|eai:acl\.owner|author|user|username|realname|created_by|updated_by)"\s*:\s*"([^"]+)"'
+    for match in re.finditer(username_json_pattern, result, re.IGNORECASE):
+        key, username = match.groups()
+        anon = anonymize_username(username)
+        if anon != username:
+            result = result.replace(f'"{key}": "{username}"', f'"{key}": "{anon}"')
+            result = result.replace(f'"{key}":"{username}"', f'"{key}":"{anon}"')
+
+    return result
+
+def fix_json_escapes(content):
+    """Fix invalid JSON escape sequences created during anonymization.
+
+    When anonymized values replace original data that had preceding backslashes,
+    we can get invalid escape sequences. For example:
+    - \\user... becomes \\u followed by non-hex (invalid unicode escape)
+    - \\anon... becomes \\a followed by non-standard escape
+
+    This function fixes these by properly escaping the backslash.
+    """
+    # Fix all invalid escape sequences in JSON strings
+    # Valid JSON escapes are: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+    # Anything else after a backslash needs the backslash escaped
+
+    # Fix \\u followed by non-hex or incomplete hex (invalid unicode escape)
+    result = re.sub(r'\\u([^0-9a-fA-F])', r'\\\\u\\1', content)
+    result = re.sub(r'\\u([0-9a-fA-F]{1,3})([^0-9a-fA-F])', r'\\\\u\\1\\2', result)
+
+    # Fix \\a (invalid escape - \a is not valid JSON)
+    result = re.sub(r'\\a([^n])', r'\\\\a\\1', result)  # but preserve \an if followed by more
+
+    # Fix \\h (invalid escape - appears from \host patterns)
+    result = re.sub(r'\\h', r'\\\\h', result)
+
+    # Fix other common invalid escapes that might appear
+    result = re.sub(r'\\([^"\\/bfnrtu])', r'\\\\\\1', result)
+
+    return result
+
+def validate_json(content):
+    """Check if content is valid JSON. Returns True if valid, False otherwise."""
+    try:
+        json.loads(content)
+        return True
+    except json.JSONDecodeError:
+        return False
+
+def process_file(filepath):
+    """Process a file, applying anonymization rules while preserving file integrity"""
+    try:
+        # Read with surrogateescape to preserve bytes that can't decode as UTF-8
+        # This prevents data corruption from invalid byte sequences
+        with open(filepath, 'r', encoding='utf-8', errors='surrogateescape') as f:
+            content = f.read()
+
+        is_json = filepath.lower().endswith('.json')
+
+        # For JSON files, validate it's parseable before modifying
+        original_valid = True
+        if is_json:
+            original_valid = validate_json(content)
+
+        # Process line by line
+        lines = content.split('\n')
+        modified = False
+        new_lines = []
+        for line in lines:
+            new_line = process_line(line)
+            new_lines.append(new_line)
+            if new_line != line:
+                modified = True
+
+        if not modified:
+            return False
+
+        new_content = '\n'.join(new_lines)
+
+        # For JSON files, apply escape fixes and validate
+        if is_json:
+            new_content = fix_json_escapes(new_content)
+
+            # Only save if the result is valid JSON (or original was also invalid)
+            if original_valid and not validate_json(new_content):
+                print(f"WARNING: Anonymization would corrupt JSON in {filepath}, skipping", file=sys.stderr)
+                return False
+
+        # Write back with same encoding handling
+        with open(filepath, 'w', encoding='utf-8', errors='surrogateescape') as f:
+            f.write(new_content)
+
+        return True
+    except Exception as e:
+        print(f"Error processing {filepath}: {e}", file=sys.stderr)
+        return False
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: anonymizer.py <file1> [file2] ...", file=sys.stderr)
+        sys.exit(1)
+
+    for filepath in sys.argv[1:]:
+        if os.path.isfile(filepath):
+            process_file(filepath)
+
+if __name__ == '__main__':
+    main()
+PYTHON_SCRIPT
+  chmod +x "$script_file"
+}
+
+# Anonymize a single file using Python (streaming, no memory issues)
+anonymize_file() {
+  local file="$1"
+  local python_script="$EXPORT_DIR/.anonymizer.py"
+
+  # Skip empty files and temp files
+  if [ ! -s "$file" ] || [[ "$file" == *.tmp ]] || [[ "$file" == *.py ]]; then
+    return
+  fi
+
+  # Check if file is text (skip binary)
+  if ! file "$file" 2>/dev/null | grep -qE 'text|JSON|XML|ASCII'; then
+    return
+  fi
+
+  # Generate Python script if not exists
+  if [ ! -f "$python_script" ]; then
+    generate_python_anonymizer "$python_script"
+  fi
+
+  # Find Python (prefer Splunk's bundled Python, fall back to system)
+  # Check multiple locations since SPLUNK_HOME may not be set
+  local python_cmd=""
+  local splunk_python_paths=(
+    "$SPLUNK_HOME/bin/python3"
+    "$SPLUNK_HOME/bin/python"
+    "/opt/splunk/bin/python3"
+    "/opt/splunk/bin/python"
+    "/opt/splunkforwarder/bin/python3"
+    "/opt/splunkforwarder/bin/python"
+    "/Applications/Splunk/bin/python3"
+    "/Applications/Splunk/bin/python"
+  )
+
+  # Try Splunk's bundled Python first
+  for py_path in "${splunk_python_paths[@]}"; do
+    if [ -n "$py_path" ] && [ -x "$py_path" ]; then
+      python_cmd="$py_path"
+      break
+    fi
+  done
+
+  # Fall back to system Python
+  if [ -z "$python_cmd" ]; then
+    if command -v python3 &>/dev/null; then
+      python_cmd="python3"
+    elif command -v python &>/dev/null; then
+      python_cmd="python"
+    else
+      # Fallback to simple sed-based anonymization
+      anonymize_file_sed_fallback "$file"
+      return
+    fi
+  fi
+
+  # Run Python anonymizer with 60-second timeout per file
+  if command -v timeout &>/dev/null; then
+    timeout 60 "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  elif command -v gtimeout &>/dev/null; then
+    gtimeout 60 "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  else
+    "$python_cmd" "$python_script" "$file" 2>/dev/null || true
+  fi
+}
+
+# Fallback: Simple sed-based anonymization (no complex patterns that can backtrack)
+anonymize_file_sed_fallback() {
+  local file="$1"
+  local temp_file="${file}.anon.tmp"
+
+  # Use simple, non-backtracking patterns with in-place sed
+  # These are safe patterns that won't cause catastrophic backtracking
+
+  # Check for GNU sed vs BSD sed
+  local sed_inplace=""
+  if sed --version 2>/dev/null | grep -q GNU; then
+    sed_inplace="-i"
+  else
+    sed_inplace="-i ''"
+  fi
+
+  # Apply simple patterns directly to file (in-place, streaming)
+  # 1. Redact private IPs (simple patterns)
+  sed $sed_inplace 's/\b10\.[0-9]*\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b192\.168\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.1[6-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.2[0-9]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+  sed $sed_inplace 's/\b172\.3[0-1]\.[0-9]*\.[0-9]*\b/[IP-REDACTED]/g' "$file" 2>/dev/null || true
+
+  # Clean up backup files on macOS
+  rm -f "${file}''" 2>/dev/null || true
+}
+
+# Main anonymization function - processes all files in export directory
+anonymize_export() {
+  if [ "$ANONYMIZE_DATA" != true ]; then
+    return 0
+  fi
+
+  print_info_box "STEP 7.5: ANONYMIZING SENSITIVE DATA" \
+    "" \
+    "${WHITE}Replacing sensitive data with anonymized values:${NC}" \
+    "" \
+    "  ${CYAN}→${NC} Email addresses → user######@anon.dma.local" \
+    "  ${CYAN}→${NC} Hostnames → host-########.anon.local" \
+    "  ${CYAN}→${NC} IP addresses → [IP-REDACTED]" \
+    "  ${CYAN}→${NC} Webhook URLs → https://webhook.anon.dma.local/hook-###" \
+    "  ${CYAN}→${NC} API keys/tokens → [API-KEY-########]" \
+    "  ${CYAN}→${NC} PagerDuty keys → [PAGERDUTY-KEY-########]" \
+    "  ${CYAN}→${NC} Slack channels → #anon-channel-######" \
+    "  ${CYAN}→${NC} Usernames → anon-user-######" \
+    "" \
+    "${WHITE}NOTE:${NC} The same original value always maps to the same" \
+    "anonymized value, preserving data relationships."
+
+  echo ""
+  progress "Scanning export directory for files to anonymize..."
+
+  # Collect all text files to process (use helper function instead of find for container compatibility)
+  local files_to_process=()
+  while IFS= read -r file; do
+    [ -n "$file" ] && files_to_process+=("$file")
+  done < <(collect_files_recursive "$EXPORT_DIR" "json conf xml csv txt meta")
+
+  local total_files=${#files_to_process[@]}
+
+  if [ "$total_files" -eq 0 ]; then
+    info "No text files found to anonymize"
+    return 0
+  fi
+
+  progress "Found $total_files files to process..."
+
+  # Initialize progress bar
+  progress_init "Anonymizing sensitive data" "$total_files"
+
+  local processed=0
+  for file in "${files_to_process[@]}"; do
+    anonymize_file "$file"
+    ((processed++))
+    progress_update "$processed"
+  done
+
+  progress_complete
+
+  # Report statistics
+  echo ""
+  echo -e "${CYAN}┌─────────────────────────────────────────────────────────────────────┐${NC}"
+  echo -e "${CYAN}│${NC} ${WHITE}Anonymization Summary${NC}"
+  echo -e "${CYAN}├─────────────────────────────────────────────────────────────────────┤${NC}"
+  echo -e "${CYAN}│${NC}   Files processed:        ${GREEN}$total_files${NC}"
+  echo -e "${CYAN}│${NC}   Unique emails mapped:   ${GREEN}$ANON_EMAIL_COUNTER${NC}"
+  echo -e "${CYAN}│${NC}   Unique hosts mapped:    ${GREEN}$ANON_HOST_COUNTER${NC}"
+  echo -e "${CYAN}│${NC}   Unique webhooks mapped: ${GREEN}$ANON_WEBHOOK_COUNTER${NC}"
+  echo -e "${CYAN}│${NC}   API keys/tokens:        ${GREEN}$ANON_APIKEY_COUNTER${NC}"
+  echo -e "${CYAN}│${NC}   Slack channels:         ${GREEN}$ANON_SLACK_COUNTER${NC}"
+  echo -e "${CYAN}│${NC}   Usernames mapped:       ${GREEN}$ANON_USERNAME_COUNTER${NC}"
+  echo -e "${CYAN}│${NC}   IP addresses:           ${GREEN}Redacted (all)${NC}"
+  echo -e "${CYAN}└─────────────────────────────────────────────────────────────────────┘${NC}"
+
+  # Write anonymization mapping report (for reference, stored in export)
+  local anon_report="$EXPORT_DIR/_anonymization_report.json"
+  cat > "$anon_report" << ANON_EOF
+{
+  "anonymization_applied": true,
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "statistics": {
+    "files_processed": $total_files,
+    "unique_emails_anonymized": $ANON_EMAIL_COUNTER,
+    "unique_hosts_anonymized": $ANON_HOST_COUNTER,
+    "unique_webhooks_anonymized": $ANON_WEBHOOK_COUNTER,
+    "unique_api_keys_anonymized": $ANON_APIKEY_COUNTER,
+    "unique_slack_channels_anonymized": $ANON_SLACK_COUNTER,
+    "unique_usernames_anonymized": $ANON_USERNAME_COUNTER,
+    "ip_addresses": "all_redacted"
+  },
+  "transformations": {
+    "emails": "original@domain.com → user######@anon.dma.local",
+    "hostnames": "server.example.com → host-########.anon.local",
+    "ipv4": "x.x.x.x → [IP-REDACTED]",
+    "ipv6": "xxxx:xxxx:... → [IPv6-REDACTED]",
+    "webhook_urls": "https://hooks.slack.com/... → https://webhook.anon.dma.local/hook-############",
+    "pagerduty_keys": "abc123def456... → [PAGERDUTY-KEY-########]",
+    "api_keys": "token_xyz... → [API-KEY-########]",
+    "slack_channels": "#alerts-prod → #anon-channel-######",
+    "usernames": "john.smith → anon-user-######"
+  },
+  "sensitive_fields_covered": [
+    "action.email.to",
+    "action.email.cc",
+    "action.email.bcc",
+    "action.webhook.param.url",
+    "action.pagerduty.integration_key",
+    "action.slack.channel",
+    "eai:acl.owner",
+    "owner",
+    "author",
+    "realname",
+    "user",
+    "username"
+  ],
+  "note": "This export has been anonymized for safe sharing. Original values cannot be recovered. The same input always produces the same anonymized output, preserving data relationships for analysis."
+}
+ANON_EOF
+
+  success "Data anonymization complete"
+  log "Anonymization: $ANON_EMAIL_COUNTER emails, $ANON_HOST_COUNTER hosts, $ANON_WEBHOOK_COUNTER webhooks, $ANON_APIKEY_COUNTER API keys, $ANON_SLACK_COUNTER Slack channels, $ANON_USERNAME_COUNTER usernames mapped"
+}
+
+# =============================================================================
+# CREATE ARCHIVE
+# =============================================================================
+
+create_archive() {
+  # Usage: create_archive [keep_dir] [suffix]
+  # keep_dir: if "true", don't delete EXPORT_DIR after archiving (for masked workflow)
+  # suffix: optional suffix like "_masked" to add to archive name
+  local keep_dir="${1:-false}"
+  local suffix="${2:-}"
+
+  # Finalize resilience tracking before archive creation (only on first call)
+  if [ "$keep_dir" != "true" ]; then
+    finalize_progress "completed"
+    # Phase 3: Show export timing statistics
+    show_export_timing_stats >&2
+  fi
+
+  # All status messages go to stderr so only the tarball path goes to stdout
+  if [ -z "$suffix" ]; then
+    print_info_box "STEP 8: CREATING ARCHIVE" \
+      "" \
+      "${WHITE}Compressing all collected data into a single archive...${NC}" >&2
+  fi
+
+  # Log Phase 1 resilience statistics
+  log "Resilience stats: API calls=$STATS_API_CALLS, retries=$STATS_API_RETRIES, failures=$STATS_API_FAILURES, batches=$STATS_BATCHES_COMPLETED"
+
+  # Finalize debug log if enabled (redirect to stderr so it doesn't pollute tarball path)
+  finalize_debug_log >&2
+
+  echo "" >&2
+  progress "Creating compressed archive${suffix:+ ($suffix)}..." >&2
+
+  local tarball="/tmp/${EXPORT_NAME}${suffix}.tar.gz"
+
+  # Create the archive
+  tar -czf "$tarball" -C /tmp "$EXPORT_NAME" 2>/dev/null
+
+  if [ ! -f "$tarball" ]; then
+    error "Failed to create archive" >&2
+    exit 1
+  fi
+
+  # Get size
+  local size=$(du -h "$tarball" | cut -f1)
+
+  # Generate checksum
+  local checksum=""
+  if command_exists sha256sum; then
+    checksum=$(sha256sum "$tarball" | cut -d' ' -f1)
+  elif command_exists shasum; then
+    checksum=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
+  fi
+
+  # Set permissions
+  chmod 600 "$tarball"
+
+  success "Archive created: $tarball" >&2
+  success "Size: $size" >&2
+
+  if [ -n "$checksum" ]; then
+    echo "$checksum  ${EXPORT_NAME}${suffix}.tar.gz" > "${tarball}.sha256"
+    info "SHA256: $checksum" >&2
+  fi
+
+  # Cleanup export directory only if not keeping
+  if [ "$keep_dir" != "true" ]; then
+    rm -rf "$EXPORT_DIR"
+  fi
+
+  echo "" >&2
+  # Only the tarball path goes to stdout (for capture)
+  echo "$tarball"
+}
+
+# =============================================================================
+# MASKED ARCHIVE CREATION (v4.2.3)
+# Creates an anonymized copy while preserving the original
+# =============================================================================
+
+create_masked_archive() {
+  local masked_dir="${EXPORT_DIR}_masked"
+  local masked_export_name="${EXPORT_NAME}_masked"
+
+  print_info_box "CREATING MASKED (ANONYMIZED) ARCHIVE" \
+    "" \
+    "${WHITE}The original archive has been preserved.${NC}" \
+    "${WHITE}Now creating a separate anonymized copy...${NC}" >&2
+
+  # Copy export directory to masked version
+  progress "Copying export directory for anonymization..." >&2
+  cp -r "$EXPORT_DIR" "$masked_dir"
+
+  if [ ! -d "$masked_dir" ]; then
+    error "Failed to create masked directory copy" >&2
+    return 1
+  fi
+
+  # Temporarily switch EXPORT_DIR for anonymization
+  # Note: masked_dir already has the correct _masked suffix since EXPORT_DIR=/tmp/EXPORT_NAME
+  local original_export_dir="$EXPORT_DIR"
+  local original_export_name="$EXPORT_NAME"
+  EXPORT_DIR="$masked_dir"
+  EXPORT_NAME="$masked_export_name"
+
+  # Run anonymization on the masked copy
+  anonymize_export
+
+  # Create the masked archive
+  progress "Creating masked archive..." >&2
+
+  local tarball="/tmp/${masked_export_name}.tar.gz"
+  tar -czf "$tarball" -C /tmp "$masked_export_name" 2>/dev/null
+
+  if [ ! -f "$tarball" ]; then
+    error "Failed to create masked archive" >&2
+    EXPORT_DIR="$original_export_dir"
+    EXPORT_NAME="$original_export_name"
+    rm -rf "$masked_dir"
+    return 1
+  fi
+
+  # Get size
+  local size=$(du -h "$tarball" | cut -f1)
+
+  # Generate checksum
+  local checksum=""
+  if command_exists sha256sum; then
+    checksum=$(sha256sum "$tarball" | cut -d' ' -f1)
+  elif command_exists shasum; then
+    checksum=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
+  fi
+
+  # Set permissions
+  chmod 600 "$tarball"
+
+  success "Masked archive created: $tarball" >&2
+  success "Size: $size" >&2
+
+  if [ -n "$checksum" ]; then
+    echo "$checksum  ${masked_export_name}.tar.gz" > "${tarball}.sha256"
+    info "SHA256: $checksum" >&2
+  fi
+
+  # Clean up masked directory
+  rm -rf "$masked_dir"
+
+  echo "" >&2
+  echo -e "  ${YELLOW}Note:${NC} Share the ${BOLD}_masked${NC} archive with third parties." >&2
+  echo -e "        Keep the original archive for your records." >&2
+  echo "" >&2
+
+  # Restore original EXPORT_DIR/EXPORT_NAME and clean up original
+  EXPORT_DIR="$original_export_dir"
+  EXPORT_NAME="$original_export_name"
+  rm -rf "$EXPORT_DIR"
+
+  # Return the masked tarball path
+  echo "$tarball"
+}
+
+# =============================================================================
+# TROUBLESHOOTING REPORT GENERATOR
+# =============================================================================
+
+generate_troubleshooting_report() {
+  local report_file="$EXPORT_DIR/TROUBLESHOOTING.md"
+
+  cat > "$report_file" << 'TROUBLESHOOT_HEADER'
+# DMA Export Troubleshooting Report
+
+This report was generated because errors occurred during the export.
+Use this information to diagnose and resolve issues.
+
+---
+
+TROUBLESHOOT_HEADER
+
+  # Add environment info
+  cat >> "$report_file" << EOF
+## Environment Information
+
+| Setting | Value |
+|---------|-------|
+| Script Version | $SCRIPT_VERSION |
+| Timestamp | $(date -Iseconds) |
+| Hostname | $(get_hostname) |
+| OS | $(uname -s) $(uname -r) |
+| Splunk Host | ${SPLUNK_HOST}:${SPLUNK_PORT} |
+| Splunk Home | ${SPLUNK_HOME:-Not set} |
+| Splunk Flavor | ${SPLUNK_FLAVOR:-Unknown} |
+| Splunk Role | ${SPLUNK_ROLE:-Unknown} |
+| Is Cloud | ${IS_CLOUD} |
+
+---
+
+## Error Summary
+
+**Total Errors:** ${STATS_ERRORS}
+
+## Phase 1 Resilience Statistics
+
+| Metric | Value |
+|--------|-------|
+| API Calls | ${STATS_API_CALLS} |
+| API Retries | ${STATS_API_RETRIES} |
+| API Failures | ${STATS_API_FAILURES} |
+| Batches Completed | ${STATS_BATCHES_COMPLETED} |
+| Batch Size | ${BATCH_SIZE} |
+| Max Retries | ${MAX_RETRIES} |
+| API Timeout | ${API_TIMEOUT}s |
+
+EOF
+
+  # Scan for error files in _usage_analytics
+  if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
+    echo "## Failed Searches" >> "$report_file"
+    echo "" >> "$report_file"
+
+    local error_count=0
+    for json_file in "$EXPORT_DIR/dma_analytics/usage_analytics"/*.json; do
+      if [ -f "$json_file" ] && grep -q '"error":' "$json_file" 2>/dev/null; then
+        ((error_count++))
+        local filename=$(basename "$json_file")
+        local error_type=$(grep -o '"error": *"[^"]*"' "$json_file" | head -1 | cut -d'"' -f4)
+        local error_msg=$(grep -o '"message": *"[^"]*"' "$json_file" | head -1 | cut -d'"' -f4)
+
+        cat >> "$report_file" << EOF
+### Error $error_count: $filename
+
+- **Error Type:** \`$error_type\`
+- **Message:** $error_msg
+
+EOF
+      fi
+    done
+
+    if [ "$error_count" -eq 0 ]; then
+      echo "_No search errors detected in output files._" >> "$report_file"
+      echo "" >> "$report_file"
+    fi
+  fi
+
+  # Add common troubleshooting guides
+  cat >> "$report_file" << 'TROUBLESHOOT_GUIDES'
+---
+
+## Common Issues and Solutions
+
+### 1. Network/Connection Errors (HTTP 000)
+
+**Symptoms:** "Could not connect to Splunk REST API"
+
+**Causes & Solutions:**
+- **Splunk not running:** Run `$SPLUNK_HOME/bin/splunk status`
+- **Wrong port:** Default is 8089. Check with `netstat -tlnp | grep splunk`
+- **Firewall blocking:** Check `iptables -L` or firewall rules
+- **SSL issues:** The script uses `-k` flag but some proxies may interfere
+
+**Diagnostic command:**
+```bash
+curl -k -u admin:password https://localhost:8089/services/server/info
+```
+
+---
+
+### 2. Authentication Errors (HTTP 401)
+
+**Symptoms:** "Authentication failed"
+
+**Causes & Solutions:**
+- **Wrong password:** Verify credentials work in Splunk Web
+- **Account locked:** Check for lockout in `$SPLUNK_HOME/var/log/splunk/splunkd.log`
+- **Token expired:** If using API tokens, generate a new one
+
+**Diagnostic command:**
+```bash
+curl -k -u YOUR_USER:YOUR_PASSWORD https://localhost:8089/services/authentication/current-context
+```
+
+---
+
+### 3. Permission Errors (HTTP 403)
+
+**Symptoms:** "User lacks required capabilities"
+
+**Causes & Solutions:**
+- **Missing role capabilities:** User needs these capabilities:
+  - `search` - Run searches
+  - `schedule_search` - Access search job API
+  - `list_settings` - Read configurations
+  - `rest_properties_get` - REST API access
+
+**To add capabilities:**
+1. Go to Settings → Access controls → Roles
+2. Edit the user's role
+3. Add required capabilities
+
+---
+
+### 4. Search Timeouts
+
+**Symptoms:** "Search timed out after X seconds"
+
+**Causes & Solutions:**
+- **Large data volume:** Searches over _audit and _internal can be slow
+- **Resource constraints:** Check Splunk scheduler load
+- **Network latency:** If Splunk is remote, increase timeout
+
+**Workaround:** Run the failing search manually in Splunk and export results
+
+---
+
+### 5. REST Command Blocked (Splunk Cloud)
+
+**Symptoms:** "REST API endpoint not found" or searches using `| rest` fail
+
+**Causes & Solutions:**
+- **Splunk Cloud restriction:** The `| rest` command may be disabled
+- Use the **Cloud export script** instead: `dma-splunk-cloud-export.sh`
+- Contact Splunk Cloud support to enable REST API access
+
+---
+
+### 6. _audit or _internal Index Empty
+
+**Symptoms:** Usage analytics files have zero results
+
+**Causes & Solutions:**
+- **Audit logging disabled:** Check `audit.conf`
+- **Retention expired:** Check `indexes.conf` for index retention
+- **Different index names:** Some deployments rename internal indexes
+
+**Diagnostic command:**
+```bash
+# Check if _audit has data
+$SPLUNK_HOME/bin/splunk search "index=_audit | head 1" -auth admin:password
+```
+
+---
+
+## Getting Help
+
+If you continue to have issues:
+
+1. **Collect these files:**
+   - This TROUBLESHOOTING.md
+   - export.log
+   - $SPLUNK_HOME/var/log/splunk/splunkd.log (last 500 lines)
+
+2. **Contact DMA support** with the above files
+
+3. **Useful commands to run:**
+   ```bash
+   # Splunk version and health
+   $SPLUNK_HOME/bin/splunk version
+   $SPLUNK_HOME/bin/splunk status
+
+   # Check REST API is accessible
+   curl -k -u admin:password https://localhost:8089/services/server/info?output_mode=json
+
+   # Check user capabilities
+   curl -k -u YOUR_USER:YOUR_PASSWORD https://localhost:8089/services/authentication/current-context?output_mode=json
+   ```
+
+---
+
+*Report generated by DMA Splunk Export v${SCRIPT_VERSION}*
+TROUBLESHOOT_GUIDES
+
+  log "Generated troubleshooting report: $report_file"
+}
+
+# =============================================================================
+# COMPLETION
+# =============================================================================
+
+show_completion() {
+  local tarball="$1"
+  local masked_tarball="${2:-}"  # Optional: masked archive path (v4.2.3)
+
+  # Calculate total elapsed time
+  EXPORT_END_TIME=$(date +%s)
+  local total_elapsed=$((EXPORT_END_TIME - EXPORT_START_TIME))
+  local elapsed_str=""
+
+  if [ "$total_elapsed" -lt 60 ]; then
+    elapsed_str="${total_elapsed} seconds"
+  elif [ "$total_elapsed" -lt 3600 ]; then
+    elapsed_str="$((total_elapsed / 60))m $((total_elapsed % 60))s"
+  else
+    elapsed_str="$((total_elapsed / 3600))h $(((total_elapsed % 3600) / 60))m"
+  fi
+
+  echo ""
+  echo -e "${GREEN}"
+  cat << 'EOF'
+  ╔═══════════════════════════════════════════════════════════════════════╗
+  ║                                                                       ║
+  ║                    EXPORT COMPLETED SUCCESSFULLY!                     ║
+  ║                                                                       ║
+  ╚═══════════════════════════════════════════════════════════════════════╝
+EOF
+  echo -e "${NC}"
+
+  # v4.2.3: Show both archives if masked version was created
+  if [ -n "$masked_tarball" ] && [ -f "$masked_tarball" ]; then
+    echo -e "  ${WHITE}Original Archive:${NC}  $tarball"
+    echo -e "  ${WHITE}                     Size: $(du -h "$tarball" | cut -f1)${NC}"
+    echo ""
+    echo -e "  ${CYAN}Masked Archive:${NC}    $masked_tarball"
+    echo -e "  ${CYAN}                     Size: $(du -h "$masked_tarball" | cut -f1)${NC}"
+    echo ""
+    echo -e "  ${YELLOW}→ Share the _masked archive with third parties${NC}"
+    echo -e "  ${YELLOW}→ Keep the original archive for your records${NC}"
+  else
+    echo -e "  ${WHITE}Export File:${NC} $tarball"
+    echo -e "  ${WHITE}Size:${NC}        $(du -h "$tarball" | cut -f1)"
+  fi
+  echo -e "  ${WHITE}Duration:${NC}    ${elapsed_str}"
+  echo ""
+
+  print_box_header "EXPORT STATISTICS"
+  print_box_line ""
+  print_box_line "  Applications:    ${STATS_APPS}"
+  print_box_line "  Dashboards:      ${STATS_DASHBOARDS}"
+  print_box_line "  Alerts:          ${STATS_ALERTS}"
+  print_box_line "  Users:           ${STATS_USERS}"
+  print_box_line "  Indexes:         ${STATS_INDEXES}"
+  print_box_line ""
+  print_box_line "  ${CYAN}Total Time:      ${elapsed_str}${NC}"
+  print_box_line ""
+  if [ "$STATS_ERRORS" -gt 0 ]; then
+    print_box_line "  ${YELLOW}Warnings/Errors: ${STATS_ERRORS}${NC}"
+    print_box_line "  ${YELLOW}See: TROUBLESHOOTING.md in archive${NC}"
+  fi
+  print_box_footer
+
+  # Show error warning prominently if there were errors
+  if [ "$STATS_ERRORS" -gt 0 ]; then
+    echo ""
+    echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║${NC}  ${WHITE}⚠  EXPORT COMPLETED WITH ERRORS${NC}                                     ${YELLOW}║${NC}"
+    echo -e "${YELLOW}╠══════════════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  ${STATS_ERRORS} error(s) occurred during the export. The export file is      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  still usable, but some data may be missing.                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  ${WHITE}TO DIAGNOSE:${NC}                                                       ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  1. Extract the archive:                                             ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     tar -xzf $(basename "$tarball")                         ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  2. Log files are located at:                                        ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     ${CYAN}$(pwd)/${EXPORT_NAME}/export.log${NC}              ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}     ${CYAN}$(pwd)/${EXPORT_NAME}/export_errors.log${NC}       ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  3. Also read: ${EXPORT_NAME}/TROUBLESHOOTING.md                     ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  ${WHITE}COMMON FIXES:${NC}                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  • Verify user has 'search' and 'admin' capabilities               ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  • Check _audit and _internal indexes have data                    ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}  • For Splunk Cloud, some REST commands may be blocked             ${YELLOW}║${NC}"
+    echo -e "${YELLOW}║${NC}                                                                      ${YELLOW}║${NC}"
+    echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+  fi
+
+  echo ""
+  echo -e "${WHITE}NEXT STEPS:${NC}"
+  echo ""
+  echo "  1. Download the export file from this server:"
+  echo -e "     ${CYAN}$tarball${NC}"
+  echo ""
+  echo "  2. Open Dynatrace Migration Assistant in Dynatrace"
+  echo ""
+  echo "  3. Navigate to: Migration Workspace → Project Initialization"
+  echo ""
+  echo "  4. Drag and drop the .tar.gz file into the upload area"
+  echo ""
+  echo "  5. DMA will analyze your environment and show:"
+  echo "     • Migration readiness assessment"
+  echo "     • Dashboard conversion preview"
+  echo "     • Alert conversion checklist"
+  echo "     • Data pipeline requirements"
+  echo ""
+
+  print_line "─" 75
+
+  echo ""
+  echo -e "${GREEN}Thank you for using DMA!${NC}"
+  echo ""
+}
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+
+main() {
+  # ITSI BLOCK: BETA-build banner. Emitted to stdout (NOT logged via info()
+  # since LOG_FILE isn't set yet at this point). Ensures anyone running
+  # this script knows they're on the beta — including operators who run
+  # it non-interactively from automation and might otherwise miss the
+  # distinction. Stable script does not emit this banner.
+  printf '\n'
+  printf '\033[33m'
+  printf '┌────────────────────────────────────────────────────────────────────────┐\n'
+  printf '│  DMA SPLUNK EXPORT — BETA BUILD v%s                       │\n' "$SCRIPT_VERSION"
+  printf '│  Adds ITSI Comprehensive Cataloging (Glass Tables, Deep Dives, KPIs,   │\n'
+  printf '│  Services, Entities, NEAPs, etc.). Auto-detected; opt-out: --no-itsi.  │\n'
+  printf '│  Not for general customer use. See file header for full notes.         │\n'
+  printf '└────────────────────────────────────────────────────────────────────────┘\n'
+  printf '\033[0m\n'
+
+  # Parse command line arguments for non-interactive mode
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --token)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --token requires a value (API token)" >&2
+          exit 1
+        fi
+        AUTH_TOKEN="$2"
+        AUTH_METHOD="token"
+        shift 2
+        ;;
+      -u|--user|--username)
+        SPLUNK_USER="$2"
+        shift 2
+        ;;
+      -p|--pass|--password)
+        SPLUNK_PASSWORD="$2"
+        AUTH_METHOD="userpass"
+        shift 2
+        ;;
+      -h|--host)
+        SPLUNK_HOST="$2"
+        shift 2
+        ;;
+      -P|--port)
+        SPLUNK_PORT="$2"
+        shift 2
+        ;;
+      --splunk-home)
+        SPLUNK_HOME="$2"
+        shift 2
+        ;;
+      --anonymize)
+        ANONYMIZE_DATA=true
+        shift
+        ;;
+      --no-anonymize)
+        ANONYMIZE_DATA=false
+        shift
+        ;;
+      --yes|-y)
+        AUTO_CONFIRM=true
+        shift
+        ;;
+      --all-apps)
+        EXPORT_ALL_APPS=true
+        shift
+        ;;
+      --apps)
+        # Check if value is provided
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --apps requires a value (comma-separated app names)" >&2
+          exit 1
+        fi
+        # Clear array first, then populate from comma-separated list
+        SELECTED_APPS=()
+        IFS=',' read -ra _apps_temp <<< "$2"
+        for _app in "${_apps_temp[@]}"; do
+          # Trim whitespace
+          # Trim whitespace (pure bash)
+          _app="${_app#"${_app%%[![:space:]]*}"}"
+          _app="${_app%"${_app##*[![:space:]]}"}"
+          [ -n "$_app" ] && SELECTED_APPS+=("$_app")
+        done
+        EXPORT_ALL_APPS=false
+        if [ ${#SELECTED_APPS[@]} -eq 0 ]; then
+          echo "[WARNING] --apps was specified but no valid apps were parsed from '$2'" >&2
+        fi
+        shift 2
+        ;;
+      --quick)
+        # Quick mode - dramatically faster exports by skipping global analytics
+        QUICK_MODE=true
+        SCOPE_TO_APPS=true
+        shift
+        ;;
+      --scoped)
+        # Scope all collections to selected apps (auto-enabled with --apps)
+        SCOPE_TO_APPS=true
+        shift
+        ;;
+      --usage)
+        COLLECT_USAGE=true
+        shift
+        ;;
+      --no-usage)
+        COLLECT_USAGE=false
+        shift
+        ;;
+      --rbac)
+        COLLECT_RBAC=true
+        shift
+        ;;
+      --no-rbac)
+        COLLECT_RBAC=false
+        shift
+        ;;
+      --no-itsi)
+        # ITSI BLOCK: opt-out of the ITSI KV-store collection layer.
+        # Auto-detection still runs to populate detection metadata in the
+        # inventory file, but no per-object fetches happen. The classic
+        # surface of the `itsi` app (dashboards, savedsearches, .conf
+        # files) is still collected by the existing collectors — only
+        # the KV-store-only layer is skipped.
+        COLLECT_ITSI_OPTOUT=true
+        shift
+        ;;
+      --analytics-period)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --analytics-period requires a time window (e.g., 7d, 30d, 90d)" >&2
+          exit 1
+        fi
+        USAGE_PERIOD="$2"
+        ANALYTICS_PERIOD_SET=true
+        shift 2
+        ;;
+      --proxy)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --proxy requires a URL (e.g., http://proxy.corp.com:8080)" >&2
+          exit 1
+        fi
+        PROXY_URL="$2"
+        CURL_PROXY_ARGS="-x $PROXY_URL"
+        shift 2
+        ;;
+      --skip-internal)
+        SKIP_INTERNAL=true
+        shift
+        ;;
+      --test-access)
+        TEST_ACCESS_MODE=true
+        shift
+        ;;
+      --remask)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --remask requires a path to an unmasked .tar.gz archive" >&2
+          exit 1
+        fi
+        REMASK_ARCHIVE="$2"
+        REMASK_MODE=true
+        shift 2
+        ;;
+      --resume-collect)
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --resume-collect requires a path to a .tar.gz archive" >&2
+          exit 1
+        fi
+        if [ ! -f "$2" ]; then
+          echo "[ERROR] Resume archive not found: $2" >&2
+          echo "" >&2
+          echo "  Check the filename and path. Tip: use tab-completion to avoid typos." >&2
+          if [ -d "$(dirname "$2")" ]; then
+            echo "" >&2
+            echo "  Files in $(dirname "$2"):" >&2
+            ls -1 "$(dirname "$2")"/*.tar.gz 2>/dev/null | sed 's/^/    /' >&2 || echo "    (no .tar.gz files found)" >&2
+          fi
+          exit 1
+        fi
+        RESUME_ARCHIVE="$2"
+        RESUME_MODE=true
+        shift 2
+        ;;
+      --debug|-d)
+        # Enable verbose debug logging for troubleshooting
+        DEBUG_MODE=true
+        shift
+        ;;
+      --help)
+        echo "Usage: $0 [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  --token TOKEN           API token for authentication (RECOMMENDED for automation)"
+        echo "  -u, --username USER     Splunk admin username"
+        echo "  -p, --password PASS     Splunk admin password"
+        echo "  -h, --host HOST         Splunk host (default: localhost)"
+        echo "  -P, --port PORT         Splunk port (default: 8089)"
+        echo "  --proxy URL             HTTP proxy (e.g., http://proxy.corp.com:8080)"
+        echo "  --splunk-home PATH      Splunk installation path"
+        echo "  --apps LIST             Comma-separated list of apps to export"
+        echo "  --all-apps              Export all applications"
+        echo "  --rbac                  Collect RBAC/users data (on by default)"
+        echo "  --no-rbac               Disable RBAC/users data collection"
+        echo "  --no-itsi               Skip the ITSI KV-store collection step even when the ITSI app"
+        echo "                          is detected. (ITSI KV-store collection is automatic when an"
+        echo "                          ITSI app is present. The classic surface of the itsi app —"
+        echo "                          dashboards, savedsearches, .conf files — is always collected.)"
+        echo "  --usage                 Collect usage analytics (on by default)"
+        echo "  --no-usage              Disable usage analytics collection"
+        echo "  --analytics-period N    Analytics time window (default: 30d; e.g. 7d, 90d, 365d)"
+        echo "  --skip-internal         Skip index=_audit/_internal searches (restricted accounts)"
+        echo "  --test-access           Pre-flight check: test API access and exit (no export)"
+        echo "  --remask FILE           Re-anonymize an existing unmasked archive (no Splunk needed)"
+        echo "  --resume-collect FILE   Resume a previously interrupted export from archive"
+        echo "  --quick                 Quick mode - TESTING ONLY (skips critical migration data)"
+        echo "  --scoped                Scope all collections to selected apps only"
+        echo "  --anonymize             Enable data anonymization (on by default)"
+        echo "  --no-anonymize          Disable data anonymization"
+        echo "  -y, --yes               Auto-confirm all prompts"
+        echo "  -d, --debug             Enable verbose debug logging (writes to export_debug.log)"
+        echo "  --help                  Show this help message"
+        echo ""
+        echo "WARNING: --quick is for TESTING/VALIDATION ONLY"
+        echo "  Do NOT use --quick for migration analysis. It skips:"
+        echo "    - Usage analytics (who uses what, how often)"
+        echo "    - User/RBAC data (migration audience identification)"
+        echo "    - Priority assessment data"
+        echo "  For migration analysis, use full export (default) or --scoped."
+        echo ""
+        echo "Performance Tips:"
+        echo "  For large environments, use --scoped (not --quick) with --apps:"
+        echo "    $0 -u admin -p pass --apps myapp --scoped"
+        echo ""
+        echo "  This exports app configs + app-specific users/usage for migration analysis."
+        exit 0
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  # Handle --remask before any Splunk connection (no auth needed)
+  if [ "$REMASK_MODE" = "true" ]; then
+    show_banner
+    remask_archive "$REMASK_ARCHIVE"
+    exit $?
+  fi
+
+  # Fall back to environment variables if CLI args not provided
+  # This is useful for container environments where credentials are in env vars
+  if [ -z "$SPLUNK_USER" ] && [ -n "$SPLUNK_ADMIN_USER" ]; then
+    SPLUNK_USER="$SPLUNK_ADMIN_USER"
+  fi
+  # Note: SPLUNK_PASSWORD is already a script variable, so we need to check
+  # if it was set via CLI. If not, check environment variables.
+  if [ -z "$SPLUNK_PASSWORD" ]; then
+    # Check common env var names for Splunk password
+    # Try SPLUNK_ADMIN_PASSWORD first (to avoid name collision with script var)
+    if [ -n "$SPLUNK_ADMIN_PASSWORD" ]; then
+      SPLUNK_PASSWORD="$SPLUNK_ADMIN_PASSWORD"
+    fi
+  fi
+
+  # =========================================================================
+  # DETERMINE INTERACTIVE VS NON-INTERACTIVE MODE
+  # Non-interactive requires: -y flag AND (username AND password)
+  # Environment variables alone should NOT trigger non-interactive mode
+  # =========================================================================
+  # Token auth or full user+pass+yes → non-interactive mode
+  if [ "$AUTH_METHOD" = "token" ] && [ -n "$AUTH_TOKEN" ]; then
+    NON_INTERACTIVE=true
+    AUTO_CONFIRM=true
+  elif [ "$AUTO_CONFIRM" = "true" ] && [ -n "$SPLUNK_USER" ] && [ -n "$SPLUNK_PASSWORD" ]; then
+    NON_INTERACTIVE=true
+  fi
+
+  # Start overall timer
+  EXPORT_START_TIME=$(date +%s)
+
+  # Show welcome
+  show_banner
+
+  # Show mode info in non-interactive mode
+  if [ "$NON_INTERACTIVE" = "true" ]; then
+    echo -e "  ${CYAN}Running in NON-INTERACTIVE mode${NC}"
+    if [ "$AUTH_METHOD" = "token" ]; then
+      echo -e "  ${DIM}Auth:  token${NC}"
+    else
+      echo -e "  ${DIM}User:  $SPLUNK_USER${NC}"
+    fi
+    echo -e "  ${DIM}Host:  ${SPLUNK_HOST}:${SPLUNK_PORT}${NC}"
+    if [ -n "$PROXY_URL" ]; then
+      echo -e "  ${DIM}Proxy: $PROXY_URL${NC}"
+    fi
+    if [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+      echo -e "  ${DIM}Apps:  ${SELECTED_APPS[*]}${NC}"
+    else
+      echo -e "  ${DIM}Apps:  all (will discover from filesystem)${NC}"
+    fi
+    if [ "$QUICK_MODE" = "true" ]; then
+      echo -e "  ${DIM}Mode:  QUICK (no global analytics)${NC}"
+    elif [ "$SCOPE_TO_APPS" = "true" ]; then
+      echo -e "  ${DIM}Mode:  App-scoped analytics${NC}"
+    fi
+    if [ "$COLLECT_USAGE" = "true" ]; then
+      echo -e "  ${DIM}Usage: ENABLED (${USAGE_PERIOD} window)${NC}"
+    fi
+    if [ "$SKIP_INTERNAL" = "true" ]; then
+      echo -e "  ${DIM}Note:  --skip-internal active (no _audit/_internal searches)${NC}"
+    fi
+    echo ""
+  fi
+
+  show_welcome
+
+  # Check prerequisites
+  check_prerequisites
+
+  # Detect environment
+  detect_splunk_home
+  detect_splunk_flavor
+
+  # Select what to export
+  if [ "$SPLUNK_FLAVOR" != "uf" ]; then
+    select_applications
+    select_data_categories
+    authenticate_splunk
+    select_usage_period
+
+    # Phase 2: Detect SHC role and show warning if on Captain
+    detect_shc_role
+    show_shc_captain_warning
+
+    # Phase 2: Check for resume from previous export
+    if [ -d "/tmp/dma_export_"* ] 2>/dev/null; then
+      check_resume_export
+    fi
+
+    # Phase 2: Large environment scope selection
+    select_export_scope
+  fi
+
+  # Handle --test-access: run pre-flight checks and exit (no export written)
+  if [ "$TEST_ACCESS_MODE" = "true" ]; then
+    run_test_access
+    exit 0
+  fi
+
+  # Log configuration state for debugging
+  debug_config_state
+
+  # =========================================================================
+  # WARNING IF NO APP FILTER SPECIFIED
+  # =========================================================================
+  if [ "$EXPORT_ALL_APPS" = "true" ]; then
+    local app_count=${#SELECTED_APPS[@]}
+    echo ""
+    echo -e "  ${YELLOW}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${YELLOW}║${NC}  ${BOLD}⚠ WARNING: No --apps filter specified${NC}                                ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}                                                                        ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  The script will export ALL applications from this Splunk Enterprise  ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  environment. In large systems (1000+ dashboards), this may take      ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  several hours to complete.                                           ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}                                                                        ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  ${DIM}To export specific apps with usage data, use:${NC}                        ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  ${DIM}  --apps \"app1,app2\" --scoped${NC}                                         ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}                                                                        ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}║${NC}  ${DIM}(--quick is for testing only - skips migration-critical data)${NC}        ${YELLOW}║${NC}"
+    echo -e "  ${YELLOW}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${CYAN}Continuing with full export...${NC}"
+    echo ""
+
+    # Additional warning for very large environments
+    if [ "$app_count" -gt 50 ]; then
+      warning "Found ${app_count} apps - this is a large environment!"
+      warning "Consider using --apps to filter for faster exports"
+    fi
+  fi
+
+  # =========================================================================
+  # AUTO-ENABLE APP-SCOPED MODE FOR PERFORMANCE
+  # =========================================================================
+  if [ "$EXPORT_ALL_APPS" = "false" ] && [ "$QUICK_MODE" != "true" ]; then
+    # Specific apps were selected - auto-enable scoped mode
+    if [ "$SCOPE_TO_APPS" != "true" ]; then
+      info "App-scoped mode auto-enabled (specific apps selected)"
+      info "  → Usage analytics will be scoped to: ${SELECTED_APPS[*]}"
+      info "  → Use --all-apps to collect global analytics"
+      SCOPE_TO_APPS=true
+    fi
+  fi
+
+  # Handle quick mode - skip expensive global collections
+  if [ "$QUICK_MODE" = "true" ]; then
+    info "Quick mode enabled - skipping global analytics collections"
+    COLLECT_RBAC=false
+    COLLECT_USAGE=false
+    COLLECT_INDEXES=false
+  fi
+
+  # Handle --resume-collect: extract existing archive and restore checkpoint state
+  if [ "$RESUME_MODE" = "true" ]; then
+    resume_from_archive "$RESUME_ARCHIVE"
+  fi
+
+  # Prepare export (skipped in resume mode — directory already exists)
+  if [ "$RESUME_MODE" != "true" ]; then
+    create_export_directory
+  fi
+
+  # Collect data
+  print_box_header "COLLECTING DATA"
+  print_box_line ""
+  print_box_line "This may take several minutes depending on your environment size."
+  print_box_line ""
+  print_box_footer
+  echo ""
+
+  # Show scale warning if large environment
+  local total_apps=${#SELECTED_APPS[@]}
+  show_scale_warning "applications" "$total_apps" 50
+
+  if ! has_collected_data "system_info"; then
+    collect_system_info
+  else
+    info "Skipping system_info (already collected in prior run)"
+  fi
+
+  # Collect system-level macros (global macros from etc/system/local)
+  # This captures macros that are automatically available to all apps
+  if [ "$COLLECT_CONFIGS" = true ]; then
+    if ! has_analytics_checkpoint "system_macros"; then
+      collect_system_macros
+      save_analytics_checkpoint "system_macros"
+    else
+      info "Skipping system macros (already collected in prior run)"
+    fi
+  fi
+
+  if [ "$COLLECT_CONFIGS" = true ]; then
+    # Initialize progress for app collection (same style as Dashboard Studio export)
+    progress_init "Exporting Application Configurations" "$total_apps"
+
+    local app_index=0
+    local histogram_data=()
+
+    for app in "${SELECTED_APPS[@]}"; do
+      ((app_index++))
+
+      # Collect app configs (the actual work)
+      if ! has_analytics_checkpoint "app_configs:$app"; then
+        collect_app_configs "$app"
+        save_analytics_checkpoint "app_configs:$app"
+      fi
+
+      # Collect data for histogram (dashboards per app) - use ls instead of find for container compatibility
+      local app_dash_count=0
+      for dash_dir in "default/data/ui/views" "local/data/ui/views"; do
+        if [ -d "$EXPORT_DIR/$app/$dash_dir" ]; then
+          local count=$(ls -1 "$EXPORT_DIR/$app/$dash_dir/"*.xml 2>/dev/null | wc -l | tr -d ' ')
+          app_dash_count=$((app_dash_count + count))
+        fi
+      done
+      if [ "$app_dash_count" -gt 0 ]; then
+        histogram_data+=("$app:$app_dash_count")
+      fi
+
+      # Update progress (single line, updates in place like Dashboard Studio)
+      progress_update "$app_index"
+    done
+
+    progress_complete
+
+    # Show histogram of dashboards by app (top 15)
+    if [ ${#histogram_data[@]} -gt 0 ]; then
+      # Sort by count (descending) and take top 15
+      local sorted_data=()
+      while IFS= read -r line; do
+        sorted_data+=("$line")
+      done < <(printf '%s\n' "${histogram_data[@]}" | sort -t':' -k2 -nr | head -15)
+
+      if [ ${#sorted_data[@]} -gt 0 ]; then
+        show_histogram "Dashboards by Application (Top 15)" "${sorted_data[@]}"
+      fi
+    fi
+  fi
+
+  # =========================================================================
+  # APP-SCOPED ANALYTICS COLLECTION
+  # Collect usage analytics for each app (dashboard views, alert firing, etc.)
+  # This runs after configs so we know which apps have content worth analyzing.
+  #
+  # When COLLECT_USAGE is active and we're in resume mode, clear all usage-
+  # related analytics checkpoints so queries always re-run fresh. Previous
+  # data may be from broken/timed-out queries that wrote error JSON.
+  # =========================================================================
+  if [ "$SPLUNK_FLAVOR" != "uf" ] && [ "$COLLECT_USAGE" = true ] && [ -n "$SPLUNK_USER" ]; then
+    if [ "$RESUME_MODE" = "true" ] && [ -f "$EXPORT_DIR/.analytics_checkpoint" ]; then
+      info "Usage collection active in resume mode — clearing usage checkpoints to force re-collection"
+      # Remove usage-related checkpoints (keep config/app checkpoints intact)
+      sed -i.bak '/^dashboard_views$/d;/^user_activity$/d;/^search_patterns$/d;/^index_volume$/d;/^alert_firing$/d;/^alerts_inventory$/d;/^usage_ownership$/d' "$EXPORT_DIR/.analytics_checkpoint"
+      rm -f "$EXPORT_DIR/.analytics_checkpoint.bak"
+    fi
+    echo ""
+    collect_app_analytics
+  fi
+
+  if [ "$SPLUNK_FLAVOR" != "uf" ]; then
+    if ! has_analytics_checkpoint "dashboard_studio"; then
+      collect_dashboard_studio
+      save_analytics_checkpoint "dashboard_studio"
+    else
+      info "Skipping Dashboard Studio export (already collected in prior run)"
+    fi
+
+    # ITSI BLOCK: auto-detect + collect. Runs immediately after dashboard_studio
+    # so the dashboard-class additions (per-app glasstable/deepdive subdirs)
+    # are co-located with the rest of the dashboard tree being built.
+    # Detection populates COLLECT_ITSI; orchestrator runs only when true.
+    # Both halves are idempotent and resume-safe per §10.4.7.
+    detect_itsi
+    if [ "$COLLECT_ITSI" = true ]; then
+      if ! has_analytics_checkpoint "itsi_assets"; then
+        collect_itsi_assets
+        save_analytics_checkpoint "itsi_assets"
+      else
+        info "Skipping ITSI collection (already collected in prior run)"
+        # Even on skip, re-emit the inventory file so it reflects current on-disk state.
+        # (Counts will be 0 here because we didn't fetch; that's expected and the file
+        # is overwritten as a presence marker, not an authoritative count.)
+      fi
+    else
+      # On detection failure / skip, still write the inventory file so DMA
+      # Server can distinguish "ITSI was not attempted" from "ITSI was
+      # attempted and nothing was there." Reason is set by detect_itsi.
+      itsi_write_inventory "false"
+    fi
+
+    if ! has_collected_data "rbac"; then
+      collect_rbac
+    else
+      info "Skipping rbac (already collected in prior run)"
+    fi
+    if [ "$COLLECT_USAGE" = true ] || ! has_collected_data "usage_analytics"; then
+      collect_usage_analytics
+    else
+      info "Skipping usage_analytics (already collected in prior run)"
+    fi
+  fi
+
+  if ! has_collected_data "indexes"; then
+    collect_index_stats
+  else
+    info "Skipping index_stats (already collected in prior run)"
+  fi
+  collect_audit_sample
+
+  # Generate summary and manifest
+  generate_summary
+  generate_manifest
+
+  # Generate troubleshooting report if there were errors
+  if [ "$STATS_ERRORS" -gt 0 ]; then
+    warning "Export encountered ${STATS_ERRORS} error(s). Generating troubleshooting report..."
+    generate_troubleshooting_report
+  fi
+
+  # v4.2.3: Two-archive approach for anonymization
+  # Always create original archive first (untouched), then create masked copy if needed
+  local tarball
+  if [ "$ANONYMIZE_DATA" = true ]; then
+    # Create original archive first, keeping EXPORT_DIR for masked copy
+    tarball=$(create_archive "true")  # keep_dir=true
+
+    # Create masked (anonymized) archive from a copy
+    local masked_tarball
+    masked_tarball=$(create_masked_archive)
+
+    # Show completion with both archives
+    show_completion "$tarball" "$masked_tarball"
+  else
+    # No anonymization - just create single archive
+    tarball=$(create_archive)
+
+    # Show completion
+    show_completion "$tarball"
+  fi
+}
+
+# =============================================================================
+# PROGRESSIVE CHECKPOINTING FOR ANALYTICS
+# Allows resuming interrupted analytics collections mid-run.
+# Each analytics query records its name into .analytics_checkpoint on success.
+# On resume, already-completed queries are skipped automatically.
+# =============================================================================
+
+save_analytics_checkpoint() {
+  local phase="$1"
+  if [ -n "$EXPORT_DIR" ] && [ -d "$EXPORT_DIR" ]; then
+    echo "$phase" >> "$EXPORT_DIR/.analytics_checkpoint"
+    debug_log "SEARCH" "Checkpoint saved: $phase"
+  fi
+}
+
+has_analytics_checkpoint() {
+  local phase="$1"
+  grep -q "^${phase}$" "$EXPORT_DIR/.analytics_checkpoint" 2>/dev/null
+}
+
+# =============================================================================
+# --TEST-ACCESS PRE-FLIGHT MODE
+# Verifies API connectivity for every collection category without writing data.
+# =============================================================================
+
+run_test_access() {
+  local passed=0 failed=0 warned=0 total=0
+
+  _tcheck() {
+    local label="$1" status="$2" detail="$3"
+    ((total++))
+    case "$status" in
+      PASS) ((passed++)); echo -e "  ${GREEN}[PASS]${NC}  $label  ${DIM}$detail${NC}" ;;
+      FAIL) ((failed++)); echo -e "  ${RED}[FAIL]${NC}  $label  ${DIM}$detail${NC}" ;;
+      WARN) ((warned++)); echo -e "  ${YELLOW}[WARN]${NC}  $label  ${DIM}$detail${NC}" ;;
+      SKIP) echo -e "  ${DIM}[SKIP]  $label  $detail${NC}" ;;
+    esac
+  }
+
+  echo ""
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${CYAN}  TEST-ACCESS MODE — Pre-flight API verification${NC}"
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${DIM}Host: ${SPLUNK_HOST}:${SPLUNK_PORT}  Auth: ${AUTH_METHOD}${NC}"
+  echo ""
+
+  local tmp=$(mktemp)
+
+  # 1. Server info
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/server/info" \
+    -d "output_mode=json" -o "$tmp" 2>/dev/null
+  if grep -q '"version"' "$tmp" 2>/dev/null; then
+    local ver
+    ver=$(grep -o '"version":"[^"]*"' "$tmp" | head -1 | cut -d'"' -f4)
+    _tcheck "Server info" "PASS" "Splunk v${ver:-unknown}"
+  else
+    _tcheck "Server info" "FAIL" "Cannot reach REST API or auth rejected"
+  fi
+
+  # 2. Dashboards
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/data/ui/views" \
+    -d "output_mode=json" -d "count=1" -o "$tmp" 2>/dev/null
+  if grep -q '"entry"' "$tmp" 2>/dev/null; then
+    local n; n=$(grep -o '"total":[0-9]*' "$tmp" | head -1 | cut -d: -f2)
+    _tcheck "Dashboards" "PASS" "${n:-?} total"
+  else
+    _tcheck "Dashboards" "FAIL" "Cannot list dashboards (check admin_all_objects)"
+  fi
+
+  # 3. Alerts / saved searches
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/saved/searches" \
+    -d "output_mode=json" -d "count=1" -o "$tmp" 2>/dev/null
+  if grep -q '"entry"' "$tmp" 2>/dev/null; then
+    local n; n=$(grep -o '"total":[0-9]*' "$tmp" | head -1 | cut -d: -f2)
+    _tcheck "Alerts/saved searches" "PASS" "${n:-?} total"
+  else
+    _tcheck "Alerts/saved searches" "FAIL" "Cannot list saved searches"
+  fi
+
+  # 4. RBAC – users
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/users" \
+    -d "output_mode=json" -d "count=1" -o "$tmp" 2>/dev/null
+  if grep -q '"entry"' "$tmp" 2>/dev/null; then
+    _tcheck "Users (RBAC)" "PASS" "Accessible"
+  else
+    _tcheck "Users (RBAC)" "WARN" "Cannot list users (list_users capability may be missing)"
+  fi
+
+  # 5. Indexes
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/data/indexes" \
+    -d "output_mode=json" -d "count=1" -o "$tmp" 2>/dev/null
+  if grep -q '"entry"' "$tmp" 2>/dev/null; then
+    _tcheck "Indexes" "PASS" "Accessible"
+  else
+    _tcheck "Indexes" "WARN" "Cannot list indexes"
+  fi
+
+  # 6. Knowledge objects (props)
+  curl -k -s -G $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/-/-/configs/conf-props" \
+    -d "output_mode=json" -d "count=1" -o "$tmp" 2>/dev/null
+  if grep -q '"entry"' "$tmp" 2>/dev/null; then
+    _tcheck "Knowledge objects" "PASS" "props.conf accessible"
+  else
+    _tcheck "Knowledge objects" "WARN" "Cannot read props.conf"
+  fi
+
+  # 7. Usage analytics (_audit)
+  if [ "$SKIP_INTERNAL" = "true" ]; then
+    _tcheck "Usage analytics (_audit)" "SKIP" "--skip-internal active"
+  else
+    local sid_resp
+    sid_resp=$(curl -k -s $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" -d "exec_mode=oneshot" -d "count=1" \
+      --data-urlencode "search=search index=_audit | head 1" 2>/dev/null)
+    if echo "$sid_resp" | grep -q '"results"'; then
+      _tcheck "Usage analytics (_audit)" "PASS" "index=_audit searchable"
+    else
+      _tcheck "Usage analytics (_audit)" "WARN" "Cannot search index=_audit (usage analytics will be empty)"
+    fi
+  fi
+
+  # 8. Internal index (_internal)
+  if [ "$SKIP_INTERNAL" = "true" ]; then
+    _tcheck "Volume analytics (_internal)" "SKIP" "--skip-internal active"
+  else
+    local sid_resp
+    sid_resp=$(curl -k -s $CURL_PROXY_ARGS -H "$AUTH_HEADER" \
+      "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/search/jobs" \
+      -d "output_mode=json" -d "exec_mode=oneshot" -d "count=1" \
+      --data-urlencode "search=search index=_internal | head 1" 2>/dev/null)
+    if echo "$sid_resp" | grep -q '"results"'; then
+      _tcheck "Volume analytics (_internal)" "PASS" "index=_internal searchable"
+    else
+      _tcheck "Volume analytics (_internal)" "WARN" "Cannot search index=_internal (volume data will be empty)"
+    fi
+  fi
+
+  rm -f "$tmp"
+
+  echo ""
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  Passed: ${GREEN}${passed}${NC}  Failed: ${RED}${failed}${NC}  Warned: ${YELLOW}${warned}${NC}  Total: ${total}"
+  echo ""
+  if [ "$failed" -eq 0 ] && [ "$warned" -eq 0 ]; then
+    echo -e "  ${GREEN}${BOLD}VERDICT: All access checks passed. Ready to run a full export.${NC}"
+  elif [ "$failed" -gt 0 ]; then
+    echo -e "  ${RED}${BOLD}VERDICT: Critical failures detected. Resolve before running export.${NC}"
+  else
+    echo -e "  ${YELLOW}${BOLD}VERDICT: Required checks passed (some warnings). Export will work with partial data.${NC}"
+  fi
+  echo ""
+}
+
+# =============================================================================
+# --REMASK: RE-ANONYMIZE AN EXISTING ARCHIVE
+# Re-runs anonymization on an existing unmasked archive without Splunk access.
+# =============================================================================
+
+remask_archive() {
+  local archive="$1"
+
+  if [ ! -f "$archive" ]; then
+    echo -e "${RED}[ERROR] Archive not found: $archive${NC}" >&2
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${CYAN}  REMASK MODE — Re-Anonymize Existing Archive${NC}"
+  echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${DIM}No Splunk connection needed. Only re-runs anonymization.${NC}"
+  echo -e "  ${DIM}Original archive will NOT be modified.${NC}"
+  echo ""
+  echo -e "  ${BOLD}Source:${NC} $archive"
+  echo ""
+
+  local work_dir
+  work_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'dma_remask')
+
+  echo -e "  Extracting archive..."
+  if ! tar -xzf "$archive" -C "$work_dir" 2>/dev/null; then
+    echo -e "${RED}[ERROR] Failed to extract archive${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  local extracted_dir
+  extracted_dir=$(find "$work_dir" -maxdepth 1 -mindepth 1 -type d | head -1)
+  if [ -z "$extracted_dir" ] || [ ! -d "$extracted_dir" ]; then
+    echo -e "${RED}[ERROR] Could not find export directory in archive${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  local original_count
+  original_count=$(find "$extracted_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  echo -e "  ${GREEN}✓${NC} Extracted: $original_count files"
+  echo ""
+
+  # Copy to a _masked directory
+  local masked_dir="${extracted_dir}_masked"
+  echo -e "  Copying for anonymization..."
+  if ! cp -r "$extracted_dir" "$masked_dir" 2>/dev/null; then
+    echo -e "${RED}[ERROR] Failed to copy directory for masking${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  local copied_count
+  copied_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$copied_count" -ne "$original_count" ]; then
+    echo -e "${RED}[ERROR] File count mismatch after copy (disk full?)${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+  echo -e "  ${GREEN}✓${NC} Copied: $copied_count files"
+
+  # Run anonymization on the masked copy
+  local saved_export_dir="$EXPORT_DIR"
+  EXPORT_DIR="$masked_dir"
+  ANONYMIZE_DATA=true
+  anonymize_export
+  EXPORT_DIR="$saved_export_dir"
+
+  # Build output path
+  local archive_basename
+  archive_basename=$(basename "$archive")
+  local masked_name="${archive_basename%.tar.gz}_masked.tar.gz"
+  local output_dir
+  output_dir=$(dirname "$archive")
+
+  echo -e "  Creating masked archive..."
+  if ! tar -czf "${output_dir}/${masked_name}" -C "$work_dir" "$(basename "$masked_dir")" 2>/dev/null; then
+    echo -e "${RED}[ERROR] Failed to create masked archive${NC}" >&2
+    rm -rf "$work_dir"
+    return 1
+  fi
+
+  local size
+  size=$(du -h "${output_dir}/${masked_name}" 2>/dev/null | cut -f1)
+  local post_count
+  post_count=$(find "$masked_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  rm -rf "$work_dir"
+
+  echo ""
+  echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "  ${GREEN}  REMASK COMPLETE${NC}"
+  echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${BOLD}Original:${NC}  $archive (unchanged)"
+  echo -e "  ${BOLD}Masked:${NC}    ${output_dir}/${masked_name}"
+  echo -e "  ${BOLD}Size:${NC}      ${size:-unknown}"
+  echo -e "  ${BOLD}Files:${NC}     $post_count"
+  echo ""
+  echo -e "  ${YELLOW}Share the _masked archive. The original was NOT modified.${NC}"
+  echo ""
+  return 0
+}
+
+# =============================================================================
+# --RESUME-COLLECT: RESUME AN INTERRUPTED EXPORT
+# Extracts a previous archive and resumes collection from where it stopped.
+# =============================================================================
+
+resume_from_archive() {
+  local archive="$1"
+
+  if [ ! -f "$archive" ]; then
+    error "Resume archive not found: $archive"
+    exit 1
+  fi
+
+  progress "Extracting previous export archive for resume..."
+
+  # Determine directory name inside archive
+  local dir_name
+  dir_name=$(tar -tzf "$archive" 2>/dev/null | head -1 | cut -d'/' -f1)
+  if [ -z "$dir_name" ]; then
+    error "Could not determine export directory from archive"
+    exit 1
+  fi
+
+  # Extract unless directory already present
+  if [ -d "/tmp/$dir_name" ]; then
+    warning "Directory /tmp/$dir_name already exists — using existing directory"
+  else
+    if ! tar -xzf "$archive" -C /tmp 2>/dev/null; then
+      error "Failed to extract archive"
+      exit 1
+    fi
+    if [ ! -d "/tmp/$dir_name" ]; then
+      error "Failed to extract archive — directory /tmp/$dir_name not found"
+      exit 1
+    fi
+  fi
+
+  EXPORT_NAME="$dir_name"
+  EXPORT_DIR="/tmp/$dir_name"
+  LOG_FILE="${EXPORT_DIR}/_export.log"
+  CHECKPOINT_FILE="${EXPORT_DIR}/.export_checkpoint"
+  PROGRESS_FILE="${EXPORT_DIR}/.export_progress"
+  ERROR_LOG_FILE="${EXPORT_DIR}/export_errors.log"
+
+  if [ "$DEBUG_MODE" = "true" ]; then
+    DEBUG_LOG_FILE="${EXPORT_DIR}/export_debug.log"
+  fi
+
+  log "=== RESUME MODE ==="
+  log "Resumed from archive: $archive"
+  log "Export directory: $EXPORT_DIR"
+
+  success "Extracted previous export: $dir_name"
+}
+
+# Check if a collection category already has data in the current EXPORT_DIR.
+has_collected_data() {
+  local category="$1"
+  case "$category" in
+    "rbac")            [ -f "$EXPORT_DIR/dma_analytics/rbac/users.json" ] ;;
+    "usage_analytics") [ -f "$EXPORT_DIR/dma_analytics/usage_analytics/dashboard_ownership.json" ] ;;
+    "system_info")     [ -f "$EXPORT_DIR/dma_analytics/system_info/server_info.json" ] ;;
+    "indexes")         [ -f "$EXPORT_DIR/dma_analytics/index_stats.json" ] ;;
+    *)                 return 1 ;;
+  esac
+}
+
+# =============================================================================
+# MAIN FUNCTION
+# =============================================================================
+
+# Run main only when the script is executed directly, not when sourced as a
+# library (e.g. by the regression test harness under tests/). This is the
+# canonical bash idiom from Google's Bash Style Guide.
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  main "$@"
+fi
