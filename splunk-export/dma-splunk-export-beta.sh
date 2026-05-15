@@ -9,7 +9,32 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.1
+#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.2
+#
+#  v4.7.0-beta.2 Changes (2026-05-15):
+#    - Proactive --apps warning (planning doc §10.4.9): when ITSI is detected
+#      AND the operator's --apps selection excludes SA-ITOA / SA-IndexCreation /
+#      SA-UserAccess / SA-ITSI-* / DA-ITSI-* companion apps, the export
+#      surfaces a clear WARNING naming exactly which companion apps are
+#      installed-but-missing-from-selection. KV-store layer still gets
+#      collected (workspace-wide); only the companion apps' classic surface
+#      is missed. Operator can re-run with --resume-collect to fill in.
+#    - Vastly improved REST-unreachable diagnostic. Old message
+#      ("On Splunk Cloud this often means port 8089 isn't enabled") was
+#      misleading on Enterprise where 8089 is normally open by default.
+#      New message explains WHY REST matters for ITSI (KV-store has no
+#      filesystem alternative), lists the 4 typical Enterprise causes
+#      (firewall, wrong --host, port-binding, run-from-wrong-host), and
+#      explicitly recommends running the script ON the search head with
+#      `localhost:8089` as the fastest unblock.
+#    - Note on what we deliberately did NOT add: a kvstore_to_json.py
+#      filesystem-fallback. Deep research (2026-05-15) confirmed Splunk's
+#      kvstore_to_json.py uses REST internally — same dependency as the
+#      primary path, just running locally on the SH. Wiring it in would
+#      be false robustness. The clearer fix is "run THIS script on the
+#      SH" which already works today.
+#
+#  v4.7.0-beta.1 Changes (2026-05-13) — see prior banner section below.
 #
 #  ┌────────────────────────────────────────────────────────────────────────┐
 #  │                          THIS IS A BETA BUILD                          │
@@ -225,7 +250,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.1"
+SCRIPT_VERSION="4.7.0-beta.2"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -5888,6 +5913,84 @@ except Exception:
     print('unknown')
 " 2>/dev/null)
       info "ITSI version: $ITSI_VERSION (from SA-ITOA app)"
+
+      # ITSI BLOCK (proactive --apps warning per planning doc §10.4.9):
+      # When ITSI is detected but the customer's --apps selection EXCLUDES
+      # SA-ITOA + companion apps, the KV-store layer (workspace-wide,
+      # independent of --apps) will be captured, BUT SA-ITOA's classic
+      # surface (its dashboards, savedsearches.conf, props/transforms.conf)
+      # will NOT. The customer typically doesn't realize this — they pass
+      # `--apps itsi` thinking they got the full ITSI ecosystem.
+      #
+      # Real-world evidence: a recent pilot extract had ITSI detected on a
+      # 9.4.8 SH but the operator passed a narrow --apps list that excluded
+      # SA-ITOA, SA-IndexCreation, SA-UserAccess, SA-ITSI-*, DA-ITSI-*.
+      # The KV-store layer DID get attempted (workspace-wide), but the
+      # companion apps' filesystem content was silently absent. We surface
+      # the gap here so the operator can decide to re-run with expanded
+      # --apps.
+      #
+      # The recommended app set is sourced from Splunk's official ITSI 4.21
+      # install docs: SA-ITOA is the canonical REST host; SA-IndexCreation
+      # owns ITSI's reserved indexes; SA-UserAccess owns ITSI ACLs;
+      # SA-ITSI-{ATAD,CustomModuleViz,Licensechecker,MetricAD,AlertCorrelation,
+      # DriftDetection} are content/admin apps; DA-ITSI-* are content packs.
+      if [ "$EXPORT_ALL_APPS" != "true" ] && [ ${#SELECTED_APPS[@]} -gt 0 ]; then
+        # Build set of selected app names (lowercase for comparison).
+        local _selected_set
+        _selected_set=$(printf '%s\n' "${SELECTED_APPS[@]}" | tr '[:upper:]' '[:lower:]' | sort -u)
+
+        # Compute missing companion apps from the canonical set, restricted
+        # to those that ARE installed on this Splunk (we got that list during
+        # the apps presence check above). We avoid recommending apps that
+        # don't exist on the customer's stack — no point telling them to add
+        # DA-ITSI-OS if they don't run it.
+        local _missing_companions
+        _missing_companions=$($PYTHON_CMD -c "
+import json, re
+canonical = ['SA-ITOA','SA-IndexCreation','SA-UserAccess',
+             'SA-ITSI-ATAD','SA-ITSI-CustomModuleViz','SA-ITSI-Licensechecker',
+             'SA-ITSI-MetricAD','SA-ITSI-AlertCorrelation','SA-ITSI-DriftDetection']
+da_pattern = re.compile(r'^DA-ITSI-[A-Za-z0-9_-]+\$')
+selected = set('''$_selected_set'''.split())
+try:
+    with open('$apps_json','r') as f: data = json.load(f)
+    installed = set()
+    for e in data.get('entry',[]):
+        name = e.get('name','')
+        content = e.get('content',{})
+        disabled = content.get('disabled')
+        is_enabled = (disabled == 0 or disabled is False or disabled == '0')
+        if is_enabled and (name in canonical or da_pattern.match(name)):
+            installed.add(name)
+    missing = sorted(name for name in installed if name.lower() not in selected)
+    print(','.join(missing))
+except Exception:
+    print('')
+" 2>/dev/null)
+
+        if [ -n "$_missing_companions" ]; then
+          warning "ITSI detected, but your --apps selection EXCLUDES the SA-ITOA companion app set."
+          info "  The ITSI KV-store layer (Glass Tables, Services, KPIs, Entities, NEAPs, etc.)"
+          info "  IS workspace-wide and WILL be collected regardless of --apps."
+          info "  But the classic surface of SA-ITOA and its companion apps WILL NOT — their"
+          info "  savedsearches.conf, props.conf, transforms.conf, and operational dashboards"
+          info "  won't appear in this archive. The DMA Server importer will see KV-store"
+          info "  references to objects whose backing .conf entries aren't captured."
+          info ""
+          info "  Currently missing from your --apps (and installed on this Splunk):"
+          info "    $_missing_companions"
+          info ""
+          info "  For complete ITSI ecosystem coverage, re-run with --apps expanded to include"
+          info "  those, OR use --all-apps. The current --apps selection was:"
+          info "    ${SELECTED_APPS[*]}"
+          info ""
+          info "  This is a WARNING only — the export will proceed with your current --apps."
+          info "  You can re-run with --resume-collect <archive.tar.gz> and an expanded"
+          info "  --apps to fill in the missing companion-app classic surface without"
+          info "  re-fetching anything already on disk (per-item file-exists guards in §10.4.7)."
+        fi
+      fi
       ;;
     401)
       warning "ITSI probe got 401 — auth token rejected on SA-ITOA namespace. Token may be expired/scoped too narrowly. Skipping ITSI collection."
@@ -5908,8 +6011,42 @@ except Exception:
       ITSI_SKIP_REASON="namespace_unreachable"
       ;;
     000|"")
-      error "ITSI probe failed — no HTTP response (connection refused or timeout). Skipping ITSI collection."
-      info "  On Splunk Cloud this often means REST API port 8089 isn't enabled (requires a Splunk Support case)."
+      error "ITSI probe failed — no HTTP response (connection refused or timeout) at ${SPLUNK_URL}. Skipping ITSI collection."
+      info ""
+      info "  WHY THIS MATTERS:"
+      info "    ITSI's KV-store data (Glass Tables, Deep Dives, Services, KPIs, Entities,"
+      info "    NEAPs, correlation-search metadata, threshold templates, maintenance calendars,"
+      info "    Glass Table images) lives ONLY in the KV store — there is no filesystem-direct"
+      info "    extraction path. It can only be read via the Splunk REST API on the search"
+      info "    head's mgmt port (typically 8089). All Splunk-provided tools (including the"
+      info "    kvstore_to_json.py backup script and the Web UI Backup/Restore feature) use"
+      info "    REST internally to read these objects."
+      info ""
+      info "  THIS DOES NOT MEAN \"open 8089 to the internet\" — it means the export script"
+      info "  needs to make HTTP calls to the SH's mgmt endpoint with a valid auth token."
+      info ""
+      info "  TYPICAL CAUSES AND FIXES (on-prem Splunk Enterprise):"
+      info "    1. Script run from a host that can't reach the SH's port 8089."
+      info "       → FIX: run this script directly ON the search head. localhost:8089 is"
+      info "         always reachable from inside the SH. Copy the script to the SH:"
+      info "           scp dma-splunk-export-beta.sh <splunk-sh>:/tmp/"
+      info "         then ssh in and run it there with the same --token and other flags."
+      info "    2. Firewall between the export host and the SH blocks port 8089."
+      info "       → FIX: open 8089 between the two boxes (network team), or use option 1."
+      info "    3. Wrong --host value (pointing to web UI port 8000 instead of mgmt 8089)."
+      info "       → FIX: confirm --host=https://<splunk-sh>:8089 (NOT :8000)."
+      info "    4. The SH's splunkd has 8089 bound to localhost only."
+      info "       → FIX: SHC captains usually serve 8089 cluster-wide; if locked down,"
+      info "         either reconfigure or use option 1 above."
+      info ""
+      info "  WHAT WAS STILL COLLECTED:"
+      info "    The classic surface of the itsi app (dashboards, savedsearches.conf,"
+      info "    .conf files) WAS collected by the standard collectors — that's filesystem-based."
+      info "    Only the KV-store layer is missing."
+      info ""
+      info "  On Splunk Cloud specifically: REST API port 8089 is gated by Splunk Support;"
+      info "  customers with active Cloud REST access already have it; new customers need"
+      info "  a Support case to enable. Less common on on-prem Enterprise."
       COLLECT_ITSI=false
       ITSI_SKIP_REASON="rest_unreachable"
       ;;
@@ -7745,10 +7882,12 @@ main() {
   printf '\n'
   printf '\033[33m'
   printf '┌────────────────────────────────────────────────────────────────────────┐\n'
-  printf '│  DMA SPLUNK EXPORT — BETA BUILD v%s                       │\n' "$SCRIPT_VERSION"
+  printf '│  DMA SPLUNK EXPORT — BETA BUILD v%-37s │\n' "$SCRIPT_VERSION"
   printf '│  Adds ITSI Comprehensive Cataloging (Glass Tables, Deep Dives, KPIs,   │\n'
   printf '│  Services, Entities, NEAPs, etc.). Auto-detected; opt-out: --no-itsi.  │\n'
-  printf '│  Not for general customer use. See file header for full notes.         │\n'
+  printf '│  NOTE: ITSI KV-store extraction requires REST API access on the SH'"'"'s   │\n'
+  printf '│  mgmt port (typically 8089). Easiest: run THIS script directly on the  │\n'
+  printf '│  search head so localhost:8089 is reachable. Not for general use.      │\n'
   printf '└────────────────────────────────────────────────────────────────────────┘\n'
   printf '\033[0m\n'
 
