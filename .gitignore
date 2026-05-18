@@ -1,2 +1,5 @@
 .DS_Store
 .claude/settings.json
+
+# graphify knowledge-graph output — generated, local-only, never committed
+graphify-out/
