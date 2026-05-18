@@ -9,7 +9,16 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.5
+#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.6
+#
+#  v4.7.0-beta.6 Changes (2026-05-18):
+#    - Fix LOG_FILE naming inconsistency between fresh-run and resume
+#      paths. create_export_directory() writes to `export.log`; resume_
+#      from_archive() was writing to `_export.log` (underscore prefix).
+#      A resumed export thus produced two separate log files instead
+#      of appending to the original. Both resume sites now match the
+#      canonical `export.log` filename so the resumed run continues
+#      writing to the existing log.
 #
 #  v4.7.0-beta.5 Changes (2026-05-18):
 #    - --resume-collect now accepts an EXISTING DIRECTORY in addition to
@@ -297,7 +306,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.5"
+SCRIPT_VERSION="4.7.0-beta.6"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -8873,7 +8882,7 @@ resume_from_archive() {
     resolved=$(cd "$target" && pwd -P)
     EXPORT_NAME=$(basename "$resolved")
     EXPORT_DIR="$resolved"
-    LOG_FILE="${EXPORT_DIR}/_export.log"
+    LOG_FILE="${EXPORT_DIR}/export.log"
     CHECKPOINT_FILE="${EXPORT_DIR}/.export_checkpoint"
     PROGRESS_FILE="${EXPORT_DIR}/.export_progress"
     ERROR_LOG_FILE="${EXPORT_DIR}/export_errors.log"
@@ -8917,7 +8926,7 @@ resume_from_archive() {
 
   EXPORT_NAME="$dir_name"
   EXPORT_DIR="/tmp/$dir_name"
-  LOG_FILE="${EXPORT_DIR}/_export.log"
+  LOG_FILE="${EXPORT_DIR}/export.log"
   CHECKPOINT_FILE="${EXPORT_DIR}/.export_checkpoint"
   PROGRESS_FILE="${EXPORT_DIR}/.export_progress"
   ERROR_LOG_FILE="${EXPORT_DIR}/export_errors.log"
