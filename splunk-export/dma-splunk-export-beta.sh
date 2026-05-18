@@ -9,7 +9,19 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.2
+#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.3
+#
+#  v4.7.0-beta.3 Changes (2026-05-18):
+#    - HOTFIX: ITSI probe was building its curl target from `${SPLUNK_URL}`,
+#      a variable that is NEVER assigned anywhere in this script. Result:
+#      curl ran against a relative path (`/servicesNS/...`) with no scheme
+#      or host, immediately failed to resolve, and the script reported
+#      "no HTTP response (connection refused or timeout)" — misdiagnosing
+#      a 100%-reproducible scripting bug as a firewall/connectivity issue.
+#      Replaced all 3 references (probe call + 2 diagnostic message
+#      formatters) with the same `https://${SPLUNK_HOST}:${SPLUNK_PORT}`
+#      pattern that every other curl call in the script uses. ITSI probe
+#      now actually reaches the management port on Enterprise.
 #
 #  v4.7.0-beta.2 Changes (2026-05-15):
 #    - Proactive --apps warning (planning doc §10.4.9): when ITSI is detected
@@ -250,7 +262,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.2"
+SCRIPT_VERSION="4.7.0-beta.3"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -5888,7 +5900,7 @@ except Exception as e:
   probe_http=$(curl -k -s -o "$probe_file" -w '%{http_code}' --max-time 30 \
     -H "$AUTH_HEADER" \
     $CURL_PROXY_ARGS \
-    "${SPLUNK_URL}/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1&output_mode=json" 2>/dev/null)
+    "https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1&output_mode=json" 2>/dev/null)
 
   local probe_size=0
   [ -f "$probe_file" ] && probe_size=$(wc -c < "$probe_file" 2>/dev/null || echo 0)
@@ -6011,7 +6023,7 @@ except Exception:
       ITSI_SKIP_REASON="namespace_unreachable"
       ;;
     000|"")
-      error "ITSI probe failed — no HTTP response (connection refused or timeout) at ${SPLUNK_URL}. Skipping ITSI collection."
+      error "ITSI probe failed — no HTTP response (connection refused or timeout) at https://${SPLUNK_HOST}:${SPLUNK_PORT}. Skipping ITSI collection."
       info ""
       info "  WHY THIS MATTERS:"
       info "    ITSI's KV-store data (Glass Tables, Deep Dives, Services, KPIs, Entities,"
@@ -6052,7 +6064,7 @@ except Exception:
       ;;
     *)
       warning "ITSI probe returned unexpected HTTP $probe_http — skipping ITSI collection."
-      info "  Inspect manually: curl -k -H '\$AUTH_HEADER' '${SPLUNK_URL}/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1'"
+      info "  Inspect manually: curl -k -H '\$AUTH_HEADER' 'https://${SPLUNK_HOST}:${SPLUNK_PORT}/servicesNS/nobody/SA-ITOA/itoa_interface/glass_table?limit=1'"
       COLLECT_ITSI=false
       ITSI_SKIP_REASON="probe_unexpected_$probe_http"
       ;;
