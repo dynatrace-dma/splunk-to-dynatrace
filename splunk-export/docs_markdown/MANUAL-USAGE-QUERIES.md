@@ -34,7 +34,8 @@ The DMA export scripts run 6 global analytics queries against `index=_audit` and
 > | Query 2 — User Activity | **`user_activity_global.json`** |
 > | Query 3 — Search Patterns | **`search_patterns_global.json`** |
 > | Query 4 — Index Volume | **`index_volume_summary.json`** |
-> | Query 5 — Alert Firing | **`alert_firing_global.json`** |
+> | Query 5 — Alert Firing (scheduled runs) | **`alert_firing_global.json`** |
+> | Query 5b — Saved Search Ad-Hoc Runs (optional, Enterprise) | **`saved_search_adhoc_runs_global.json`** |
 > | Query 6 — Daily Event Counts | **`index_event_counts_daily.json`** |
 >
 > **Wrong**: `export.json`, `search_results.json`, `Query1.json`, `dashboard_views.json`, `Dashboard_Views_Global.json`
@@ -512,6 +513,35 @@ index=_internal sourcetype=scheduler earliest=-90d
 | sort -total_runs
 ```
 
+**Optional — add a `user` field with the saved-search OWNER** (the user the search is authored under, NOT the user who most recently ran it). When present, the DMA Server uses it as the user metadata for the corresponding Search/Alert in the Explorer. The owner is sourced from `eai:acl.owner` via a left-join against the saved-searches REST endpoint.
+
+**Splunk Enterprise variant** (Enterprise-only — this account isn't on Splunk Cloud):
+
+```spl
+index=_internal sourcetype=scheduler earliest=-90d
+| fields _time, app, savedsearch_name, status
+| stats count as total_runs,
+    sum(eval(if(status="success",1,0))) as successful,
+    sum(eval(if(status="skipped",1,0))) as skipped,
+    sum(eval(if(status!="success" AND status!="skipped",1,0))) as failed,
+    latest(_time) as last_run by app, savedsearch_name
+| join savedsearch_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/saved/searches f=eai:acl
+     | rename title as savedsearch_name, eai:acl.owner as user, eai:acl.app as app
+     | fields savedsearch_name, app, user]
+| sort -total_runs
+```
+
+**Two non-obvious things in this SPL that matter on Splunk Enterprise SHC deployments:**
+
+1. **`splunk_server=local`** is required on the REST subsearch. Without it, `| rest` fan-outs to ALL search peers (indexers). The `/saved/searches` endpoint only exists on the search head — every indexer returns HTTP 404 and the join silently empties. This was directly observed in a recent pilot's `alerts_inventory.json` error log: `"Failed to fetch REST endpoint uri=https://127.0.0.1:8089/servicesNS/-/itsi/saved/searches ... HTTP 'status not OK': code=404, Not Found"` repeated across 196 indexer peers. The `splunk_server=local` parameter keeps the call on the SH only.
+
+2. **`count=0`** asks the REST endpoint to return ALL saved searches (the default is 30, which would silently truncate the join coverage in any deployment with >30 saved searches).
+
+**Why the REST join, not `latest(user)` from the scheduler events**: `_internal sourcetype=scheduler` events have a `user` field that records who DISPATCHED each run (often the scheduler itself, or whoever the saved-search runs as via `run-as` settings). That's an execution-context value, not the saved-search owner. For migration attribution we want the human who AUTHORED the saved search — that's `eai:acl.owner` from the REST API.
+
+Customers can substitute their own attribution source (e.g., a CMDB lookup keyed on savedsearch_name) by replacing the subsearch with whatever resolves `savedsearch_name + app → owner`.
+
 **Expected results**: One row per saved search per app.
 
 **If this returns 0 results** (common on Splunk Cloud), use the REST alternative to get the alert/saved search inventory (without firing history):
@@ -524,6 +554,72 @@ index=_internal sourcetype=scheduler earliest=-90d
 ```
 
 **Enterprise note**: This query searches `index=_internal sourcetype=scheduler`, which has the same local-index visibility issue as `_audit`. On SHC environments, scheduler logs are local to each search head. Run from the Monitoring Console for complete results.
+
+---
+
+### Query 5b: Saved Search Ad-Hoc Runs (Splunk Enterprise)
+
+**Purpose**: Captures runs of saved searches that are invoked via REST dispatch, manual execution from Splunk Web, or dashboard-panel references — anything not driven by Splunk's scheduler. Query 5 only sees scheduler-fired runs (Alerts and scheduled Reports); a saved search that's only referenced from a dashboard, or one that's manually run by users, will have `total_runs=0` in Query 5's output even when heavily used.
+
+This query complements Query 5 with the same column schema, so the DMA Server's `loadAlertFiringData` reads both files identically. The two files never double-count because Query 5b explicitly excludes scheduler-fired SIDs.
+
+**Requires**: `_audit` index access on Splunk Enterprise.
+⚠️ **Save as (exact filename required)**: `saved_search_adhoc_runs_global.json`
+
+```spl
+index=_audit action=search savedsearch_name=* earliest=-90d
+| where NOT match(search_id, "^scheduler__")
+| stats count as total_runs,
+        count as successful,
+        latest(_time) as last_run
+    by app, savedsearch_name
+| eval skipped=0, failed=0
+| join savedsearch_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/saved/searches f=eai:acl
+     | rename title as savedsearch_name, eai:acl.owner as user, eai:acl.app as app
+     | fields savedsearch_name, app, user]
+| sort -total_runs
+```
+
+**Verified Splunk-Enterprise specifics:**
+
+- **`search_id` prefix for scheduler-fired searches is `scheduler__`** (double underscore). Documented dispatch directory format: `scheduler__<user>__<app>__<RMD5 hash>_at_<epoch>_<hash>`. Real examples: `scheduler__nobody__unix_<base64>_at_1347455700_<hash>`. Our `NOT match(search_id, "^scheduler__")` filter excludes only scheduler-fired SIDs and leaves ad-hoc / dashboard / REST-dispatched SIDs intact.
+- **`savedsearch_name` field on `_audit action=search` events**: present on every search dispatch that invoked a saved search by name. Empty on truly ad-hoc one-off searches that don't reference a saved search. The `savedsearch_name=*` filter narrows to only named invocations.
+- **REST join uses `splunk_server=local` and `count=0`** for the same reasons as Query 5's owner variant above — avoids 404 fan-out to indexers on SHC, and returns all saved searches not just the default 30.
+- **Owner attribution** comes from `eai:acl.owner` on the saved-search resource, matching Query 5's pattern.
+
+**Column semantics for ad-hoc rows:**
+
+- `total_runs` = count of dispatch events in `_audit`
+- `successful` = same value as `total_runs` (each `action=search` event in `_audit` represents a Splunk-accepted dispatch; failures are recorded in `search.log`, not `_audit`)
+- `skipped` and `failed` = hardcoded to `0` (ad-hoc runs don't have a "skipped" concept — only the scheduler can skip a run because of skew or rate limits)
+- `last_run` = latest `_time` across all ad-hoc dispatches
+- `user` = saved-search owner from REST (matches Query 5's pattern)
+
+**Performance — what to do if this is also slow:**
+
+Query 5b queries `_audit`, which can be voluminous on a busy SH. If it takes too long:
+
+1. **Shorten the time window** — drop `earliest=-90d` to `-30d` or `-7d` for the first run.
+2. **Use `tstats` against the Audit datamodel if it's accelerated** (check with `| datamodelsimple type=acceleration datamodel=Audit`):
+   ```spl
+   | tstats count as total_runs, latest(_time) as last_run
+       from datamodel=Audit
+       where Audit.action=search Audit.savedsearch_name=*
+             NOT match(Audit.search_id, "^scheduler__")
+       by Audit.app, Audit.savedsearch_name
+   | rename Audit.* as *
+   | eval successful=total_runs, skipped=0, failed=0
+   | join savedsearch_name app type=left
+       [| rest splunk_server=local count=0 /servicesNS/-/-/saved/searches f=eai:acl
+        | rename title as savedsearch_name, eai:acl.owner as user, eai:acl.app as app
+        | fields savedsearch_name, app, user]
+   | sort -total_runs
+   ```
+   Typically 10-100x faster than the raw-event variant if Audit acceleration is enabled. Falls back to the raw-event variant if not.
+3. **Run from the Monitoring Console** on SHC environments — same rationale as Query 5's enterprise note. `_audit` is local to each search head; the MonCon federates across them.
+
+**What this gives the DMA Server**: when both `alert_firing_global.json` and `saved_search_adhoc_runs_global.json` are present in `dma_analytics/usage_analytics/`, the server reads both files and merges by `savedsearch_name + app`. Run counts are summed; `last_run` is the latest across both sources; `user` is preserved from whichever source has it (both should, since both use the same REST join). A saved search visible in only one file means it's either purely scheduled (Query 5 only) or purely ad-hoc (Query 5b only); visible in both means both modes are exercised.
 
 ---
 
@@ -588,8 +684,9 @@ cp dashboard_views_global.json   "$EXPORT_DIR/dma_analytics/usage_analytics/"
 cp user_activity_global.json     "$EXPORT_DIR/dma_analytics/usage_analytics/"
 cp search_patterns_global.json   "$EXPORT_DIR/dma_analytics/usage_analytics/"
 cp index_volume_summary.json     "$EXPORT_DIR/dma_analytics/usage_analytics/"
-cp alert_firing_global.json      "$EXPORT_DIR/dma_analytics/usage_analytics/"
-cp index_event_counts_daily.json "$EXPORT_DIR/dma_analytics/usage_analytics/"
+cp alert_firing_global.json            "$EXPORT_DIR/dma_analytics/usage_analytics/"
+cp saved_search_adhoc_runs_global.json "$EXPORT_DIR/dma_analytics/usage_analytics/"   # optional, from Query 5b
+cp index_event_counts_daily.json       "$EXPORT_DIR/dma_analytics/usage_analytics/"
 ```
 
 **Step 3: Re-create the archive**
