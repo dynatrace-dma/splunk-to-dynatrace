@@ -9,7 +9,31 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.3
+#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.4
+#
+#  v4.7.0-beta.4 Changes (2026-05-18):
+#    - HOTFIX: ITSI collection crashed with "xrealloc: cannot allocate
+#      18446744072887298944 bytes" partway through `services` listing.
+#      Root cause: itsi_list_endpoint() emitted each record as a single
+#      line of compact JSON via python → `read -r line` in bash → array
+#      append. ITSI service records embed full KPI/dependency/entity-rule
+#      definitions and routinely exceed 10+ MB EACH. Bash's read-line
+#      buffer allocator wraps the size_t when a line exceeds a multi-MB
+#      threshold, producing a 2^64-822MB allocation request that aborts
+#      the script. Glass Tables (490 small records) and Deep Dives (2198,
+#      individually moderate) slipped through; Services tripped the wrap.
+#    - Fix: record JSON never passes through a bash variable anymore.
+#      Python writes each pretty-printed record straight to a per-call
+#      mktemp staging directory; only short "<staged_name>|<key>|<app>"
+#      tokens (<300 bytes) cross back into bash. itsi_collect_endpoint
+#      mv's staged files into their final destination, honoring RESUME
+#      mode (skip + unlink staged if target already on disk).
+#    - Affects ALL ITSI endpoint types: glass_tables, deep_dives,
+#      services, kpi_base_search, base_service_template, entity,
+#      entity_type, kpi_threshold_template, notable_event_aggregation_
+#      policy, correlation_search, maintenance_calendar.
+#    - Customers with a partial archive from beta.2/beta.3 can re-run
+#      with --resume-collect — staged-file fix is transparent to resume.
 #
 #  v4.7.0-beta.3 Changes (2026-05-18):
 #    - HOTFIX: ITSI probe was building its curl target from `${SPLUNK_URL}`,
@@ -262,7 +286,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.3"
+SCRIPT_VERSION="4.7.0-beta.4"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -5485,12 +5509,26 @@ except Exception as e:
 #   - End-of-list: any page that returns fewer than $ITSI_BATCH_SIZE items.
 itsi_list_endpoint() {
   local endpoint="$1"
-  local -n out_array="$2"   # nameref to caller's array
+  local -n out_array="$2"   # nameref to caller's array — receives "<staged>|<key>|<app>" tokens
   local offset=0
   local total_fetched=0
   local page_count=0
   local max_pages=200       # safety limit: 200 pages * 500 = 100,000 items
   out_array=()
+
+  # Staging directory holds one pretty-printed JSON file per record while the
+  # caller consumes the result set. CRITICAL: record JSON must NEVER pass
+  # through bash variables. ITSI Services in particular embed full KPI
+  # definitions, dependencies, entity-import rules, and threshold templates
+  # — a single service record can be tens of megabytes. When bash's `read -r
+  # line` hits a line that large its line-buffer allocator wraps the size_t
+  # (xrealloc: cannot allocate 18446744072887298944 bytes ≈ 2^64-822MB) and
+  # the script crashes mid-collection. By staging records to files inside
+  # python and emitting only short "<staged_name>|<key>|<app>" tokens, the
+  # largest line bash ever reads is <300 bytes.
+  local staging_dir
+  staging_dir=$(mktemp -d "${TMPDIR:-/tmp}/itsi-stage-XXXXXX")
+  ITSI_LAST_STAGING_DIR="$staging_dir"   # caller is responsible for cleanup
 
   while [ $page_count -lt $max_pages ]; do
     local tmp_file
@@ -5517,31 +5555,74 @@ itsi_list_endpoint() {
     fsize=$(wc -c < "$tmp_file" 2>/dev/null || echo 0)
     itsi_trace "GET" "$endpoint?limit=$ITSI_BATCH_SIZE&offset=$offset" "200" "$fsize" "$duration_ms" ""
 
-    # Parse the response. Try bare-array first (the documented shape),
-    # fall back to entry[]-wrapped if a custom Splunk build returns that.
-    # Emits one record per line as compact JSON.
+    # Python streams each record straight to a staging file (pretty-printed,
+    # ready to mv to its final destination). Only short tokens come back
+    # through stdout. ID + app extraction happens here in one parse pass.
     local page_items=()
     while IFS= read -r line; do
       [ -n "$line" ] && page_items+=("$line")
-    done < <($PYTHON_CMD -c "
-import json, sys
+    done < <(STAGING_DIR="$staging_dir" PAGE_OFFSET="$offset" RESPONSE_FILE="$tmp_file" \
+             ITSI_DEFAULT_APP="$ITSI_DEFAULT_APP" $PYTHON_CMD -c "
+import json, os, sys, re
+staging        = os.environ['STAGING_DIR']
+offset         = int(os.environ.get('PAGE_OFFSET','0'))
+response_file  = os.environ['RESPONSE_FILE']
+default_app    = os.environ.get('ITSI_DEFAULT_APP','SA-ITOA')
+ID_FIELDS = ['_key','id','identifying_name','name','title']
+def pick(d, fields):
+    for f in fields:
+        if isinstance(d, dict) and d.get(f):
+            return str(d[f])
+    return ''
+def sanitize(s):
+    s = re.sub(r'[^A-Za-z0-9._-]', '_', s)
+    return (s[:128] or 'unknown')
 try:
-    with open('$tmp_file','r') as f: data = json.load(f)
+    with open(response_file, 'r') as f:
+        data = json.load(f)
+    items = []
     if isinstance(data, list):
         if not '$ITSI_RESPONSE_WRAPPER': sys.stderr.write('WRAPPER:array\n')
-        for item in data:
-            print(json.dumps(item, separators=(',',':')))
-    elif isinstance(data, dict) and 'entry' in data and isinstance(data['entry'], list):
+        items = data
+    elif isinstance(data, dict) and isinstance(data.get('entry'), list):
         if not '$ITSI_RESPONSE_WRAPPER': sys.stderr.write('WRAPPER:entry\n')
-        for entry in data['entry']:
-            # Most core-Splunk shape has content[] dict; preserve as-is.
-            print(json.dumps(entry, separators=(',',':')))
-    elif isinstance(data, dict) and 'items' in data and isinstance(data['items'], list):
+        items = data['entry']
+    elif isinstance(data, dict) and isinstance(data.get('items'), list):
         if not '$ITSI_RESPONSE_WRAPPER': sys.stderr.write('WRAPPER:items\n')
-        for entry in data['items']:
-            print(json.dumps(entry, separators=(',',':')))
+        items = data['items']
     else:
         sys.stderr.write('SHAPE:unknown\n')
+    for idx, item in enumerate(items):
+        # Resolve key — try content.* first (entry-wrapped Splunk shape),
+        # fall back to top-level (bare-array ITSI shape).
+        content = item.get('content') if isinstance(item, dict) else None
+        key = pick(content, ID_FIELDS) if isinstance(content, dict) else ''
+        if not key and isinstance(item, dict):
+            key = pick(item, ID_FIELDS)
+        if not key:
+            key = 'unknown_%d_%d' % (offset, idx)
+        key_s = sanitize(key)
+        # Resolve app — acl.app then top-level app.
+        app = ''
+        if isinstance(item, dict):
+            acl = item.get('acl')
+            if isinstance(acl, dict):
+                app = str(acl.get('app','') or '')
+            if not app:
+                app = str(item.get('app','') or '')
+        app_s = sanitize(app) if app else default_app
+        # Stage filename includes offset+idx so concurrent pages would not
+        # collide (we don't run concurrent today but the safety is cheap).
+        staged_name = '%d_%d_%s.json' % (offset, idx, key_s)
+        path = os.path.join(staging, staged_name)
+        try:
+            with open(path, 'w') as out:
+                json.dump(item, out, indent=2)
+        except OSError as e:
+            sys.stderr.write('WRITE_ERROR:%s:%s\n' % (path, e))
+            continue
+        # Short ASCII token — safe for bash read.
+        print('%s|%s|%s' % (staged_name, key_s, app_s))
 except Exception as e:
     sys.stderr.write('PARSE_ERROR:'+str(e)+'\n')
 " 2> /tmp/itsi_parse_err.$$)
@@ -6148,46 +6229,65 @@ itsi_collect_endpoint() {
   local target_spec="$2"
   local counter_var="$3"
   local label="$4"
+  local -n collect_counter="$counter_var"
 
   info "ITSI ${label}: listing from ${endpoint}..."
   local -a records=()
+  ITSI_LAST_STAGING_DIR=""
   if ! itsi_list_endpoint "$endpoint" records; then
     error "ITSI ${label}: list failed — see inventory.errors[]"
+    [ -n "$ITSI_LAST_STAGING_DIR" ] && rm -rf "$ITSI_LAST_STAGING_DIR" 2>/dev/null
     return 1
   fi
+  local staging_dir="$ITSI_LAST_STAGING_DIR"
 
   local total=${#records[@]}
   if [ $total -eq 0 ]; then
     info "ITSI ${label}: zero records returned (endpoint may not apply to this ITSI install)."
+    [ -n "$staging_dir" ] && rm -rf "$staging_dir" 2>/dev/null
     return 0
   fi
 
   local written=0
   local skipped=0
-  for rec_json in "${records[@]}"; do
-    local key
-    key=$(itsi_record_id "$rec_json")
-    local dir
+  # Each token is "<staged_name>|<key>|<app>" — short, ASCII, no record JSON.
+  # Routing logic mirrors the previous in-memory pass.
+  local token staged_name key app dir staged_path target_file
+  for token in "${records[@]}"; do
+    staged_name="${token%%|*}"
+    key="${token#*|}"; key="${key%%|*}"
+    app="${token##*|}"
     case "$target_spec" in
       PER_APP_DASHBOARD:*)
         local subtype="${target_spec#PER_APP_DASHBOARD:}"
-        local app
-        app=$(itsi_record_app "$rec_json")
+        [ -z "$app" ] && app="$ITSI_DEFAULT_APP"
         dir="$EXPORT_DIR/$app/dashboards/$subtype"
         ;;
       *)
         dir="$target_spec"
         ;;
     esac
-    local rc
-    itsi_write_record "$rec_json" "$dir" "$key" "$counter_var"
-    rc=$?
-    case $rc in
-      0) written=$((written + 1)) ;;
-      1) skipped=$((skipped + 1)) ;;
-      *) itsi_record_error "$label:$key" "WRITE" "itsi_write_record returned $rc" ;;
-    esac
+    staged_path="$staging_dir/$staged_name"
+    target_file="$dir/${key}.json"
+
+    if [ "$RESUME_MODE" = true ] && [ -f "$target_file" ] && [ -s "$target_file" ]; then
+      debug_log "ITSI" "resume: skipping $target_file (already on disk)"
+      rm -f "$staged_path" 2>/dev/null
+      skipped=$((skipped + 1))
+      continue
+    fi
+
+    mkdir -p "$dir" 2>/dev/null
+    if mv "$staged_path" "$target_file" 2>/dev/null; then
+      collect_counter=$((collect_counter + 1))
+      written=$((written + 1))
+    else
+      itsi_record_error "$label:$key" "WRITE" "failed to move staged file $staged_path → $target_file"
+    fi
   done
+
+  # Staging dir should now be empty (or contain only failed-mv leftovers).
+  [ -n "$staging_dir" ] && rm -rf "$staging_dir" 2>/dev/null
 
   success "ITSI ${label}: ${total} listed, ${skipped} on-disk (resume), ${written} newly written"
 }
