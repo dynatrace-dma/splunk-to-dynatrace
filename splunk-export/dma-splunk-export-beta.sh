@@ -9,7 +9,18 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.4
+#  DMA Splunk Export Script — BETA BUILD — v4.7.0-beta.5
+#
+#  v4.7.0-beta.5 Changes (2026-05-18):
+#    - --resume-collect now accepts an EXISTING DIRECTORY in addition to
+#      a .tar.gz archive. Use case: long runs (multi-hour Enterprise
+#      exports) that crash before the final tar step ran — the partial
+#      /tmp/dma_export_* directory is on disk but no archive exists.
+#      Previously the operator had to tar the dir up just to satisfy
+#      the flag's "file required" check; the script would then detect
+#      the dir already existed and skip extraction anyway, making the
+#      tar pure ceremony. Now: pass either form directly.
+#      Flag-validation, help text, and resume_from_archive() updated.
 #
 #  v4.7.0-beta.4 Changes (2026-05-18):
 #    - HOTFIX: ITSI collection crashed with "xrealloc: cannot allocate
@@ -286,7 +297,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.4"
+SCRIPT_VERSION="4.7.0-beta.5"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -8148,17 +8159,19 @@ main() {
         ;;
       --resume-collect)
         if [ -z "$2" ] || [[ "$2" == --* ]]; then
-          echo "[ERROR] --resume-collect requires a path to a .tar.gz archive" >&2
+          echo "[ERROR] --resume-collect requires a path to a .tar.gz archive OR an existing export directory" >&2
           exit 1
         fi
-        if [ ! -f "$2" ]; then
-          echo "[ERROR] Resume archive not found: $2" >&2
+        if [ ! -f "$2" ] && [ ! -d "$2" ]; then
+          echo "[ERROR] Resume target not found (neither file nor directory): $2" >&2
           echo "" >&2
-          echo "  Check the filename and path. Tip: use tab-completion to avoid typos." >&2
+          echo "  Check the path. --resume-collect accepts either:" >&2
+          echo "    • a .tar.gz archive from a prior export, OR" >&2
+          echo "    • an in-place /tmp/dma_export_* directory from a crashed run" >&2
           if [ -d "$(dirname "$2")" ]; then
             echo "" >&2
-            echo "  Files in $(dirname "$2"):" >&2
-            ls -1 "$(dirname "$2")"/*.tar.gz 2>/dev/null | sed 's/^/    /' >&2 || echo "    (no .tar.gz files found)" >&2
+            echo "  Candidates in $(dirname "$2"):" >&2
+            ls -1d "$(dirname "$2")"/*.tar.gz "$(dirname "$2")"/dma_export_*/ 2>/dev/null | sed 's/^/    /' >&2 || echo "    (none found)" >&2
           fi
           exit 1
         fi
@@ -8196,7 +8209,8 @@ main() {
         echo "  --skip-internal         Skip index=_audit/_internal searches (restricted accounts)"
         echo "  --test-access           Pre-flight check: test API access and exit (no export)"
         echo "  --remask FILE           Re-anonymize an existing unmasked archive (no Splunk needed)"
-        echo "  --resume-collect FILE   Resume a previously interrupted export from archive"
+        echo "  --resume-collect PATH   Resume a previously interrupted export — accepts either"
+        echo "                          a .tar.gz archive OR an existing /tmp/dma_export_* dir"
         echo "  --quick                 Quick mode - TESTING ONLY (skips critical migration data)"
         echo "  --scoped                Scope all collections to selected apps only"
         echo "  --anonymize             Enable data anonymization (on by default)"
@@ -8848,10 +8862,32 @@ remask_archive() {
 # =============================================================================
 
 resume_from_archive() {
-  local archive="$1"
+  local target="$1"
 
-  if [ ! -f "$archive" ]; then
-    error "Resume archive not found: $archive"
+  # Directory-path resume — the common "my run crashed before the tar
+  # step ever ran" case. Skip extraction entirely; use the in-place
+  # directory as EXPORT_DIR. The checkpoint files inside it (.export_
+  # checkpoint, .export_progress, etc.) already reflect the partial state.
+  if [ -d "$target" ]; then
+    local resolved
+    resolved=$(cd "$target" && pwd -P)
+    EXPORT_NAME=$(basename "$resolved")
+    EXPORT_DIR="$resolved"
+    LOG_FILE="${EXPORT_DIR}/_export.log"
+    CHECKPOINT_FILE="${EXPORT_DIR}/.export_checkpoint"
+    PROGRESS_FILE="${EXPORT_DIR}/.export_progress"
+    ERROR_LOG_FILE="${EXPORT_DIR}/export_errors.log"
+    if [ "$DEBUG_MODE" = "true" ]; then
+      DEBUG_LOG_FILE="${EXPORT_DIR}/export_debug.log"
+    fi
+    log "=== RESUME MODE (directory) ==="
+    log "Resumed from existing directory: $EXPORT_DIR"
+    success "Resuming from in-place export directory: $EXPORT_NAME"
+    return 0
+  fi
+
+  if [ ! -f "$target" ]; then
+    error "Resume target not found: $target"
     exit 1
   fi
 
@@ -8859,7 +8895,7 @@ resume_from_archive() {
 
   # Determine directory name inside archive
   local dir_name
-  dir_name=$(tar -tzf "$archive" 2>/dev/null | head -1 | cut -d'/' -f1)
+  dir_name=$(tar -tzf "$target" 2>/dev/null | head -1 | cut -d'/' -f1)
   if [ -z "$dir_name" ]; then
     error "Could not determine export directory from archive"
     exit 1
@@ -8869,7 +8905,7 @@ resume_from_archive() {
   if [ -d "/tmp/$dir_name" ]; then
     warning "Directory /tmp/$dir_name already exists — using existing directory"
   else
-    if ! tar -xzf "$archive" -C /tmp 2>/dev/null; then
+    if ! tar -xzf "$target" -C /tmp 2>/dev/null; then
       error "Failed to extract archive"
       exit 1
     fi
@@ -8891,7 +8927,7 @@ resume_from_archive() {
   fi
 
   log "=== RESUME MODE ==="
-  log "Resumed from archive: $archive"
+  log "Resumed from archive: $target"
   log "Export directory: $EXPORT_DIR"
 
   success "Extracted previous export: $dir_name"
