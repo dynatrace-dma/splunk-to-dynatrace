@@ -306,7 +306,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.6"
+SCRIPT_VERSION="4.7.0-beta.7"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -409,6 +409,15 @@ ANONYMIZE_DATA=true
 #      to `_itsi_inventory.json.errors[]` and continues.
 COLLECT_ITSI=auto             # set to true|false|skipped by detect_itsi() at runtime
 COLLECT_ITSI_OPTOUT=false     # only true via --no-itsi
+# entity + entity_type are skipped by default — these endpoints can return
+# very large per-record payloads on ITSI-heavy customers and one observed
+# case had the script wedged on json-loading a multi-hundred-MB entity page
+# for 10+ hours with no progress logged. The migration translation pipeline
+# does not consume standalone entity records (services already embed
+# entity_rules + entity_key[] for membership; Dynatrace re-discovers
+# entities at runtime), so the default is safe. Pass --itsi-include-entity
+# to re-enable for runs that explicitly need the entity inventory.
+ITSI_INCLUDE_ENTITY=false
 ITSI_SKIP_REASON=""           # populated when COLLECT_ITSI != true (e.g. "itsi_not_installed", "missing_capability")
 ITSI_VERSION="unknown"        # populated from SA-ITOA app version
 ITSI_RESPONSE_WRAPPER=""      # "entry" or "array" — detected on first list call; per ITSI docs, itoa_interface returns bare array
@@ -6487,17 +6496,24 @@ collect_itsi_assets() {
     STATS_ITSI_SERVICE_TEMPLATES \
     "service_templates"
 
-  itsi_collect_endpoint \
-    "/servicesNS/nobody/SA-ITOA/itoa_interface/entity" \
-    "$EXPORT_DIR/itsi_assets/entities" \
-    STATS_ITSI_ENTITIES \
-    "entities"
+  # entity + entity_type are skipped unless --itsi-include-entity is set.
+  # See ITSI_INCLUDE_ENTITY declaration for the rationale. Stats stay at 0.
+  if [ "$ITSI_INCLUDE_ENTITY" = "true" ]; then
+    itsi_collect_endpoint \
+      "/servicesNS/nobody/SA-ITOA/itoa_interface/entity" \
+      "$EXPORT_DIR/itsi_assets/entities" \
+      STATS_ITSI_ENTITIES \
+      "entities"
 
-  itsi_collect_endpoint \
-    "/servicesNS/nobody/SA-ITOA/itoa_interface/entity_type" \
-    "$EXPORT_DIR/itsi_assets/entity_types" \
-    STATS_ITSI_ENTITY_TYPES \
-    "entity_types"
+    itsi_collect_endpoint \
+      "/servicesNS/nobody/SA-ITOA/itoa_interface/entity_type" \
+      "$EXPORT_DIR/itsi_assets/entity_types" \
+      STATS_ITSI_ENTITY_TYPES \
+      "entity_types"
+  else
+    info "ITSI entities: skipped by default (pass --itsi-include-entity to enable)."
+    info "ITSI entity_types: skipped by default (pass --itsi-include-entity to enable)."
+  fi
 
   itsi_collect_endpoint \
     "/servicesNS/nobody/SA-ITOA/itoa_interface/kpi_threshold_template" \
@@ -8016,7 +8032,9 @@ main() {
   printf '┌────────────────────────────────────────────────────────────────────────┐\n'
   printf '│  DMA SPLUNK EXPORT — BETA BUILD v%-37s │\n' "$SCRIPT_VERSION"
   printf '│  Adds ITSI Comprehensive Cataloging (Glass Tables, Deep Dives, KPIs,   │\n'
-  printf '│  Services, Entities, NEAPs, etc.). Auto-detected; opt-out: --no-itsi.  │\n'
+  printf '│  Services, NEAPs, etc.). Auto-detected; opt-out: --no-itsi.            │\n'
+  printf '│  Entities + entity_types SKIPPED by default — opt in with              │\n'
+  printf '│  --itsi-include-entity (avoids overnight hangs on huge ITSI shops).    │\n'
   printf '│  NOTE: ITSI KV-store extraction requires REST API access on the SH'"'"'s   │\n'
   printf '│  mgmt port (typically 8089). Easiest: run THIS script directly on the  │\n'
   printf '│  search head so localhost:8089 is reachable. Not for general use.      │\n'
@@ -8131,6 +8149,15 @@ main() {
         COLLECT_ITSI_OPTOUT=true
         shift
         ;;
+      --itsi-include-entity)
+        # Opt back IN to entity + entity_type collection. These endpoints
+        # are skipped by default because they can wedge the script on
+        # ITSI-heavy customers (huge per-record payloads parsed in one
+        # python json.load). The migration pipeline doesn't need them;
+        # use this flag only when the entity inventory itself is needed.
+        ITSI_INCLUDE_ENTITY=true
+        shift
+        ;;
       --analytics-period)
         if [ -z "$2" ] || [[ "$2" == --* ]]; then
           echo "[ERROR] --analytics-period requires a time window (e.g., 7d, 30d, 90d)" >&2
@@ -8212,6 +8239,11 @@ main() {
         echo "                          is detected. (ITSI KV-store collection is automatic when an"
         echo "                          ITSI app is present. The classic surface of the itsi app —"
         echo "                          dashboards, savedsearches, .conf files — is always collected.)"
+        echo "  --itsi-include-entity   Re-enable ITSI entity + entity_type collection. Skipped by"
+        echo "                          default because these endpoints can wedge the script on"
+        echo "                          ITSI-heavy customers (huge per-record payloads). The migration"
+        echo "                          translation pipeline does not require entity records — services"
+        echo "                          already embed entity_rules and entity_key arrays for membership."
         echo "  --usage                 Collect usage analytics (on by default)"
         echo "  --no-usage              Disable usage analytics collection"
         echo "  --analytics-period N    Analytics time window (default: 30d; e.g. 7d, 90d, 365d)"
