@@ -306,7 +306,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.8"
+SCRIPT_VERSION="4.7.0-beta.9"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -368,6 +368,15 @@ REMASK_MODE=false
 # Resume mode (--resume-collect FILE: continue an interrupted export)
 RESUME_ARCHIVE=""
 RESUME_MODE=false
+
+# Images-only mode (--itsi-images-only): given an existing export directory,
+# walk its on-disk GT JSONs, extract referenced image IDs (all 3 prefix
+# forms), fetch the blobs into itsi_assets/images/. Skips every other
+# collection step. For customers who ran an earlier script that missed
+# images and want to fill them in without re-running 30-60 min of bulk
+# endpoint pagination.
+ITSI_IMAGES_ONLY=false
+ITSI_IMAGES_ONLY_TARGET=""
 
 # Environment detection
 SPLUNK_FLAVOR=""           # enterprise, uf, hf
@@ -8240,6 +8249,27 @@ main() {
         RESUME_MODE=true
         shift 2
         ;;
+      --itsi-images-only)
+        # Targeted image-only fetch against an existing export directory.
+        # Skips ALL other collection steps. Use after a previous run on
+        # an older script that didn't recognize all GT image prefix
+        # forms (SA-ITOA_files/, kvstore://, splunk-enterprise-kvstore://).
+        if [ -z "$2" ] || [[ "$2" == --* ]]; then
+          echo "[ERROR] --itsi-images-only requires a path to an existing export directory" >&2
+          exit 1
+        fi
+        if [ ! -d "$2" ]; then
+          echo "[ERROR] --itsi-images-only target is not a directory: $2" >&2
+          exit 1
+        fi
+        if ! find "$2" -path '*/dashboards/glasstable/*.json' -print -quit 2>/dev/null | grep -q .; then
+          echo "[ERROR] --itsi-images-only target has no Glass Table JSONs at */dashboards/glasstable/*.json: $2" >&2
+          exit 1
+        fi
+        ITSI_IMAGES_ONLY=true
+        ITSI_IMAGES_ONLY_TARGET="$2"
+        shift 2
+        ;;
       --debug|-d)
         # Enable verbose debug logging for troubleshooting
         DEBUG_MODE=true
@@ -8277,6 +8307,11 @@ main() {
         echo "  --remask FILE           Re-anonymize an existing unmasked archive (no Splunk needed)"
         echo "  --resume-collect PATH   Resume a previously interrupted export — accepts either"
         echo "                          a .tar.gz archive OR an existing /tmp/dma_export_* dir"
+        echo "  --itsi-images-only DIR  Targeted GT image fetch against an existing export"
+        echo "                          directory. Walks on-disk GT JSONs, extracts referenced"
+        echo "                          image IDs (all 3 prefix forms), fetches each blob into"
+        echo "                          itsi_assets/images/. Skips every other collection step."
+        echo "                          For customers whose earlier export missed images."
         echo "  --quick                 Quick mode - TESTING ONLY (skips critical migration data)"
         echo "  --scoped                Scope all collections to selected apps only"
         echo "  --anonymize             Enable data anonymization (on by default)"
@@ -8409,6 +8444,28 @@ main() {
   # Handle --test-access: run pre-flight checks and exit (no export written)
   if [ "$TEST_ACCESS_MODE" = "true" ]; then
     run_test_access
+    exit 0
+  fi
+
+  # Handle --itsi-images-only: targeted image fetch against an existing
+  # export dir; bypasses every other collection step. Reuses the existing
+  # itsi_collect_glass_table_images function so the 3-prefix extractor +
+  # SA-ITOA_files fetch loop are identical to a full run.
+  if [ "$ITSI_IMAGES_ONLY" = "true" ]; then
+    EXPORT_DIR="$ITSI_IMAGES_ONLY_TARGET"
+    LOG_FILE="$EXPORT_DIR/export.log"
+    info "ITSI images-only mode: scanning $EXPORT_DIR for GT image references…"
+    mkdir -p "$EXPORT_DIR/itsi_assets/images" 2>/dev/null
+    # Auth must succeed because the fetch loop calls splunk_api_call.
+    # detect_splunk_home / select_applications etc. already ran above.
+    itsi_collect_glass_table_images
+    # Refresh inventory with the new image count (other counts left at 0 —
+    # this mode is purely additive to a previously-completed export).
+    if command -v $PYTHON_CMD >/dev/null 2>&1; then
+      STATS_ITSI_IMAGES=$(find "$EXPORT_DIR/itsi_assets/images" -type f 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    info "ITSI images-only mode: fetched ${STATS_ITSI_IMAGES:-0} images into $EXPORT_DIR/itsi_assets/images/"
+    success "Done. Repackage the export directory if you need a tarball."
     exit 0
   fi
 
