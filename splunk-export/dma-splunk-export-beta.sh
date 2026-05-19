@@ -306,7 +306,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.7"
+SCRIPT_VERSION="4.7.0-beta.8"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -6402,20 +6402,45 @@ print(f'{multi} {single} {adhoc}')
 # Walk Glass Tables and fetch each referenced image asset from the
 # SA-ITOA_files KV collection. Best-effort: glass tables are preserved
 # regardless of image outcome.
+#
+# Reference forms observed in real ITSI exports (verified 2026-05-19 against
+# an ITSI 4.21 customer extract):
+#   1. SA-ITOA_files/<id>                    — older form, in Splunk docs
+#   2. kvstore://<id>                        — undocumented prefix; common in 4.21
+#   3. splunk-enterprise-kvstore://<id>      — undocumented prefix; common in 4.21
+# All three resolve to the same KV endpoint below. <id> is a 24-char hex
+# MongoDB ObjectId. The original extractor only matched form 1 — leaving
+# customers on 4.21 with zero images even when their GTs heavily reference
+# them (one observed case: 292 of 490 GTs reference images via forms 2/3).
 itsi_collect_glass_table_images() {
   local gt_root="$EXPORT_DIR"
   local files_endpoint="/servicesNS/nobody/SA-ITOA/storage/collections/data/SA-ITOA_files"
 
-  # Walk every glass_table JSON in any per-app dir and collect referenced file keys.
-  # File-key references in GTs commonly appear in content/svg_coordinates as
-  # `kvstore://SA-ITOA_files/<key>` or as the bare key with adjacent type marker.
-  # We scan the raw JSON text for any `SA-ITOA_files/<key>` pattern.
+  # Walk every glass_table JSON in any per-app dir and collect referenced
+  # file IDs across the three valid prefix forms above. Each grep -oE
+  # branch captures its prefix + ID; the sed strips the prefix to leave
+  # just the bare hex ID that the fetch loop below appends to the
+  # SA-ITOA_files endpoint.
   local -A wanted_keys
   while IFS= read -r gt_file; do
     [ -f "$gt_file" ] || continue
     while IFS= read -r ref_key; do
       [ -n "$ref_key" ] && wanted_keys["$ref_key"]=1
-    done < <(grep -oE 'SA-ITOA_files/[A-Za-z0-9._-]+' "$gt_file" 2>/dev/null | sed 's|SA-ITOA_files/||' | sort -u)
+    done < <(
+      {
+        # Legacy form — preserve the original broader character class
+        # for older ITSI versions that may not use MongoDB ObjectIds.
+        grep -oE 'SA-ITOA_files/[A-Za-z0-9._-]+' "$gt_file" 2>/dev/null \
+          | sed 's|SA-ITOA_files/||'
+        # Newer forms (ITSI 4.21+) — IDs are strictly 24-hex ObjectIds.
+        # Match splunk-enterprise-kvstore:// first so its kvstore:// substring
+        # doesn't get mis-matched by the shorter prefix below (sort -u dedupes).
+        grep -oE 'splunk-enterprise-kvstore://[0-9a-fA-F]{24}' "$gt_file" 2>/dev/null \
+          | sed 's|splunk-enterprise-kvstore://||'
+        grep -oE 'kvstore://[0-9a-fA-F]{24}' "$gt_file" 2>/dev/null \
+          | sed 's|kvstore://||'
+      } | sort -u
+    )
   done < <(find "$EXPORT_DIR" -path '*/dashboards/glasstable/*.json' 2>/dev/null)
 
   local img_count=${#wanted_keys[@]}
