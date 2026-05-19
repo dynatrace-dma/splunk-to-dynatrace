@@ -306,7 +306,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.7.0-beta.9"
+SCRIPT_VERSION="4.7.0-beta.10"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -8249,26 +8249,52 @@ main() {
         RESUME_MODE=true
         shift 2
         ;;
-      --itsi-images-only)
+      --itsi-images-only|--itsi-images-only=*)
         # Targeted image-only fetch against an existing export directory.
         # Skips ALL other collection steps. Use after a previous run on
         # an older script that didn't recognize all GT image prefix
         # forms (SA-ITOA_files/, kvstore://, splunk-enterprise-kvstore://).
-        if [ -z "$2" ] || [[ "$2" == --* ]]; then
-          echo "[ERROR] --itsi-images-only requires a path to an existing export directory" >&2
+        #
+        # Accepts both forms:
+        #   --itsi-images-only /path/to/export
+        #   --itsi-images-only=/path/to/export
+        # The =form is friendlier when arg parsing across shells / SSH
+        # multiplexers / heredocs occasionally swallows the next positional.
+        local _imgs_target=""
+        if [[ "$1" == --itsi-images-only=* ]]; then
+          _imgs_target="${1#*=}"
+          shift 1
+        else
+          _imgs_target="$2"
+          # Diagnostic — if $2 is unexpectedly empty, show what arg parsing
+          # saw. Some shells eat positionals across line-continuations.
+          if [ -z "$_imgs_target" ] || [[ "$_imgs_target" == --* ]]; then
+            echo "[ERROR] --itsi-images-only requires a path to an existing export directory" >&2
+            echo "  Got \$1='$1' \$2='$2' (full args: $* )" >&2
+            echo "  Tip: try the equals form: --itsi-images-only=/path/to/export" >&2
+            exit 1
+          fi
+          shift 2
+        fi
+        if [ ! -d "$_imgs_target" ]; then
+          echo "[ERROR] --itsi-images-only target is not a directory: $_imgs_target" >&2
+          if [ -f "$_imgs_target" ] && [[ "$_imgs_target" == *.tar.gz || "$_imgs_target" == *.tgz ]]; then
+            echo "  This looks like a tarball. --itsi-images-only operates on the EXPANDED" >&2
+            echo "  /tmp/dma_export_* directory, not the .tar.gz. Extract first:" >&2
+            echo "    tar -xzf '$_imgs_target' -C /tmp/" >&2
+            echo "  Then re-run pointing at the extracted directory." >&2
+          fi
           exit 1
         fi
-        if [ ! -d "$2" ]; then
-          echo "[ERROR] --itsi-images-only target is not a directory: $2" >&2
-          exit 1
-        fi
-        if ! find "$2" -path '*/dashboards/glasstable/*.json' -print -quit 2>/dev/null | grep -q .; then
-          echo "[ERROR] --itsi-images-only target has no Glass Table JSONs at */dashboards/glasstable/*.json: $2" >&2
+        if ! find "$_imgs_target" -path '*/dashboards/glasstable/*.json' -print -quit 2>/dev/null | grep -q .; then
+          echo "[ERROR] --itsi-images-only target has no Glass Table JSONs at */dashboards/glasstable/*.json: $_imgs_target" >&2
+          echo "  Expected layout (any one of these subdirs):" >&2
+          echo "    $_imgs_target/itsi/dashboards/glasstable/*.json" >&2
+          echo "    $_imgs_target/<app>/dashboards/glasstable/*.json" >&2
           exit 1
         fi
         ITSI_IMAGES_ONLY=true
-        ITSI_IMAGES_ONLY_TARGET="$2"
-        shift 2
+        ITSI_IMAGES_ONLY_TARGET="$_imgs_target"
         ;;
       --debug|-d)
         # Enable verbose debug logging for troubleshooting
