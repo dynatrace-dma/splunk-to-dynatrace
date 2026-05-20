@@ -187,7 +187,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.6"
+SCRIPT_VERSION="4.6.7"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -325,6 +325,7 @@ CURL_PROXY_ARGS=""                         # Built at runtime from PROXY_URL
 RESUME_ARCHIVE=""                          # Path to previous archive for --resume-collect
 VALIDATE_ARCHIVE=""                        # Path to archive for --validate-archive (v4.6.6)
 CLEAN_RESUME_PHASES=""                     # Comma-separated phases for --clean-resume (v4.6.6)
+ALLOW_MISSING_CAPABILITIES=false           # v4.6.7: opt-out for capability pre-flight
 RESUME_MODE=false                          # Set to true when resuming from previous export
 
 # Retry settings
@@ -364,6 +365,7 @@ SCRIPT_START_TIME=$(date +%s)
 # Error tracking
 ERRORS_LOG=()
 WARNINGS_LOG=()
+PHASE_FAILURES=()                          # v4.6.7: names of collection phases that failed
 
 # Python command (set during prerequisites check)
 PYTHON_CMD=""
@@ -580,6 +582,152 @@ debug_log() {
     TIMING)  echo -e "${BLUE}[DEBUG:$category] $message${NC}" ;;
     *)       echo -e "${GRAY}[DEBUG:$category] $message${NC}" ;;
   esac
+}
+
+# v4.6.7: Python-based partitioner for collect_alerts. Eliminates jq as a
+# HARD dependency for the saved-searches collection phase (which v4.6.6 made
+# the single fatal point that produced silently-broken archives for any
+# customer machine without jq installed).
+#
+# Usage:
+#   partition_savedsearches_with_python <response_json> <export_dir> <app1> <app2> ...
+#
+# Behavior:
+#   - Writes $export_dir/<app>/savedsearches.json for every passed app
+#     (same envelope shape jq produced: links, origin, updated, generator,
+#     entry [filtered by acl.app == app], paging, messages).
+#   - Apps with no matching entries get an envelope with empty entry[]
+#     (matches jq behavior — DMA expects the file to exist per app).
+#   - Prints two stdout lines per app: "COUNT_TOTAL <app> <n>" and
+#     "COUNT_ALERTS <app> <n>"; bash parses these for STATS_*.
+#   - Exits non-zero on JSON parse failure or unwritable target dir.
+#
+# Alert predicate must stay in sync with the jq version in collect_alerts
+# (SINGLE SOURCE OF TRUTH: dma-splunk-converter's alertConverter heuristic).
+partition_savedsearches_with_python() {
+  local response_file="$1"
+  local export_dir="$2"
+  shift 2
+  # Remaining args = app names. Written to a temp file to keep argv clean
+  # and to dodge any ARG_MAX edge case on stacks with thousands of apps.
+  local apps_file
+  apps_file=$(mktemp -t dma_apps_list.XXXXXX)
+  printf '%s\n' "$@" > "$apps_file"
+
+  local rc=0
+  "$PYTHON_CMD" - "$response_file" "$export_dir" "$apps_file" <<'PYEOF'
+import json, os, sys
+
+# Force LF line endings on stdout — on Windows, Python defaults to CRLF
+# which would leave a trailing \r in bash's `read` variables and break
+# subsequent arithmetic. (Available since Python 3.7.)
+try:
+    sys.stdout.reconfigure(newline="\n")
+except Exception:
+    pass
+
+response_file = sys.argv[1]
+export_dir = sys.argv[2]
+apps_file = sys.argv[3]
+
+with open(apps_file, "r", encoding="utf-8") as fh:
+    apps = [line.strip() for line in fh.read().splitlines() if line.strip()]
+
+try:
+    with open(response_file, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception as exc:
+    sys.stderr.write("[python-partition] failed to parse response JSON: %s\n" % exc)
+    sys.exit(2)
+
+if not isinstance(payload, dict) or "entry" not in payload or not isinstance(payload["entry"], list):
+    sys.stderr.write("[python-partition] response missing .entry array\n")
+    sys.exit(3)
+
+def truthy(v):
+    if v is None:
+        return False
+    s = str(v).strip().lower()
+    return s in ("1", "true")
+
+def is_alert(entry):
+    content = entry.get("content") or {}
+    if not isinstance(content, dict):
+        return False
+
+    if truthy(content.get("alert.track")):
+        return True
+
+    alert_type = str(content.get("alert_type", "") or "").strip().lower()
+    if alert_type in ("always", "custom") or alert_type.startswith("number of"):
+        return True
+
+    for k in ("alert_condition", "alert_comparator", "alert_threshold"):
+        v = content.get(k)
+        if v is not None and str(v).strip():
+            return True
+
+    counttype = str(content.get("counttype", "") or "").lower()
+    if "number of" in counttype:
+        return True
+
+    actions = str(content.get("actions", "") or "")
+    if [a for a in actions.split(",") if a.strip()]:
+        return True
+
+    for action_key in (
+        "action.email", "action.webhook", "action.script", "action.slack",
+        "action.pagerduty", "action.summary_index", "action.populate_lookup",
+    ):
+        if truthy(content.get(action_key)):
+            return True
+
+    return False
+
+# Index entries by acl.app once (O(N), avoids N*M scan over selected apps).
+by_app = {}
+for entry in payload["entry"]:
+    if not isinstance(entry, dict):
+        continue
+    acl = entry.get("acl") or {}
+    app_name = acl.get("app")
+    if not app_name:
+        continue
+    by_app.setdefault(app_name, []).append(entry)
+
+envelope_keys = ("links", "origin", "updated", "generator", "paging")
+
+for app in apps:
+    app_dir = os.path.join(export_dir, app)
+    try:
+        os.makedirs(app_dir, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write("[python-partition] could not create %s: %s\n" % (app_dir, exc))
+        sys.exit(4)
+
+    entries = by_app.get(app, [])
+    envelope = {k: payload.get(k) for k in envelope_keys if k in payload}
+    envelope["entry"] = entries
+    envelope["messages"] = payload.get("messages") or []
+
+    out_path = os.path.join(app_dir, "savedsearches.json")
+    try:
+        with open(out_path, "w", encoding="utf-8") as fh:
+            json.dump(envelope, fh, ensure_ascii=False)
+    except OSError as exc:
+        sys.stderr.write("[python-partition] could not write %s: %s\n" % (out_path, exc))
+        sys.exit(5)
+
+    total = len(entries)
+    alerts = sum(1 for e in entries if is_alert(e))
+    sys.stdout.write("COUNT_TOTAL\t%s\t%d\n" % (app, total))
+    sys.stdout.write("COUNT_ALERTS\t%s\t%d\n" % (app, alerts))
+
+sys.exit(0)
+PYEOF
+  rc=$?
+  rm -f "$apps_file"
+  return $rc
 }
 
 # Log API call details (redacts sensitive info)
@@ -1808,8 +1956,24 @@ check_capabilities() {
   response=$(api_call "/services/authentication/current-context" "GET" "output_mode=json")
 
   if [ $? -ne 0 ]; then
-    error "Failed to retrieve user capabilities"
-    return 1
+    # v4.6.7: If the token can't even read its own context, the export will
+    # produce a broken archive (this is what Encova hit — every collection
+    # endpoint 401'd silently). Fail-fast unless operator explicitly opts out.
+    error "Failed to retrieve user capabilities from /services/authentication/current-context"
+    if [ "$ALLOW_MISSING_CAPABILITIES" = "true" ]; then
+      warning "--allow-missing-capabilities set: continuing despite capability-probe failure"
+      warning "Archive will likely be missing alerts, KO, RBAC, indexes, and analytics data"
+      return 0
+    fi
+    echo "" >&2
+    echo "The token cannot introspect its own permissions. This almost always means" >&2
+    echo "the token is invalid, expired, or so under-privileged that nothing useful" >&2
+    echo "can be collected. Continuing would produce a broken archive after hours of" >&2
+    echo "work." >&2
+    echo "" >&2
+    echo "To proceed anyway (NOT recommended), re-run with --allow-missing-capabilities." >&2
+    echo "" >&2
+    exit 1
   fi
 
   # Extract capabilities - pipe through stdin to handle large responses
@@ -1824,19 +1988,69 @@ except:
     print('')
 " 2>/dev/null)
 
-  local required_caps=("admin_all_objects" "list_all_users" "search")
-  local missing_caps=()
+  # v4.6.7: Split capabilities into CRITICAL (export cannot succeed without
+  # them) and RECOMMENDED (degrades gracefully). Previously all three were
+  # "recommended" and a token missing all three still produced a warning-
+  # only archive that looked complete to the importer.
+  local critical_caps=("admin_all_objects" "search")
+  local recommended_caps=("list_all_users")
+  local missing_critical=()
+  local missing_recommended=()
 
-  for cap in "${required_caps[@]}"; do
-    if ! echo "$capabilities" | grep -q "$cap"; then
-      missing_caps+=("$cap")
+  for cap in "${critical_caps[@]}"; do
+    if ! echo "$capabilities" | grep -qw "$cap"; then
+      missing_critical+=("$cap")
     fi
   done
 
-  if [ ${#missing_caps[@]} -gt 0 ]; then
-    warning "Missing recommended capabilities: ${missing_caps[*]}"
-    warning "Some data may not be collected"
-  else
+  for cap in "${recommended_caps[@]}"; do
+    if ! echo "$capabilities" | grep -qw "$cap"; then
+      missing_recommended+=("$cap")
+    fi
+  done
+
+  if [ ${#missing_critical[@]} -gt 0 ]; then
+    error "Missing CRITICAL capabilities: ${missing_critical[*]}"
+    if [ "$ALLOW_MISSING_CAPABILITIES" = "true" ]; then
+      warning "--allow-missing-capabilities set: continuing despite missing critical capabilities"
+      warning "Archive will be incomplete:"
+      for c in "${missing_critical[@]}"; do
+        case "$c" in
+          search)             warning "  • search: cannot dispatch analytics queries (dashboards, alerts, usage)" ;;
+          admin_all_objects)  warning "  • admin_all_objects: cannot read most KO, configs, saved searches" ;;
+        esac
+      done
+    else
+      echo "" >&2
+      echo "Your token lacks capabilities required for a complete export." >&2
+      echo "" >&2
+      echo "Required capabilities (token user's role must include all of these):" >&2
+      for cap in "${critical_caps[@]}"; do
+        if echo "$capabilities" | grep -qw "$cap"; then
+          echo "  ✓ $cap" >&2
+        else
+          echo "  ✗ $cap  (MISSING)" >&2
+        fi
+      done
+      echo "" >&2
+      echo "How to fix:" >&2
+      echo "  1. In Splunk Web → Settings → Roles, grant the missing capabilities" >&2
+      echo "     to the role of the user that owns this token (or use sc_admin)." >&2
+      echo "  2. Re-create the token under Settings → Tokens." >&2
+      echo "  3. Re-run this export." >&2
+      echo "" >&2
+      echo "To proceed anyway (NOT recommended — archive will be missing data)," >&2
+      echo "re-run with --allow-missing-capabilities." >&2
+      echo "" >&2
+      exit 1
+    fi
+  fi
+
+  if [ ${#missing_recommended[@]} -gt 0 ]; then
+    warning "Missing recommended capabilities: ${missing_recommended[*]} — some data may be incomplete"
+  fi
+
+  if [ ${#missing_critical[@]} -eq 0 ] && [ ${#missing_recommended[@]} -eq 0 ]; then
     success "All required capabilities present"
   fi
 
@@ -2990,25 +3204,62 @@ collect_alerts() {
     debug_log "RESUME" "savedsearches collection already completed (sentinel: $sentinel) — recomputing stats only"
     local total=0 alerts=0
     for app in "${SELECTED_APPS[@]}"; do
-      if [ -s "$EXPORT_DIR/$app/savedsearches.json" ] && $HAS_JQ; then
-        local n a
-        n=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
-        a=$(jq '[.entry[] | select(
-          ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
-          ((.content["alert_condition"] // "") | length > 0) or
-          ((.content["alert_comparator"] // "") | length > 0) or
-          ((.content["alert_threshold"] // "") | length > 0) or
-          ((.content["counttype"] // "") | test("number of"; "i")) or
-          ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
-          ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
-          ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
-        )] | length' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+      if [ -s "$EXPORT_DIR/$app/savedsearches.json" ]; then
+        local n=0 a=0
+        if $HAS_JQ; then
+          n=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+          a=$(jq '[.entry[] | select(
+            ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
+            ((.content["alert_condition"] // "") | length > 0) or
+            ((.content["alert_comparator"] // "") | length > 0) or
+            ((.content["alert_threshold"] // "") | length > 0) or
+            ((.content["counttype"] // "") | test("number of"; "i")) or
+            ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
+            ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
+            ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
+          )] | length' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+        else
+          # v4.6.7: Python fallback for resume stats recomputation.
+          local counts
+          counts=$("$PYTHON_CMD" - "$EXPORT_DIR/$app/savedsearches.json" <<'PYEOF' 2>/dev/null || echo "0 0"
+import json, sys
+def truthy(v):
+    if v is None: return False
+    return str(v).strip().lower() in ("1", "true")
+def is_alert(entry):
+    c = (entry or {}).get("content") or {}
+    if not isinstance(c, dict): return False
+    if truthy(c.get("alert.track")): return True
+    at = str(c.get("alert_type","") or "").strip().lower()
+    if at in ("always","custom") or at.startswith("number of"): return True
+    for k in ("alert_condition","alert_comparator","alert_threshold"):
+        v = c.get(k)
+        if v is not None and str(v).strip(): return True
+    if "number of" in str(c.get("counttype","") or "").lower(): return True
+    actions = str(c.get("actions","") or "")
+    if [a for a in actions.split(",") if a.strip()]: return True
+    for k in ("action.email","action.webhook","action.script","action.slack",
+              "action.pagerduty","action.summary_index","action.populate_lookup"):
+        if truthy(c.get(k)): return True
+    return False
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        d = json.load(fh)
+    entries = (d or {}).get("entry") or []
+    print("%d %d" % (len(entries), sum(1 for e in entries if is_alert(e))))
+except Exception:
+    print("0 0")
+PYEOF
+)
+          n="${counts%% *}"
+          a="${counts##* }"
+        fi
         total=$((total + n))
         alerts=$((alerts + a))
       fi
@@ -3019,12 +3270,16 @@ collect_alerts() {
     return 0
   fi
 
-  if ! $HAS_JQ; then
-    error "jq is required for collect_alerts (v4.6.6 single-call partitioning depends on it)"
-    return 1
-  fi
-
+  # v4.6.7: jq is now optional. The partition step is the only place we
+  # needed jq for this phase; a Python fallback (partition_savedsearches_with_python)
+  # produces identical per-app savedsearches.json files. We prefer jq when
+  # available (slightly faster on huge payloads), but no longer abort if
+  # jq is missing — v4.6.6 silently failed for every customer machine
+  # without jq installed.
   progress "Collecting alerts and saved searches (single stack-wide call)..."
+  if ! $HAS_JQ; then
+    info "jq not detected — using Python fallback for saved-searches partitioning."
+  fi
 
   local response_file
   response_file=$(mktemp -t saved_searches_response.XXXXXX)
@@ -3038,57 +3293,91 @@ collect_alerts() {
 
   # Sanity check: response is parseable JSON with an entry array. If not,
   # something's wrong upstream (timeout, auth issue, partial response).
-  if ! jq -e '.entry' "$response_file" >/dev/null 2>&1; then
-    error "Saved searches response is not valid JSON or missing .entry — collect_alerts aborting"
-    rm -f "$response_file"
-    return 1
+  if $HAS_JQ; then
+    if ! jq -e '.entry' "$response_file" >/dev/null 2>&1; then
+      error "Saved searches response is not valid JSON or missing .entry — collect_alerts aborting"
+      rm -f "$response_file"
+      return 1
+    fi
+  else
+    if ! "$PYTHON_CMD" -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if isinstance(d,dict) and isinstance(d.get('entry'),list) else 1)" "$response_file" 2>/dev/null; then
+      error "Saved searches response is not valid JSON or missing .entry — collect_alerts aborting"
+      rm -f "$response_file"
+      return 1
+    fi
   fi
 
   local alert_count=0
   local total_saved_searches=0
 
-  for app in "${SELECTED_APPS[@]}"; do
-    mkdir -p "$EXPORT_DIR/$app"
+  if $HAS_JQ; then
+    for app in "${SELECTED_APPS[@]}"; do
+      mkdir -p "$EXPORT_DIR/$app"
 
-    # Per-app envelope: same shape every consumer expects, just with
-    # entry[] partitioned to this app.
-    jq --arg app "$app" '{
-      links: .links,
-      origin: .origin,
-      updated: .updated,
-      generator: .generator,
-      entry: [.entry[]? | select(.acl.app == $app)],
-      paging: .paging,
-      messages: (.messages // [])
-    }' "$response_file" > "$EXPORT_DIR/$app/savedsearches.json"
+      # Per-app envelope: same shape every consumer expects, just with
+      # entry[] partitioned to this app.
+      jq --arg app "$app" '{
+        links: .links,
+        origin: .origin,
+        updated: .updated,
+        generator: .generator,
+        entry: [.entry[]? | select(.acl.app == $app)],
+        paging: .paging,
+        messages: (.messages // [])
+      }' "$response_file" > "$EXPORT_DIR/$app/savedsearches.json"
 
-    local app_saved
-    app_saved=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
-    total_saved_searches=$((total_saved_searches + app_saved))
+      local app_saved
+      app_saved=$(jq '.entry | length // 0' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+      total_saved_searches=$((total_saved_searches + app_saved))
 
-    # Alert detection — same predicate as v4.6.3 (SINGLE SOURCE OF TRUTH:
-    # mirrors dma-splunk-converter's alertConverter heuristic).
-    local app_alerts
-    app_alerts=$(jq '[.entry[] | select(
-      ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
-      ((.content["alert_condition"] // "") | length > 0) or
-      ((.content["alert_comparator"] // "") | length > 0) or
-      ((.content["alert_threshold"] // "") | length > 0) or
-      ((.content["counttype"] // "") | test("number of"; "i")) or
-      ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
-      ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
-      ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
-    )] | length' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
-    alert_count=$((alert_count + app_alerts))
+      # Alert detection — same predicate as v4.6.3 (SINGLE SOURCE OF TRUTH:
+      # mirrors dma-splunk-converter's alertConverter heuristic).
+      local app_alerts
+      app_alerts=$(jq '[.entry[] | select(
+        ((.content["alert.track"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["alert_type"] // "") | ascii_downcase | . == "always" or . == "custom" or test("^number of")) or
+        ((.content["alert_condition"] // "") | length > 0) or
+        ((.content["alert_comparator"] // "") | length > 0) or
+        ((.content["alert_threshold"] // "") | length > 0) or
+        ((.content["counttype"] // "") | test("number of"; "i")) or
+        ((.content["actions"] // "") | split(",") | map(select(length > 0)) | length > 0) or
+        ((.content["action.email"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["action.webhook"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["action.script"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["action.slack"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["action.pagerduty"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["action.summary_index"] // "") | tostring | . == "1" or . == "true") or
+        ((.content["action.populate_lookup"] // "") | tostring | . == "1" or . == "true")
+      )] | length' "$EXPORT_DIR/$app/savedsearches.json" 2>/dev/null || echo 0)
+      alert_count=$((alert_count + app_alerts))
 
-    debug_log "ALERTS" "  $app: $app_saved saved searches ($app_alerts alerts)"
-  done
+      debug_log "ALERTS" "  $app: $app_saved saved searches ($app_alerts alerts)"
+    done
+  else
+    # Python fallback path: partition all apps in a single Python invocation
+    # (O(N) over entries, vs jq's O(N*apps) since jq re-scans the response per app).
+    local py_output
+    if ! py_output=$(partition_savedsearches_with_python "$response_file" "$EXPORT_DIR" "${SELECTED_APPS[@]}"); then
+      error "Python fallback for collect_alerts failed (see stderr above)"
+      rm -f "$response_file"
+      return 1
+    fi
+    # Parse COUNT_TOTAL / COUNT_ALERTS lines into totals.
+    # Defensive trailing-\r strip for old Python (<3.7) on Windows where
+    # the Python sys.stdout.reconfigure trick is unavailable.
+    while IFS=$'\t' read -r kind app count; do
+      count="${count%$'\r'}"
+      case "$kind" in
+        COUNT_TOTAL)
+          total_saved_searches=$((total_saved_searches + count))
+          debug_log "ALERTS" "  $app: $count saved searches (python-partition)"
+          ;;
+        COUNT_ALERTS)
+          alert_count=$((alert_count + count))
+          ;;
+      esac
+    done <<< "$py_output"
+  fi
 
   rm -f "$response_file"
 
@@ -3316,13 +3605,15 @@ validate_archive_integrity() {
   return 0
 }
 
-# --clean-resume (v4.6.6): explicitly invalidate phase caches in the
+# --clean-resume (v4.6.6+): explicitly invalidate phase caches in the
 # extracted archive before normal resume continues. Allows operators to
 # force re-collection of specific phases without relying on R1/R2 auto-
 # detection. Phases:
-#   alerts            — drops sentinel + per-app savedsearches.json
-#   alerts_inventory  — drops the analytics checkpoint key + per-app alerts_inventory.json
-#   analytics         — drops the entire .analytics_checkpoint file
+#   alerts             — drops sentinel + per-app savedsearches.json
+#   alerts_inventory   — drops the analytics checkpoint key + per-app alerts_inventory.json
+#   analytics          — drops the entire .analytics_checkpoint file
+#   knowledge_objects  — (v4.6.7) drops per-app macros/eventtypes/tags/props/
+#                        transforms/field_extractions/inputs/datamodels/lookups
 apply_clean_resume() {
   local phases="$1"
   echo "[clean-resume] applying phase invalidations: $phases" >&2
@@ -3348,6 +3639,22 @@ apply_clean_resume() {
       analytics)
         rm -f "$EXPORT_DIR/.analytics_checkpoint"
         echo "[clean-resume]   analytics: dropped entire .analytics_checkpoint" >&2
+        ;;
+      knowledge_objects)
+        # v4.6.7: delete per-app KO files so the next run re-collects them.
+        # Needed after a v4.6.6-on-machine-without-jq run, where per-app KO
+        # files exist on disk but contain stack-wide payloads (the
+        # "saved unfiltered" warning the customer saw 600+ times). The
+        # per-app resume logic in collect_knowledge_objects keys off file
+        # existence, so polluted files won't be re-collected without this.
+        local ko_total=0
+        for ko in macros eventtypes tags field_extractions inputs props transforms datamodels lookups; do
+          local n
+          n=$(find "$EXPORT_DIR" -mindepth 2 -maxdepth 2 -name "${ko}.json" 2>/dev/null | wc -l)
+          find "$EXPORT_DIR" -mindepth 2 -maxdepth 2 -name "${ko}.json" -delete 2>/dev/null
+          ko_total=$((ko_total + n))
+        done
+        echo "[clean-resume]   knowledge_objects: dropped $ko_total per-app KO files" >&2
         ;;
       *)
         echo "[clean-resume]   WARN: unknown phase '$phase' (ignored)" >&2
@@ -5761,6 +6068,50 @@ TROUBLESHOOT_HEADER
 
 EOF
 
+  # v4.6.7: Phase-level failures (e.g., collect_alerts missing jq, or token
+  # missing capabilities). These produce zero output for an entire phase
+  # but previously were only visible in _export.log — TROUBLESHOOTING.md
+  # counted only per-search errors, so customers re-uploaded broken
+  # archives without realizing entire phases had silently failed.
+  if [ ${#PHASE_FAILURES[@]} -gt 0 ]; then
+    {
+      echo "## Phase-Level Failures (v4.6.7)"
+      echo ""
+      echo "The following collection phases failed entirely. Data for these"
+      echo "phases will be absent or empty in the archive — re-running with"
+      echo "the underlying cause fixed is required for a complete migration"
+      echo "analysis."
+      echo ""
+      for phase in "${PHASE_FAILURES[@]}"; do
+        case "$phase" in
+          collect_alerts)
+            echo "### \`collect_alerts\` — saved searches and alerts"
+            echo ""
+            echo "**Impact:** Zero per-app \`savedsearches.json\` files written. DMA"
+            echo "Translation Analysis will show 0 Searches / 0 Alerts."
+            echo ""
+            echo "**Likely causes (in priority order):**"
+            echo ""
+            echo "1. **Token lacks \`search\` or \`admin_all_objects\` capability** — re-create"
+            echo "   the token under a role that has both (or use the \`sc_admin\` role)."
+            echo "2. **The \`jq\` dependency was unresolvable** AND the Python fallback also failed —"
+            echo "   check earlier \`ERROR:\` lines in \`_export.log\`. \`jq\` is no longer"
+            echo "   strictly required in v4.6.7 (Python fallback handles partitioning)."
+            echo "3. **Saved-searches endpoint returned an unparseable response** — usually"
+            echo "   a TLS timeout, partial response, or proxy-injected HTML error page."
+            echo ""
+            ;;
+          *)
+            echo "### \`$phase\`"
+            echo ""
+            echo "See \`_export.log\` for details."
+            echo ""
+            ;;
+        esac
+      done
+    } >> "$report_file"
+  fi
+
   # Scan for error files in _usage_analytics
   if [ -d "$EXPORT_DIR/dma_analytics/usage_analytics" ]; then
     echo "## Failed Analytics Searches" >> "$report_file"
@@ -6174,7 +6525,29 @@ run_collection() {
   else
     echo -e "  [${current_step}/${total_steps}] Collecting alerts and saved searches..."
   fi
-  collect_alerts
+  # v4.6.7: collect_alerts failure is now FATAL. Previously a non-zero
+  # return (e.g., missing jq in v4.6.6, or saved-searches endpoint 401)
+  # produced a "successful-looking" archive with zero saved searches —
+  # the customer didn't know until DMA import showed 0 alerts. Phase-level
+  # failure must abort so the operator can fix the root cause before
+  # waiting another hour for a re-run.
+  if ! collect_alerts; then
+    if [ "$ALLOW_MISSING_CAPABILITIES" = "true" ]; then
+      warning "collect_alerts failed but --allow-missing-capabilities set — continuing"
+      PHASE_FAILURES+=("collect_alerts")
+    else
+      error "collect_alerts failed — aborting export. See _export.log for details."
+      echo "" >&2
+      echo "Common causes:" >&2
+      echo "  • Token lacks 'admin_all_objects' or 'search' capability" >&2
+      echo "    (v4.6.7 capability pre-flight should have caught this — see above)" >&2
+      echo "  • Saved-searches REST endpoint returned an unparseable response" >&2
+      echo "  • Network/timeout during stack-wide saved-searches fetch" >&2
+      echo "" >&2
+      echo "To proceed anyway (NOT recommended), re-run with --allow-missing-capabilities." >&2
+      exit 1
+    fi
+  fi
   ((collected++))
 
   # RBAC
@@ -6973,13 +7346,15 @@ main() {
         shift 2
         ;;
       --clean-resume)
-        # v4.6.6: explicitly invalidate phase caches before resuming. Useful
+        # v4.6.6+: explicitly invalidate phase caches before resuming. Useful
         # when an operator wants to force re-collection of specific phases
         # without trusting R1/R2 auto-detection. Phases:
         #   alerts             — drops savedsearches sentinel + per-app savedsearches.json
         #   alerts_inventory   — drops analytics checkpoint + per-app alerts_inventory.json
         #   analytics          — drops the entire .analytics_checkpoint file
-        # Comma-separated. Example: --clean-resume alerts,alerts_inventory
+        #   knowledge_objects  — (v4.6.7) drops per-app macros/eventtypes/tags/props/
+        #                        transforms/field_extractions/inputs/datamodels/lookups
+        # Comma-separated. Example: --clean-resume alerts,knowledge_objects
         if [ -z "$2" ] || [[ "$2" == --* ]]; then
           echo "[ERROR] --clean-resume requires phase names (e.g. 'alerts,alerts_inventory')" >&2
           exit 1
@@ -6990,6 +7365,13 @@ main() {
       --test-access)
         # Pre-flight check: test API access for all collection categories (no export)
         TEST_ACCESS_MODE=true
+        shift
+        ;;
+      --allow-missing-capabilities)
+        # v4.6.7: opt-out for the capability pre-flight check. Use only when
+        # you know your token is intentionally scoped (and the resulting
+        # archive will be incomplete).
+        ALLOW_MISSING_CAPABILITIES=true
         shift
         ;;
       --remask)
@@ -7297,8 +7679,14 @@ except:
   generate_summary
   generate_manifest
 
-  # Generate troubleshooting report if there were errors
-  if [ "$STATS_ERRORS" -gt 0 ]; then
+  # Generate troubleshooting report if there were errors or phase failures
+  # v4.6.7: phase failures alone (even with zero per-item errors) now trigger
+  # the report so phase-level silent failures don't ship to customers without
+  # an explanation.
+  if [ "$STATS_ERRORS" -gt 0 ] || [ ${#PHASE_FAILURES[@]} -gt 0 ]; then
+    if [ ${#PHASE_FAILURES[@]} -gt 0 ]; then
+      warning "Export had ${#PHASE_FAILURES[@]} phase-level failure(s): ${PHASE_FAILURES[*]}"
+    fi
     warning "Export encountered ${STATS_ERRORS} error(s). Generating troubleshooting report..."
     generate_troubleshooting_report
   fi
