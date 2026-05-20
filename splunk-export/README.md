@@ -143,7 +143,7 @@ You do **not** need to know which format to use — the script probes `/services
 |-------------|------|------------|
 | **Platform** | Linux, macOS, or WSL | Windows 10 1803+ |
 | **Shell** | bash 3.2+ | PowerShell 5.1+ or 7+ |
-| **External dependencies** | curl, Python 3, tar | **None** (zero — no Python, curl, or jq) |
+| **External dependencies** | curl, Python 3, tar. `jq` is **optional** (used as a speed optimization for large saved-search payloads; the script falls back to Python automatically if `jq` is missing). | **None** (zero — no Python, curl, or jq) |
 | **Disk space** | 500 MB+ free | 500 MB+ free |
 | **Network** | HTTPS to `your-stack.splunkcloud.com:8089` | HTTPS to `your-stack.splunkcloud.com:8089` |
 | **Credentials** | API token (recommended) or username/password | API token (recommended) or username/password |
@@ -311,6 +311,7 @@ Arguments are the same across all scripts, with minor naming differences for Pow
 |------|------------|-------------|
 | `-y` / `--yes` | `-NonInteractive` | Auto-confirm all prompts |
 | `-d` / `--debug` | `-Debug_Mode` | Verbose debug logging (writes `_export_debug.log`) |
+| `--allow-missing-capabilities` | `-AllowMissingCapabilities` | **Opt-out for the capability pre-flight check** (v4.6.7+ / Enterprise v4.6.6+). Use ONLY when your token is intentionally scoped — the resulting archive will be incomplete. NOT recommended in normal operation. |
 | `--help` | `-ShowHelp` | Show help and exit |
 
 ---
@@ -392,6 +393,9 @@ No Splunk connection needed — extracts, anonymizes, and repacks locally.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `No applications found!` | Token lacks `admin_all_objects` | Use `sc_admin` role, or add capability to the user's role |
+| `Missing CRITICAL capabilities: search admin_all_objects` (v4.6.7+) | Token's user/role lacks `search` and/or `admin_all_objects` | Grant the capabilities to the role in Splunk Web → Settings → Roles, re-create the token, re-run. Use `--allow-missing-capabilities` ONLY if you want an intentionally partial archive. |
+| `Failed to retrieve user capabilities from /services/authentication/current-context` (v4.6.7+) | Token is invalid, expired, or so under-privileged it can't read its own context | Regenerate the token under a higher-privileged role (`sc_admin` is the simplest). |
+| `INCOMPLETE EXPORT: archive contains N apps but ZERO savedsearches.json files` (in DMA import) | Export script's `collect_alerts` phase silently failed (v4.6.6 jq-missing or under-privileged token) | Upgrade to v4.6.7+, install `jq` (now optional, but speeds things up), verify token has `search` + `admin_all_objects`, re-export. |
 | `Token authentication failed` | Wrong token, expired, or revoked | Regenerate the token in Splunk Cloud under Settings > Tokens |
 | Export completes but Explorer shows no usage data | `_audit` / `_internal` access denied | Run `--test-access` to confirm; request index access from Splunk admin |
 | Analytics searches timeout | Very large `_audit` index | Reduce `--analytics-period 7d`; or use `--apps "app1,app2" --scoped` |
@@ -420,7 +424,8 @@ Add `--debug` (Bash) or `-Debug_Mode` (PowerShell) for detailed diagnostics:
 >
 > | Version | Enterprise (`dma-splunk-export.sh`) | Cloud Bash (`dma-splunk-cloud-export.sh`) | Cloud PowerShell (`dma-splunk-cloud-export.ps1`) |
 > |---|:---:|:---:|:---:|
-> | **v4.6.6** | — | ✅ (large-environment hardening + resume self-heal) | ✅ (parity with bash 4.6.6) |
+> | **v4.6.7** | — | ✅ (jq dependency removed, fail-fast capability pre-flight) | ✅ (fail-fast capability pre-flight) |
+> | **v4.6.6** | ✅ (fail-fast capability pre-flight) | ✅ (large-environment hardening + resume self-heal — **superseded by 4.6.7, do not use**) | ✅ (parity with bash 4.6.6 — superseded by 4.6.7) |
 > | **v4.6.5** | ✅ (`BASH_SOURCE` guard for test sourcing — no behavior change) | ✅ (intermediate — superseded by 4.6.6) | — |
 > | **v4.6.4** | ✅ (eai:acl `where`-clause quoting) | — | — |
 > | **v4.6.3** | ✅ (user-namespace dashboard de-dup) | — | — |
@@ -428,9 +433,30 @@ Add `--debug` (Bash) or `-Debug_Mode` (PowerShell) for detailed diagnostics:
 > | **v4.6.1** | — *(skipped — same reason)* | ✅ (resume reliability) | ✅ (resume reliability) |
 > | **v4.6.0** | ✅ | ✅ | ✅ |
 >
-> Customers running ONLY Enterprise can ignore the v4.6.1 + v4.6.2 + v4.6.6 entries (Cloud-only fixes; the Enterprise script always exported the `search` app and uses filesystem-based collection that doesn't have the per-app REST timeout-cascade failure mode v4.6.6 addresses). Customers running ONLY Cloud can ignore the v4.6.3 + v4.6.4 + v4.6.5 entries (Enterprise-only or no-op).
+> Customers running ONLY Enterprise can ignore the v4.6.1 + v4.6.2 entries (Cloud-only fixes; the Enterprise script always exported the `search` app and uses filesystem-based collection that doesn't have the per-app REST timeout-cascade failure mode v4.6.6 addressed). Customers running ONLY Cloud can ignore the v4.6.3 + v4.6.4 + v4.6.5 entries (Enterprise-only or no-op). **v4.6.7 / v4.6.6 capability pre-flight applies to all three scripts.**
 
-### v4.6.6 (Cloud only) — Large-environment hardening + resume self-heal
+### v4.6.7 (Cloud only) — jq dependency removed, fail-fast capability pre-flight
+
+**Applies to:** `dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`. **All v4.6.6 Cloud users should upgrade immediately.**
+
+Closes two silent-broken-archive failure modes observed in production this week:
+
+- **`collect_alerts` no longer requires `jq`.** v4.6.6 introduced a hard `jq` dependency in the saved-searches partition step. Customers running the Bash Cloud script on machines without `jq` produced archives with zero saved searches — DMA Translation Analysis showed 0 Searches/Alerts despite the export completing "successfully". v4.6.7 adds a Python fallback for the partition step (same per-app envelope shape, same alert-detection predicate). `jq` is now optional and used only as a speed optimization. The PowerShell script was never affected (uses native PS JSON parsing).
+- **Capability pre-flight is now fail-fast.** Previously, a token missing `search` or `admin_all_objects` produced only a warning at startup and the export continued. The resulting archive looked complete but was missing alerts, KO files, RBAC, and analytics — customer would then spend days investigating DMA before tracing back to the token. v4.6.7 splits required capabilities into CRITICAL (`search`, `admin_all_objects`) and RECOMMENDED (`list_all_users` / `list_users`), and fails the export with a verbose ✓/✗ list + step-by-step remediation when a critical capability is missing.
+- **`collect_alerts` failure is now FATAL at the orchestrator.** If the saved-searches phase returns non-zero, the export aborts with diagnosis instead of producing a partial archive.
+- **TROUBLESHOOTING.md gets a new "Phase-Level Failures" section** so silent phase failures get surfaced in the report customers send back to us, not buried in `_export.log`.
+- **New flag `--allow-missing-capabilities` / `-AllowMissingCapabilities`** — opt-out for power users with intentionally scoped tokens who know the archive will be incomplete. NOT recommended in normal operation.
+- **`--clean-resume knowledge_objects`** — new phase that drops per-app KO files (macros, eventtypes, tags, props, transforms, field_extractions, inputs, datamodels, lookups). Needed after a v4.6.6-on-no-jq run, where per-app KO files exist on disk but contain stack-wide polluted payloads.
+
+### v4.6.6 (Enterprise) — Fail-fast capability pre-flight
+
+**Applies to:** `dma-splunk-export.sh` (Enterprise bash). Same verbose fail-fast capability check as Cloud v4.6.7. The Enterprise script was never affected by the `jq` regression (the Python-helper pattern has been in place since Feb 2026).
+
+### v4.7.0-beta.11 (Beta) — Fail-fast capability pre-flight
+
+**Applies to:** `dma-splunk-export-beta.sh`. Same verbose fail-fast capability check as Cloud v4.6.7 / Enterprise v4.6.6. Will become the new bash script. Honors `--allow-missing-capabilities` and `--yes`/`-y` (auto-confirm) as opt-outs.
+
+### v4.6.6 (Cloud only) — Large-environment hardening + resume self-heal — SUPERSEDED BY v4.6.7
 
 **Applies to:** `dma-splunk-cloud-export.sh` and `dma-splunk-cloud-export.ps1`. Enterprise unaffected — the Enterprise collection path doesn't have the per-app REST timeout-cascade failure mode v4.6.6 addresses.
 

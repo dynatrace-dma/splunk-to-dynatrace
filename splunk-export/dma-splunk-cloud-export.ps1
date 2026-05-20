@@ -312,6 +312,9 @@ param(
     [Parameter(HelpMessage = "Force re-collection of named phases on resume (e.g. 'alerts,alerts_inventory')")]
     [string]$CleanResume = "",
 
+    [Parameter(HelpMessage = "Continue despite missing critical capabilities (NOT recommended)")]
+    [switch]$AllowMissingCapabilities,
+
     [Parameter(HelpMessage = "Display version and exit")]
     [switch]$Version,
 
@@ -323,7 +326,7 @@ param(
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-$Script:SCRIPT_VERSION = "4.6.6"
+$Script:SCRIPT_VERSION = "4.6.7"
 $Script:SCRIPT_NAME = "DMA Splunk Cloud Export (PowerShell)"
 
 # Detect PowerShell version for compatibility
@@ -449,6 +452,9 @@ $Script:REMASK_ARCHIVE = ""
 # v4.6.6: Pre-flight validation + selective resume reset
 $Script:VALIDATE_ARCHIVE = ""
 $Script:CLEAN_RESUME_PHASES = ""
+
+# v4.6.7: opt-out for capability pre-flight check
+$Script:ALLOW_MISSING_CAPABILITIES = $false
 
 # Non-interactive mode flag
 $Script:NON_INTERACTIVE = $false
@@ -613,6 +619,9 @@ if ($ValidateArchive) {
 }
 if ($CleanResume) {
     $Script:CLEAN_RESUME_PHASES = $CleanResume
+}
+if ($AllowMissingCapabilities) {
+    $Script:ALLOW_MISSING_CAPABILITIES = $true
 }
 
 # Auto-detect non-interactive mode when all required params are provided
@@ -1849,8 +1858,24 @@ function Connect-SplunkCloud {
 function Test-UserCapabilities {
     $response = Invoke-SplunkApi -Endpoint "/services/authentication/current-context" -Data "output_mode=json"
     if ($null -eq $response) {
-        Write-Error2 "Failed to retrieve user capabilities"
-        return
+        # v4.6.7: If the token can't even read its own context, the export will
+        # produce a broken archive (Encova class of incident). Fail-fast unless
+        # the operator explicitly opts out.
+        Write-Error2 "Failed to retrieve user capabilities from /services/authentication/current-context"
+        if ($Script:ALLOW_MISSING_CAPABILITIES) {
+            Write-Warning2 "-AllowMissingCapabilities set: continuing despite capability-probe failure"
+            Write-Warning2 "Archive will likely be missing alerts, KO, RBAC, indexes, and analytics data"
+            return
+        }
+        Write-Host ""
+        Write-Host "The token cannot introspect its own permissions. This almost always means" -ForegroundColor Yellow
+        Write-Host "the token is invalid, expired, or so under-privileged that nothing useful" -ForegroundColor Yellow
+        Write-Host "can be collected. Continuing would produce a broken archive after hours" -ForegroundColor Yellow
+        Write-Host "of work." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "To proceed anyway (NOT recommended), re-run with -AllowMissingCapabilities." -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
     }
 
     $capabilities = @()
@@ -1861,19 +1886,64 @@ function Test-UserCapabilities {
         }
     }
 
-    $requiredCaps = @("admin_all_objects", "list_users", "search")
-    $missingCaps = @()
+    # v4.6.7: split into CRITICAL (export cannot succeed) and RECOMMENDED.
+    # Previously all three were "recommended" and a token missing all three
+    # still produced a warning-only archive that looked complete to the
+    # importer — the Encova failure mode.
+    $criticalCaps = @("admin_all_objects", "search")
+    $recommendedCaps = @("list_users")
+    $missingCritical = @()
+    $missingRecommended = @()
 
-    foreach ($cap in $requiredCaps) {
-        if ($cap -notin $capabilities) {
-            $missingCaps += $cap
+    foreach ($cap in $criticalCaps) {
+        if ($cap -notin $capabilities) { $missingCritical += $cap }
+    }
+    foreach ($cap in $recommendedCaps) {
+        if ($cap -notin $capabilities) { $missingRecommended += $cap }
+    }
+
+    if ($missingCritical.Count -gt 0) {
+        Write-Error2 "Missing CRITICAL capabilities: $($missingCritical -join ', ')"
+        if ($Script:ALLOW_MISSING_CAPABILITIES) {
+            Write-Warning2 "-AllowMissingCapabilities set: continuing despite missing critical capabilities"
+            Write-Warning2 "Archive will be incomplete:"
+            foreach ($c in $missingCritical) {
+                switch ($c) {
+                    "search"            { Write-Warning2 "  - search: cannot dispatch analytics queries (dashboards, alerts, usage)" }
+                    "admin_all_objects" { Write-Warning2 "  - admin_all_objects: cannot read most KO, configs, saved searches" }
+                }
+            }
+        } else {
+            Write-Host ""
+            Write-Host "Your token lacks capabilities required for a complete export." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Required capabilities (token user's role must include all of these):" -ForegroundColor Yellow
+            foreach ($cap in $criticalCaps) {
+                if ($cap -in $capabilities) {
+                    Write-Host ("  [OK]      " + $cap) -ForegroundColor Green
+                } else {
+                    Write-Host ("  [MISSING] " + $cap) -ForegroundColor Red
+                }
+            }
+            Write-Host ""
+            Write-Host "How to fix:" -ForegroundColor Yellow
+            Write-Host "  1. In Splunk Web -> Settings -> Roles, grant the missing capabilities"
+            Write-Host "     to the role of the user that owns this token (or use sc_admin)."
+            Write-Host "  2. Re-create the token under Settings -> Tokens."
+            Write-Host "  3. Re-run this export."
+            Write-Host ""
+            Write-Host "To proceed anyway (NOT recommended - archive will be missing data),"
+            Write-Host "re-run with -AllowMissingCapabilities."
+            Write-Host ""
+            exit 1
         }
     }
 
-    if ($missingCaps.Count -gt 0) {
-        Write-Warning2 "Missing recommended capabilities: $($missingCaps -join ', ')"
-        Write-Warning2 "Some data may not be collected"
-    } else {
+    if ($missingRecommended.Count -gt 0) {
+        Write-Warning2 "Missing recommended capabilities: $($missingRecommended -join ', ') - some data may be incomplete"
+    }
+
+    if ($missingCritical.Count -eq 0 -and $missingRecommended.Count -eq 0) {
         Write-Success "All required capabilities present"
     }
 }

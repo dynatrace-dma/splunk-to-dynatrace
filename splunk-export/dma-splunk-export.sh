@@ -146,7 +146,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.5"
+SCRIPT_VERSION="4.6.6"
 SCRIPT_NAME="DMA Splunk Export"
 
 # ANSI color codes
@@ -231,6 +231,7 @@ COLLECT_LOOKUPS=false
 COLLECT_AUDIT=false
 ANONYMIZE_DATA=true
 AUTO_CONFIRM=false
+ALLOW_MISSING_CAPABILITIES=false  # v4.6.6: opt-out for capability pre-flight check
 USAGE_PERIOD="30d"          # Default analytics window (30d recommended for migration; override with --analytics-period)
 ANALYTICS_PERIOD_SET=false  # true when --analytics-period was passed on CLI (skips interactive prompt)
 
@@ -3335,13 +3336,72 @@ authenticate_splunk() {
         "https://${SPLUNK_HOST}:${SPLUNK_PORT}/services/authentication/current-context?output_mode=json" \
         2>/dev/null)
 
-      for cap in "admin_all_objects" "list_users" "list_roles"; do
-        if echo "$caps_response" | grep -q "$cap"; then
+      # v4.6.6: split into CRITICAL (export cannot succeed) and RECOMMENDED
+      # (degrades gracefully). Critical missing caps now FAIL the export with
+      # verbose remediation — Encova class of incident where a token missing
+      # 'search'/'admin_all_objects' silently produced a broken archive.
+      local critical_caps=("search" "admin_all_objects")
+      local recommended_caps=("list_users" "list_roles")
+      local missing_critical=()
+      local missing_recommended=()
+
+      for cap in "${critical_caps[@]}"; do
+        if echo "$caps_response" | grep -qw "$cap"; then
           success "Capability: $cap"
         else
-          warning "Missing capability: $cap (some data may not be collected)"
+          missing_critical+=("$cap")
         fi
       done
+
+      for cap in "${recommended_caps[@]}"; do
+        if echo "$caps_response" | grep -qw "$cap"; then
+          success "Capability: $cap"
+        else
+          missing_recommended+=("$cap")
+        fi
+      done
+
+      if [ ${#missing_critical[@]} -gt 0 ]; then
+        error "Missing CRITICAL capabilities: ${missing_critical[*]}"
+        if [ "$ALLOW_MISSING_CAPABILITIES" = "true" ] || [ "$AUTO_CONFIRM" = "true" ]; then
+          warning "Continuing despite missing critical capabilities (--allow-missing-capabilities or --yes set)"
+          warning "Archive will be incomplete:"
+          for c in "${missing_critical[@]}"; do
+            case "$c" in
+              search)            warning "  • search: cannot dispatch analytics queries (dashboards, alerts, usage)" ;;
+              admin_all_objects) warning "  • admin_all_objects: cannot read most KO, configs, saved searches" ;;
+            esac
+          done
+        else
+          echo "" >&2
+          echo "Your account lacks capabilities required for a complete export." >&2
+          echo "" >&2
+          echo "Required capabilities (your role must include all of these):" >&2
+          for cap in "${critical_caps[@]}"; do
+            if echo "$caps_response" | grep -qw "$cap"; then
+              echo "  ✓ $cap" >&2
+            else
+              echo "  ✗ $cap  (MISSING)" >&2
+            fi
+          done
+          echo "" >&2
+          echo "How to fix:" >&2
+          echo "  1. In Splunk Web → Settings → Roles, grant the missing capabilities" >&2
+          echo "     to your role (or use admin)." >&2
+          echo "  2. If using a token, re-create it under Settings → Tokens after" >&2
+          echo "     the role change." >&2
+          echo "  3. Re-run this export." >&2
+          echo "" >&2
+          echo "To proceed anyway (NOT recommended — archive will be missing data)," >&2
+          echo "re-run with --allow-missing-capabilities." >&2
+          echo "" >&2
+          exit 1
+        fi
+      fi
+
+      if [ ${#missing_recommended[@]} -gt 0 ]; then
+        warning "Missing recommended capabilities: ${missing_recommended[*]} — some data may be incomplete"
+      fi
 
       echo ""
       return 0
@@ -6691,6 +6751,13 @@ main() {
         ;;
       --yes|-y)
         AUTO_CONFIRM=true
+        shift
+        ;;
+      --allow-missing-capabilities)
+        # v4.6.6: opt-out for capability pre-flight check. Use only when the
+        # token is intentionally scoped (and the resulting archive will be
+        # incomplete).
+        ALLOW_MISSING_CAPABILITIES=true
         shift
         ;;
       --all-apps)
