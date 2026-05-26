@@ -432,20 +432,23 @@ index=_audit sourcetype=audittrail action=search info=granted
 | join type=left glass_table_id
     [ search index=federated:internal host=*itsi1* uri_path="*itsi/glass_table*"
     | eval glass_table_id=savedGlassTableId
-    | stats count AS hits dc(user) as users BY glass_table_id ]
-| table glass_table_name, glass_table_id, glass_table_owner, app, hits, users
-| search hits>0
-| sort -hits
+    | stats count AS view_count, dc(user) as unique_users, values(user) as viewers BY glass_table_id ]
+| table glass_table_name, glass_table_id, glass_table_owner, app, view_count, unique_users, viewers
+| search view_count>0
+| sort -view_count
 ```
 
-**Output schema** (one row per Glass Table with at least one hit):
+**Output schema** (one row per Glass Table with at least one view):
 
 - `glass_table_id` — KV store `_key`; matches the GT JSON filename basename in the export archive
 - `glass_table_name` — title; matches `gtJson.title`
 - `glass_table_owner` — ACL owner; the DMA Server uses this as the latest known owner
-- `app` — optional; if present, scopes the match to that app, otherwise matches across apps
-- `hits` — view count
-- `users` — distinct user count
+- `app` — usually present (the rest call returns `acl.app`); if absent the loader falls back to cross-app matching via the bare-name key
+- `view_count` — view count. The DMA Server also accepts the legacy field names `views` and `hits`
+- `unique_users` — distinct viewer count. Also accepts `users`
+- `viewers` — optional space-separated list of usernames; ignored by the DMA Server but useful for auditing the report manually
+
+**File format**: When dispatched as an async/streaming search and exported from Splunk Web, the file is NDJSON — one `{"preview":false,"result":{...}}` object per line, with the final line carrying `"lastrow":true`. The DMA Server's loader handles NDJSON, the legacy `{results:[...]}` envelope from jq-transformed exports, and plain arrays interchangeably. All numeric fields may be string-encoded in the NDJSON variant; the loader parses them.
 
 **How the DMA Server uses it**:
 
