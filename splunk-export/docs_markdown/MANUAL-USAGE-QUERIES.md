@@ -31,6 +31,7 @@ The DMA export scripts run 6 global analytics queries against `index=_audit` and
 > | Query | Required Filename (exact, case-sensitive) |
 > |-------|------------------------------------------|
 > | Query 1 — Dashboard Views | **`dashboard_views_global.json`** |
+> | Query 1b — Glass Table Dashboards (ITSI, optional) | **`dashboard_views_glasstables.json`** |
 > | Query 2 — User Activity | **`user_activity_global.json`** |
 > | Query 3 — Search Patterns | **`search_patterns_global.json`** |
 > | Query 4 — Index Volume | **`index_volume_summary.json`** |
@@ -408,6 +409,54 @@ index=_audit sourcetype=audittrail action=search info=granted
 **How it works**: Identifies dashboard-triggered searches via the `provenance` field, deduplicates page loads using a 30-second session window (multiple panels on one dashboard = one view), and aggregates by app and dashboard name.
 
 **Expected results**: Hundreds to thousands of rows in an active environment. If you see fewer than 100 rows for an environment with 1000+ dashboards, you likely don't have full `_audit` visibility.
+
+---
+
+### Query 1b: Glass Table Dashboards (ITSI, Optional)
+
+**Purpose**: Captures hits/users/owner for ITSI **Glass Tables** specifically. Glass Table page loads do not flow through the standard `UI:Dashboard:*` provenance path that Query 1 keys on, so they show `view_count=0` in `dashboard_views_global.json` even when heavily used. This query reads the Glass Table KV store directly and joins to a federated `_internal` search that captures `itsi/glass_table` URI hits.
+
+**Applies to**: ITSI customers only. Skip if the environment has no Glass Tables.
+⚠️ **Save as (exact filename required)**: `dashboard_views_glasstables.json`
+
+```spl
+| rest /servicesNS/-/-/itoa_interface/glass_table report_as=text fields="_key,title,acl.owner,acl.app" splunk_server=local
+| eval value=spath(value, "{}")
+| mvexpand value
+| eval glass_table_id=spath(value, "_key"),
+       glass_table_name=spath(value, "title"),
+       glass_table_owner=spath(value, "acl.owner"),
+       app=spath(value, "acl.app")
+| search glass_table_name=*
+| table glass_table_id, glass_table_name, glass_table_owner, app
+| join type=left glass_table_id
+    [ search index=federated:internal host=*itsi1* uri_path="*itsi/glass_table*"
+    | eval glass_table_id=savedGlassTableId
+    | stats count AS hits dc(user) as users BY glass_table_id ]
+| table glass_table_name, glass_table_id, glass_table_owner, app, hits, users
+| search hits>0
+| sort -hits
+```
+
+**Output schema** (one row per Glass Table with at least one hit):
+
+- `glass_table_id` — KV store `_key`; matches the GT JSON filename basename in the export archive
+- `glass_table_name` — title; matches `gtJson.title`
+- `glass_table_owner` — ACL owner; the DMA Server uses this as the latest known owner
+- `app` — optional; if present, scopes the match to that app, otherwise matches across apps
+- `hits` — view count
+- `users` — distinct user count
+
+**How the DMA Server uses it**:
+
+- Applied **only to dashboards of `type=glasstable`**. Classic dashboards, Studio dashboards, and Enterprise views are not touched by this file.
+- Matched on `glass_table_id` (preferred) and `glass_table_name` (fallback) against each Glass Table's filename and title respectively.
+- Glass Tables **not present in this file are left unchanged** — their existing views/users/owner are preserved. Importing this file never zero-out a GT that wasn't included.
+- **Owner is never blanked**: if a Glass Table already had a known owner (from a prior import, from `dashboard_ownership.json`, or from the GT JSON's own `acl.owner`), an empty `glass_table_owner` in this file will not overwrite it. A non-empty `glass_table_owner` does become the latest value.
+
+**Federated-index note**: the join above uses `index=federated:internal host=*itsi1*` to pull URI-path hits from the ITSI search head's `_internal` index across an SHC. If the customer's environment doesn't have federated providers configured for `_internal`, run the query directly on the ITSI search head and replace `index=federated:internal` with `index=_internal`.
+
+**Time window**: the SPL above is unbounded — adjust `earliest=-90d` (or your migration baseline window) on both the `rest` call and the federated search if the volume is excessive.
 
 ---
 
