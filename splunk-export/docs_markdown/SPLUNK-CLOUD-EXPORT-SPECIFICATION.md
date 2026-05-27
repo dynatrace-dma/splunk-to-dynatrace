@@ -538,12 +538,17 @@ search index=_audit sourcetype=audittrail action=search info=granted
 | stats dc(view_session) as view_count, dc(user) as unique_users,
         values(user) as viewers, latest(_time) as last_viewed
         by app, dashboard_name
+| join dashboard_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/data/ui/views f=eai:acl
+     | rename title as dashboard_name, eai:acl.owner as owner, eai:acl.app as app, eai:acl.sharing as sharing
+     | fields dashboard_name, app, owner, sharing]
 | sort -view_count
 ```
 
 - **Timeout**: 3600s (1 hour)
 - **Output**: `dma_analytics/usage_analytics/dashboard_views_global.json`
 - **Key detail**: Uses `provenance` field (not `search_type=dashboard`, which is not a native `_audit` field). View session de-duplication uses a 30-second window per user to count page loads rather than individual panel searches.
+- **Owner via REST join**: trailing `| join` against `/servicesNS/-/-/data/ui/views f=eai:acl` attaches `owner` (eai:acl.owner) and `sharing` (eai:acl.sharing) to each row. Same idiom Q5/Q5b use for saved-search owner. The DMA Server folds these into the same dashboard-ownership map it builds from `dashboard_ownership.json`, so this single file populates both views AND owner in the Splunk Explorer.
 
 ### Query 2: User Activity
 

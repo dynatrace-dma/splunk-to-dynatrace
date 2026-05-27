@@ -3983,15 +3983,22 @@ collect_app_analytics() {
   # QUERY 1: DASHBOARD VIEWS (MOST CRITICAL)
   # Uses provenance field to identify dashboard-triggered searches.
   # De-duplicates using view_session (30s window per user = 1 page load).
+  # Trailing `| join` against /servicesNS/-/-/data/ui/views f=eai:acl
+  # attaches owner + sharing so the same file populates BOTH view counts
+  # AND owner attribution in the DMA Splunk Explorer — no separate
+  # dashboard_ownership.json required when this query runs. Mirrors the
+  # Q5/Q5b owner-join idiom. splunk_server=local keeps the REST
+  # subsearch on the search head (indexer peers 404 on /data/ui/views);
+  # count=0 returns all views, not the default 30.
   # =========================================================================
   if has_analytics_checkpoint "dashboard_views"; then
     log "  [1/6] Dashboard views — SKIP (checkpoint exists)"
   else
     local q1_file="$analytics_dir/dashboard_views_global.json"
     run_analytics_search \
-      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | sort -view_count" \
+      "search index=_audit sourcetype=audittrail action=search info=granted ${app_filter} (provenance=\"UI:Dashboard:*\" OR provenance=\"UI:dashboard:*\") user!=\"splunk-system-user\" earliest=-${USAGE_PERIOD} | rex field=provenance \"UI:[Dd]ashboard:(?<dashboard_name>[\\w\\-\\.]+)\" | where isnotnull(dashboard_name) | eval view_session=user.\"_\".floor(_time/30) | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name | join dashboard_name app type=left [| rest splunk_server=local count=0 /servicesNS/-/-/data/ui/views f=eai:acl | rename title as dashboard_name, eai:acl.owner as owner, eai:acl.app as app, eai:acl.sharing as sharing | fields dashboard_name, app, owner, sharing] | sort -view_count" \
       "$q1_file" \
-      "Dashboard views (global, provenance-based)" \
+      "Dashboard views (global, provenance-based, with owner from REST)" \
       3600
     save_analytics_checkpoint "dashboard_views" "$q1_file"
   fi

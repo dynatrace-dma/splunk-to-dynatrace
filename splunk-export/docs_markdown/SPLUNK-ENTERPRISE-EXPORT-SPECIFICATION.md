@@ -448,13 +448,17 @@ search index=_audit sourcetype=audittrail action=search info=granted
 | stats dc(view_session) as view_count, dc(user) as unique_users,
         values(user) as viewers, latest(_time) as last_viewed
   by app, dashboard_name
+| join dashboard_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/data/ui/views f=eai:acl
+     | rename title as dashboard_name, eai:acl.owner as owner, eai:acl.app as app, eai:acl.sharing as sharing
+     | fields dashboard_name, app, owner, sharing]
 | sort -view_count
 ```
 
 **Output**: `dma_analytics/usage_analytics/dashboard_views_global.json`
 **Checkpoint**: `dashboard_views`
 
-Uses the `provenance` field (not `search_type=dashboard` which was broken). De-duplicates using 30-second view sessions per user.
+Uses the `provenance` field (not `search_type=dashboard` which was broken). De-duplicates using 30-second view sessions per user. The trailing `| join` against `/servicesNS/-/-/data/ui/views f=eai:acl` attaches `owner` and `sharing` to each row so the same file populates both views AND owner — same idiom as Q5/Q5b. `splunk_server=local` keeps the REST subsearch on the search head (SHC indexer peers return 404 on `/data/ui/views`); `count=0` returns all views, not the default 30.
 
 ### Query 2: User Activity
 

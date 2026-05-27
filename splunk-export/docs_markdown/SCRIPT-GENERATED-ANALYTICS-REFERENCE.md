@@ -148,6 +148,10 @@ search index=_audit sourcetype=audittrail action=search info=granted
 | stats dc(view_session) as view_count, dc(user) as unique_users,
     values(user) as viewers, latest(_time) as last_viewed
     by app, dashboard_name
+| join dashboard_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/data/ui/views f=eai:acl
+     | rename title as dashboard_name, eai:acl.owner as owner, eai:acl.app as app, eai:acl.sharing as sharing
+     | fields dashboard_name, app, owner, sharing]
 | sort -view_count
 ```
 
@@ -158,6 +162,7 @@ search index=_audit sourcetype=audittrail action=search info=granted
 - Extracts the dashboard name from provenance using `rex`
 - De-duplicates views using a **view session** concept: `user + floor(_time/30)` groups all panel searches within a 30-second window as a single page load
 - `dc(view_session)` counts distinct page loads, not individual panel searches
+- Left-joins `/data/ui/views` REST to attach `eai:acl.owner` and `eai:acl.sharing` so the same file carries both views AND owner (mirrors the Query 5 / 5b pattern). The DMA Server folds this into the same dashboard-ownership map it builds from `dashboard_ownership.json` — no separate ownership file required when this query is run.
 
 **Output fields**:
 
@@ -169,6 +174,8 @@ search index=_audit sourcetype=audittrail action=search info=granted
 | `unique_users` | integer | Number of distinct users who viewed the dashboard |
 | `viewers` | multivalue | List of user IDs who viewed the dashboard |
 | `last_viewed` | epoch | Timestamp of most recent view |
+| `owner` | string | `eai:acl.owner` from the `/data/ui/views` REST join — the user the dashboard is saved-as-by. Often `nobody` for app-shared dashboards. Empty when the REST join didn't resolve (rare; renamed/deleted between audit window and REST call). The DMA Server treats empty as "no data" and never blanks a known owner. |
+| `sharing` | string | `eai:acl.sharing` from the same join (`user` / `app` / `global`). |
 
 **Migration purpose**: Prioritize which dashboards to migrate first based on actual usage. Dashboards with zero views in this data are candidates for archival (the DMA Curator computes never-viewed dashboards by diffing the dashboard list against this data).
 
