@@ -30,7 +30,7 @@ The DMA export scripts run 6 global analytics queries against `index=_audit` and
 >
 > | Query | Required Filename (exact, case-sensitive) |
 > |-------|------------------------------------------|
-> | Query 1 — Dashboard Views | **`dashboard_views_global.json`** |
+> | Query 1 — Dashboard Views (+ inline owner) | **`dashboard_views_global.json`** |
 > | Query 1b — Glass Table Dashboards (ITSI, optional) | **`dashboard_views_glasstables.json`** |
 > | Query 2 — User Activity | **`user_activity_global.json`** |
 > | Query 3 — Search Patterns | **`search_patterns_global.json`** |
@@ -102,10 +102,16 @@ index=_audit sourcetype=audittrail action=search info=granted
 | where isnotnull(dashboard_name)
 | eval view_session=user."_".floor(_time/30)
 | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name
+| join dashboard_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/data/ui/views f=eai:acl
+     | rename title as dashboard_name, eai:acl.owner as owner, eai:acl.app as app, eai:acl.sharing as sharing
+     | fields dashboard_name, app, owner, sharing]
 | sort -view_count
 ```
 
-**If `_audit` is unavailable**, this data cannot be collected. Use this REST fallback to at least capture dashboard inventory and ownership (no view counts):
+**Owner via REST join**: the trailing `| join` against `/servicesNS/-/-/data/ui/views` adds `owner` and `sharing` to each row (mirrors the Query 5 / 5b pattern). The DMA Server folds this into the same dashboard-ownership map it builds from `dashboard_ownership.json`, so manual-only customers no longer need a separate ownership file — Query 1 alone covers both views and owner. The owner-preservation invariant means an empty `owner` cell never blanks a previously known value.
+
+**If `_audit` is unavailable**, view counts cannot be collected. Use this REST-only fallback to at least capture dashboard inventory and ownership (no view counts):
 
 ```spl
 | rest /servicesNS/-/-/data/ui/views
@@ -390,7 +396,7 @@ If this returns 0, your user/token does not have `_audit` access. Log in as `sc_
 
 ### Query 1: Dashboard Views
 
-**Purpose**: Identifies which dashboards are actively used, by how many users, and how often. This is the most critical query for migration prioritization — it determines which dashboards to migrate first.
+**Purpose**: Identifies which dashboards are actively used, by how many users, and how often. This is the most critical query for migration prioritization — it determines which dashboards to migrate first. Also carries the dashboard owner (via the REST join below) so the DMA Server can populate the Owner column in the Explorer without a separate `dashboard_ownership.json` file.
 
 **Requires**: `_audit` access
 ⚠️ **Save as (exact filename required)**: `dashboard_views_global.json`
@@ -403,12 +409,22 @@ index=_audit sourcetype=audittrail action=search info=granted
 | where isnotnull(dashboard_name)
 | eval view_session=user."_".floor(_time/30)
 | stats dc(view_session) as view_count, dc(user) as unique_users, values(user) as viewers, latest(_time) as last_viewed by app, dashboard_name
+| join dashboard_name app type=left
+    [| rest splunk_server=local count=0 /servicesNS/-/-/data/ui/views f=eai:acl
+     | rename title as dashboard_name, eai:acl.owner as owner, eai:acl.app as app, eai:acl.sharing as sharing
+     | fields dashboard_name, app, owner, sharing]
 | sort -view_count
 ```
 
-**How it works**: Identifies dashboard-triggered searches via the `provenance` field, deduplicates page loads using a 30-second session window (multiple panels on one dashboard = one view), and aggregates by app and dashboard name.
+**How it works**: Identifies dashboard-triggered searches via the `provenance` field, deduplicates page loads using a 30-second session window (multiple panels on one dashboard = one view), aggregates by app and dashboard name, then left-joins the `/data/ui/views` REST endpoint to attach `eai:acl.owner` and `eai:acl.sharing`. Mirrors the Query 5 / 5b owner pattern.
 
-**Expected results**: Hundreds to thousands of rows in an active environment. If you see fewer than 100 rows for an environment with 1000+ dashboards, you likely don't have full `_audit` visibility.
+**Why the REST join belongs here** (and the same SHC caveats as Query 5):
+
+1. **`splunk_server=local`** keeps the `| rest` call on the search head only. Without it the subsearch fan-outs to every search peer (indexers), the `/data/ui/views` endpoint returns HTTP 404 on each indexer, and the join silently empties.
+2. **`count=0`** returns all views, not the default first 30. On large environments the default truncation silently drops most owners from the join.
+3. **`eai:acl.owner`** is the saved-as-by user on the view stanza. For app-shared dashboards this is often `nobody` (Splunk's app-shared sentinel) — the DMA Server treats `nobody` as a valid owner string; you can choose to filter it out post-hoc if desired.
+
+**Expected results**: Hundreds to thousands of rows in an active environment. If you see fewer than 100 rows for an environment with 1000+ dashboards, you likely don't have full `_audit` visibility. Every row that successfully joined will have a non-empty `owner`; rows where the dashboard was renamed or deleted between the audit window and the REST call will have an empty `owner`, which the DMA Server harmlessly ignores (it won't overwrite a previously known owner from another source).
 
 ---
 
