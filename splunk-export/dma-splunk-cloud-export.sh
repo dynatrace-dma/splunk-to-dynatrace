@@ -9,7 +9,13 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.3
+#  DMA Splunk Cloud Export Script v4.6.7
+#
+#  v4.6.7 Changes:
+#    - Perl fallback for timeout detection: macOS users on corporate machines
+#      that cannot run `brew install coreutils` no longer get a hard exit.
+#      A self-contained shim is synthesised from Perl's alarm() — Perl ships
+#      on every macOS version so no installation is required.
 #
 #  v4.6.3 Changes:
 #    - Datamodel collection added: per-app GET on /servicesNS/-/<app>/datamodel/model
@@ -7214,20 +7220,30 @@ main() {
     HAS_JQ=true
   fi
 
-  # v4.6.6: detect OS-level `timeout` / `gtimeout` for the api_call hung-curl
+  # v4.6.7: detect OS-level `timeout` / `gtimeout` for the api_call hung-curl
   # backstop (see api_call). Previously the absence of both was a silent
   # fallback to "no backstop", which on Splunk Cloud Victoria + a slow TLS
   # path let individual curl calls hang for tens of minutes — observed to
-  # blow the 12-hour runtime cap on large-environment exports. Fail fast so
-  # operators know to install GNU coreutils before kicking off a long run.
+  # blow the 12-hour runtime cap on large-environment exports. Perl is tried
+  # as a zero-install fallback (macOS always ships it); only hard-exit when
+  # no timeout mechanism is available at all.
   detect_os_timeout() {
     if command -v timeout &>/dev/null; then
       OS_TIMEOUT_CMD="timeout"
     elif command -v gtimeout &>/dev/null; then
       OS_TIMEOUT_CMD="gtimeout"
+    elif command -v perl &>/dev/null; then
+      # macOS ships Perl; synthesise a timeout shim so users on corporate
+      # machines that can't install coreutils via brew still get the hung-curl
+      # backstop without any package installation.
+      local _shim
+      _shim="$(mktemp /tmp/dma_timeout.XXXXXX)"
+      printf '#!/usr/bin/env bash\nperl -e '"'"'alarm $ARGV[0]; exec @ARGV[1..$#ARGV]'"'"' -- "$@"\n' > "$_shim"
+      chmod +x "$_shim"
+      OS_TIMEOUT_CMD="$_shim"
     else
       echo "" >&2
-      echo "Error: required dependency missing: 'timeout' (Linux) or 'gtimeout' (macOS via 'brew install coreutils')." >&2
+      echo "Error: required dependency missing: 'timeout' (Linux), 'gtimeout' (macOS), or 'perl'." >&2
       echo "" >&2
       echo "Without it, hung HTTP requests can stall this script for hours and" >&2
       echo "silently exhaust the runtime cap, producing a 'complete-looking'" >&2
