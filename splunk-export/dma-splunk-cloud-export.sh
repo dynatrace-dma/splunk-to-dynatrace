@@ -199,7 +199,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.7"
+SCRIPT_VERSION="4.6.8"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -1703,6 +1703,8 @@ test_connectivity() {
   local curl_output
   local test_url="${url}/services/server/info"
   local hostname=$(echo "$url" | sed 's|https://||' | sed 's|:.*||')
+  local port=$(echo "$url" | grep -oE ':[0-9]+' | tr -d ':' | tail -1)
+  port="${port:-8089}"
 
   echo ""
   echo -e "${CYAN}╔══════════════════════════════════════════════════════════════════════════╗${NC}"
@@ -1710,7 +1712,7 @@ test_connectivity() {
   echo -e "${CYAN}╠══════════════════════════════════════════════════════════════════════════╣${NC}"
   echo -e "${CYAN}║${NC}  Target URL: ${WHITE}${test_url}${NC}"
   echo -e "${CYAN}║${NC}  Hostname:   ${WHITE}${hostname}${NC}"
-  echo -e "${CYAN}║${NC}  Port:       ${WHITE}8089${NC}"
+  echo -e "${CYAN}║${NC}  Port:       ${WHITE}${port}${NC}"
   echo -e "${CYAN}╚══════════════════════════════════════════════════════════════════════════╝${NC}"
   echo ""
 
@@ -1743,20 +1745,20 @@ test_connectivity() {
     # =========================================================================
     # STEP 2: TCP Port Connectivity Test
     # =========================================================================
-    echo -e "${YELLOW}[STEP 2/3] Testing TCP Connection to Port 8089...${NC}"
+    echo -e "${YELLOW}[STEP 2/3] Testing TCP Connection to Port ${port}...${NC}"
     local nc_result
     if command -v nc &> /dev/null; then
-      nc_result=$(nc -zv -w 10 "$hostname" 8089 2>&1)
+      nc_result=$(nc -zv -w 10 "$hostname" "$port" 2>&1)
       local nc_exit=$?
       if [ $nc_exit -eq 0 ]; then
-        echo -e "  ${GREEN}✓ TCP port 8089 is OPEN${NC}"
+        echo -e "  ${GREEN}✓ TCP port ${port} is OPEN${NC}"
       else
-        echo -e "  ${RED}✗ TCP port 8089 is BLOCKED or UNREACHABLE${NC}"
+        echo -e "  ${RED}✗ TCP port ${port} is BLOCKED or UNREACHABLE${NC}"
         echo -e "  ${DIM}nc output:${NC}"
         echo "$nc_result" | sed 's/^/    /'
         echo ""
         echo -e "  ${YELLOW}This usually means:${NC}"
-        echo -e "  ${DIM}  • Corporate firewall blocking outbound port 8089${NC}"
+        echo -e "  ${DIM}  • Corporate firewall blocking outbound port ${port}${NC}"
         echo -e "  ${DIM}  • VPN blocking non-standard ports${NC}"
         echo -e "  ${DIM}  • Network security policy${NC}"
         echo ""
@@ -1834,10 +1836,10 @@ test_connectivity() {
         ;;
       7)
         echo -e "${RED}║${NC}  ${YELLOW}Exit Code 7: FAILED TO CONNECT${NC}"
-        echo -e "${RED}║${NC}  ${DIM}TCP connection to ${hostname}:8089 failed.${NC}"
-        echo -e "${RED}║${NC}  ${DIM}→ Port 8089 is likely BLOCKED by firewall${NC}"
+        echo -e "${RED}║${NC}  ${DIM}TCP connection to ${hostname}:${port} failed.${NC}"
+        echo -e "${RED}║${NC}  ${DIM}→ Port ${port} is likely BLOCKED by firewall${NC}"
         echo -e "${RED}║${NC}  ${DIM}→ Try from a different network (home, cloud VM)${NC}"
-        echo -e "${RED}║${NC}  ${DIM}→ Contact IT to allow outbound port 8089${NC}"
+        echo -e "${RED}║${NC}  ${DIM}→ Contact IT to allow outbound port ${port}${NC}"
         ;;
       28)
         echo -e "${RED}║${NC}  ${YELLOW}Exit Code 28: OPERATION TIMED OUT${NC}"
