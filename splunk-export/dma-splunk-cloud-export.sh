@@ -9,7 +9,18 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.9
+#  DMA Splunk Cloud Export Script v4.6.10
+#
+#  v4.6.10 Changes:
+#    - Root cause fix for "Token authentication failed" on port 443.
+#      Splunk Cloud on port 443 routes /services/... through nginx to the
+#      Splunk Web Python appserver (mrsparkle). That layer returns HTML error
+#      pages instead of REST API JSON, so both Bearer and Splunk token probes
+#      saw "<!DOCTYPE html>" and could never find "username".
+#      Fix: when --port 443 is used, prefix all REST API paths with
+#      /en-US/splunkd/__raw — the nginx proxy path that bypasses mrsparkle
+#      and talks directly to splunkd. This applies to auth probes, login,
+#      and every api_call() invocation.
 #
 #  v4.6.9 Changes:
 #    - Add -L (follow redirects) to auth probe and all api_call curl invocations.
@@ -208,7 +219,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.9"
+SCRIPT_VERSION="4.6.10"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -242,6 +253,7 @@ BOX_B="╣"
 SPLUNK_STACK=""            # e.g., acme-corp.splunkcloud.com
 SPLUNK_PORT="8089"         # REST API port (override with --port, e.g. 443)
 SPLUNK_URL=""              # Full URL with port
+SPLUNK_API_PREFIX=""       # Path prefix for REST calls; set to /en-US/splunkd/__raw on port 443
 AUTH_METHOD=""             # token or userpass
 AUTH_TOKEN=""              # Bearer token
 SPLUNK_USER=""
@@ -1319,8 +1331,8 @@ api_call() {
     exit 124
   fi
 
-  # Build URL
-  local url="${SPLUNK_URL}${endpoint}"
+  # Build URL — on port 443 use __raw proxy prefix to reach splunkd directly
+  local url="${SPLUNK_URL}${SPLUNK_API_PREFIX}${endpoint}"
 
   # Build auth header — use AUTH_HEADER set by authenticate() when available,
   # so the token prefix discovered during auth probing (Bearer vs Splunk) is honoured.
@@ -1919,7 +1931,7 @@ authenticate() {
     for try_prefix in "Bearer" "Splunk"; do
       response=$(curl -s -k -L $CURL_PROXY_ARGS \
         -H "Authorization: ${try_prefix} $AUTH_TOKEN" \
-        "${SPLUNK_URL}/services/authentication/current-context?output_mode=json")
+        "${SPLUNK_URL}${SPLUNK_API_PREFIX}/services/authentication/current-context?output_mode=json")
       debug_log "AUTH" "Token probe (${try_prefix}): $(echo "$response" | head -c 200)"
       if echo "$response" | grep -q "username"; then
         token_prefix="$try_prefix"
@@ -1947,7 +1959,7 @@ authenticate() {
     encoded_pass=$(printf '%s' "$SPLUNK_PASSWORD" | $PYTHON_CMD -c "import urllib.parse, sys; print(urllib.parse.quote(sys.stdin.read(), safe=''))" 2>/dev/null || printf '%s' "$SPLUNK_PASSWORD")
     response=$(curl -s -k $CURL_PROXY_ARGS \
       -d "username=${encoded_user}&password=${encoded_pass}" \
-      "${SPLUNK_URL}/services/auth/login?output_mode=json")
+      "${SPLUNK_URL}${SPLUNK_API_PREFIX}/services/auth/login?output_mode=json")
 
     if echo "$response" | grep -q "sessionKey"; then
       SESSION_KEY=$(json_value "$response" '.sessionKey')
@@ -2292,6 +2304,13 @@ get_splunk_stack() {
   # Clean up the URL — strip scheme, trailing slash, and any existing port
   SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:[0-9]*$||' | sed 's|/$||')
   SPLUNK_URL="https://${SPLUNK_STACK}:${SPLUNK_PORT}"
+  # Port 443 serves Splunk Web (nginx + mrsparkle). REST API calls must go
+  # through the __raw proxy path which bypasses the web layer and talks
+  # directly to splunkd. Standard /services/... paths redirect to
+  # /en-US/services/... (mrsparkle) which returns HTML error pages.
+  if [ "$SPLUNK_PORT" = "443" ]; then
+    SPLUNK_API_PREFIX="/en-US/splunkd/__raw"
+  fi
 
   echo ""
   echo -e "  ${GREEN}✓${NC} Stack URL configured: ${BOLD}$SPLUNK_URL${NC}"
@@ -7544,6 +7563,9 @@ main() {
     # Non-interactive mode - NO PROMPTS ALLOWED
     SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:[0-9]*$||' | sed 's|/$||')
     SPLUNK_URL="https://${SPLUNK_STACK}:${SPLUNK_PORT}"
+    if [ "$SPLUNK_PORT" = "443" ]; then
+      SPLUNK_API_PREFIX="/en-US/splunkd/__raw"
+    fi
 
     # Set proxy args if --proxy was provided
     if [ -n "$PROXY_URL" ]; then
