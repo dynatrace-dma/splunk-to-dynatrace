@@ -9,7 +9,16 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.8
+#  DMA Splunk Cloud Export Script v4.6.9
+#
+#  v4.6.9 Changes:
+#    - Add -L (follow redirects) to auth probe and all api_call curl invocations.
+#      Splunk Cloud Victoria on port 443 serves the REST API behind an nginx
+#      reverse proxy that issues 303 redirects from /services/... to
+#      /en-US/services/... The auth probe was receiving HTML instead of JSON,
+#      causing "Token authentication failed" even with a valid token.
+#      curl preserves Authorization headers on same-host redirects, so -L is
+#      sufficient without --location-trusted.
 #
 #  v4.6.8 Changes:
 #    - Add -P / --port flag (default 8089) to support environments where port
@@ -199,7 +208,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.8"
+SCRIPT_VERSION="4.6.9"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -1348,14 +1357,14 @@ api_call() {
       # For GET requests, data must be in URL query params, NOT in -d body
       # Using -d with GET causes curl to send POST, resulting in HTTP 405
       if [ -n "$data" ]; then
-        http_code=$($timeout_cmd curl -s -k -w "%{http_code}" -o "$tmp_file" \
+        http_code=$($timeout_cmd curl -s -k -L -w "%{http_code}" -o "$tmp_file" \
           --connect-timeout "$CONNECT_TIMEOUT" \
           --max-time "$API_TIMEOUT" \
           $CURL_PROXY_ARGS \
           -H "$auth_header" \
           "${url}?${data}")
       else
-        http_code=$($timeout_cmd curl -s -k -w "%{http_code}" -o "$tmp_file" \
+        http_code=$($timeout_cmd curl -s -k -L -w "%{http_code}" -o "$tmp_file" \
           --connect-timeout "$CONNECT_TIMEOUT" \
           --max-time "$API_TIMEOUT" \
           $CURL_PROXY_ARGS \
@@ -1363,7 +1372,7 @@ api_call() {
           "$url?output_mode=json")
       fi
     else
-      http_code=$($timeout_cmd curl -s -k -w "%{http_code}" -o "$tmp_file" \
+      http_code=$($timeout_cmd curl -s -k -L -w "%{http_code}" -o "$tmp_file" \
         --connect-timeout "$CONNECT_TIMEOUT" \
         --max-time "$API_TIMEOUT" \
         $CURL_PROXY_ARGS \
@@ -1908,7 +1917,7 @@ authenticate() {
 
     local token_prefix=""
     for try_prefix in "Bearer" "Splunk"; do
-      response=$(curl -s -k $CURL_PROXY_ARGS \
+      response=$(curl -s -k -L $CURL_PROXY_ARGS \
         -H "Authorization: ${try_prefix} $AUTH_TOKEN" \
         "${SPLUNK_URL}/services/authentication/current-context?output_mode=json")
       debug_log "AUTH" "Token probe (${try_prefix}): $(echo "$response" | head -c 200)"
