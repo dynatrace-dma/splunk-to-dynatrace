@@ -9,7 +9,22 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.10
+#  DMA Splunk Cloud Export Script v4.6.11
+#
+#  v4.6.11 Changes:
+#    - Fix "Token authentication failed" on port 443 when Splunk Cloud enforces
+#      SSO (Microsoft/SAML) at the nginx layer. The /en-US/splunkd/__raw/ path
+#      is itself subject to SSO enforcement on stacks with strict SAML config —
+#      nginx redirects to Microsoft Online before the request ever reaches
+#      splunkd, so the Splunk token is never evaluated.
+#      Fixes:
+#        1. Remove -L from the token auth probe so we see the real HTTP code
+#           instead of following the SSO redirect chain to the Microsoft login page.
+#        2. Detect 3xx redirects on port 443 and give a clear, actionable error
+#           explaining SSO enforcement is blocking API access, with specific steps
+#           to resolve (open port 8089, or request Splunk Cloud admin to configure
+#           IP-based API bypass).
+#        3. Detect SSO HTML content in responses and give the same guidance.
 #
 #  v4.6.10 Changes:
 #    - Root cause fix for "Token authentication failed" on port 443.
@@ -219,7 +234,7 @@ set -o pipefail  # Fail on pipe errors
 # SCRIPT CONFIGURATION
 # =============================================================================
 
-SCRIPT_VERSION="4.6.10"
+SCRIPT_VERSION="4.6.11"
 SCRIPT_NAME="DMA Splunk Cloud Export"
 
 # ANSI color codes
@@ -1928,16 +1943,24 @@ authenticate() {
     debug_log "AUTH" "Token length=${token_len}, value=${token_mask}"
 
     local token_prefix=""
+    local probe_http_code=""
+    local tmp_probe
+    tmp_probe=$(mktemp /tmp/dma_auth_probe.XXXXXX)
     for try_prefix in "Bearer" "Splunk"; do
-      response=$(curl -s -k -L $CURL_PROXY_ARGS \
+      # Do NOT use -L here: following SSO redirects (302→Microsoft login) hides
+      # the real HTTP code and fills $response with Microsoft HTML instead of
+      # a Splunk JSON/error body. We detect 3xx ourselves below.
+      probe_http_code=$(curl -s -k -o "$tmp_probe" -w "%{http_code}" $CURL_PROXY_ARGS \
         -H "Authorization: ${try_prefix} $AUTH_TOKEN" \
         "${SPLUNK_URL}${SPLUNK_API_PREFIX}/services/authentication/current-context?output_mode=json")
-      debug_log "AUTH" "Token probe (${try_prefix}): $(echo "$response" | head -c 200)"
+      response=$(cat "$tmp_probe")
+      debug_log "AUTH" "Token probe (${try_prefix}) HTTP ${probe_http_code}: $(echo "$response" | head -c 200)"
       if echo "$response" | grep -q "username"; then
         token_prefix="$try_prefix"
         break
       fi
     done
+    rm -f "$tmp_probe"
 
     if [ -n "$token_prefix" ]; then
       AUTH_HEADER="Authorization: ${token_prefix} $AUTH_TOKEN"
@@ -1945,7 +1968,33 @@ authenticate() {
       success "Token authentication successful (prefix: ${token_prefix}, user: $username)"
       return 0
     else
-      error "Token authentication failed (tried Bearer and Splunk prefixes)"
+      # Detect SSO enforcement: nginx intercepted the request and redirected to
+      # Microsoft/SAML before the token ever reached splunkd.
+      local sso_blocked=false
+      if [[ "$probe_http_code" =~ ^3 && "$SPLUNK_PORT" = "443" ]]; then
+        sso_blocked=true
+      fi
+      if echo "$response" | grep -qi "login.microsoftonline\|submitForm.*forms\[0\]\|Authenticating\.\.\.\|saml\b"; then
+        sso_blocked=true
+      fi
+
+      if [ "$sso_blocked" = "true" ]; then
+        error "Token authentication failed: Splunk Cloud SSO (Microsoft/SAML) is blocking"
+        error "REST API access on port 443. The nginx proxy redirected your request to"
+        error "Microsoft Online before the token reached splunkd — tokens cannot bypass"
+        error "SSO enforcement at the proxy layer."
+        error ""
+        error "To resolve this, choose one of:"
+        error "  1. Ask your network/firewall team to open port 8089 for this machine"
+        error "     (recommended — port 8089 goes directly to splunkd, bypasses SSO)"
+        error "  2. Ask your Splunk Cloud admin to add this machine's IP to the trusted"
+        error "     IP allowlist so port 443 API calls bypass SSO enforcement"
+        error "  3. Contact Splunk Support to enable a non-SSO API endpoint for scripted"
+        error "     access (some Victoria stacks can expose a separate API gateway)"
+        debug_log "AUTH" "SSO enforcement detected (HTTP ${probe_http_code} on port ${SPLUNK_PORT})"
+      else
+        error "Token authentication failed (tried Bearer and Splunk prefixes)"
+      fi
       debug_log "AUTH" "Last response: $(echo "$response" | head -c 500)"
       return 1
     fi
