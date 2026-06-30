@@ -9,7 +9,13 @@ fi
 
 ################################################################################
 #
-#  DMA Splunk Cloud Export Script v4.6.7
+#  DMA Splunk Cloud Export Script v4.6.8
+#
+#  v4.6.8 Changes:
+#    - Add -P / --port flag (default 8089) to support environments where port
+#      8089 is firewalled; use --port 443 when the REST API is exposed on 443.
+#    - URL cleanup now strips any existing port (not just :8089) before
+#      appending the configured port, so passing a full URL with port works.
 #
 #  v4.6.7 Changes:
 #    - Perl fallback for timeout detection: macOS users on corporate machines
@@ -225,6 +231,7 @@ BOX_B="╣"
 
 # Splunk Cloud connection
 SPLUNK_STACK=""            # e.g., acme-corp.splunkcloud.com
+SPLUNK_PORT="8089"         # REST API port (override with --port, e.g. 443)
 SPLUNK_URL=""              # Full URL with port
 AUTH_METHOD=""             # token or userpass
 AUTH_TOKEN=""              # Bearer token
@@ -2271,9 +2278,9 @@ get_splunk_stack() {
     read -r SPLUNK_STACK
   fi
 
-  # Clean up the URL
-  SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:8089||' | sed 's|/$||')
-  SPLUNK_URL="https://${SPLUNK_STACK}:8089"
+  # Clean up the URL — strip scheme, trailing slash, and any existing port
+  SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:[0-9]*$||' | sed 's|/$||')
+  SPLUNK_URL="https://${SPLUNK_STACK}:${SPLUNK_PORT}"
 
   echo ""
   echo -e "  ${GREEN}✓${NC} Stack URL configured: ${BOLD}$SPLUNK_URL${NC}"
@@ -7278,6 +7285,10 @@ main() {
         AUTH_METHOD="userpass"
         shift 2
         ;;
+      -P|--port)
+        SPLUNK_PORT="$2"
+        shift 2
+        ;;
       --all-apps)
         EXPORT_ALL_APPS=true
         shift
@@ -7417,6 +7428,7 @@ main() {
         echo ""
         echo "Options:"
         echo "  --stack URL       Splunk Cloud stack URL"
+        echo "  -P, --port PORT   REST API port (default: 8089; use 443 when 8089 is blocked)"
         echo "  --token TOKEN     API token for authentication"
         echo "  --user USER       Username (if not using token)"
         echo "  --password PASS   Password (if not using token)"
@@ -7519,8 +7531,8 @@ main() {
   # Check if non-interactive mode (all required params provided)
   if [ "$NON_INTERACTIVE" = "true" ]; then
     # Non-interactive mode - NO PROMPTS ALLOWED
-    SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:8089||' | sed 's|/$||')
-    SPLUNK_URL="https://${SPLUNK_STACK}:8089"
+    SPLUNK_STACK=$(echo "$SPLUNK_STACK" | sed 's|https://||' | sed 's|:[0-9]*$||' | sed 's|/$||')
+    SPLUNK_URL="https://${SPLUNK_STACK}:${SPLUNK_PORT}"
 
     # Set proxy args if --proxy was provided
     if [ -n "$PROXY_URL" ]; then
